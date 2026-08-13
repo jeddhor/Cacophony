@@ -1,0 +1,234 @@
+# Corporate Directory
+# Design document section 70: employees, departments, locations and devices.
+#
+# The template of record for phase one. Every field here is deterministic, so
+# `cacophony generate` runs it end to end with no model server involved.
+
+project:
+  name: Corporate Directory
+  description: >
+    A fictional mid-sized company: employees with consistent identities,
+    corporate email addresses, departments, locations and issued laptops.
+  seed: 42069
+  locale: en_US
+  profile: balanced
+
+entities:
+
+  # ------------------------------------------------------------------ #
+  employee:
+    count: 5000
+    description: A person employed by the fictional company.
+    primary_key: employee_id
+
+    fields:
+      employee_id:
+        type: string
+        generator: sequence
+        format: "EMP-{000000}"
+        unique: true
+
+      # No generator named. The recommendation engine routes these to Faker
+      # rather than to a language model - see design document section 68.
+      first_name:
+        type: string
+        semantic: "Person's given name"
+
+      last_name:
+        type: string
+        semantic: "Person's family name"
+
+      department:
+        type: enum
+        semantic: "The department this employee works in"
+        generator: weighted
+        choices:
+          Engineering: 32
+          Sales: 18
+          Operations: 14
+          Support: 12
+          Finance: 8
+          Marketing: 7
+          Human Resources: 5
+          Legal: 2
+          Security: 2
+
+      seniority:
+        type: enum
+        generator: weighted
+        choices:
+          Junior: 30
+          Mid: 38
+          Senior: 22
+          Principal: 7
+          Executive: 3
+
+      age:
+        type: integer
+        semantic: "The employee's age in years"
+        generator: distribution
+        distribution: normal
+        mean: 38
+        stddev: 10
+        min: 21
+        max: 67
+        constraints:
+          min: 18
+
+      hire_date:
+        type: date
+        generator: datetime
+        start: "2011-01-01"
+        end: "2025-06-30"
+        weekdays_only: true
+
+      office:
+        type: enum
+        generator: weighted
+        choices:
+          Denver: 26
+          Austin: 22
+          Portland: 18
+          Raleigh: 14
+          Remote: 20
+
+      email:
+        type: email
+        semantic: "Corporate email address, derived from the employee's name"
+        generator: template
+        # Reserved by RFC 2606 - see design document section 62.
+        template: "{first_name|lower|nospace}.{last_name|lower|nospace}@example.com"
+
+      username:
+        type: string
+        generator: expression
+        expression: 'lower(substr(first_name, 0, 1) + last_name)'
+
+      phone:
+        type: phone
+        generator: faker
+        provider: phone_number
+
+      is_manager:
+        type: boolean
+        generator: boolean
+        probability: 0.14
+
+      badge_number:
+        type: string
+        generator: pattern
+        pattern: "{A-Z:2}-{0000}-{A-Z}"
+
+  # ------------------------------------------------------------------ #
+  device:
+    count: 6200
+    description: A laptop or workstation issued to an employee.
+    primary_key: asset_tag
+
+    fields:
+      asset_tag:
+        type: string
+        generator: sequence
+        format: "AST-{00000}"
+        unique: true
+
+      hostname:
+        type: hostname
+        generator: pattern
+        pattern: "wks-{a-z:3}-{0000}"
+
+      operating_system:
+        type: enum
+        generator: weighted
+        choices:
+          Windows 11: 58
+          Windows 10: 9
+          macOS 15: 21
+          macOS 14: 4
+          Ubuntu 24.04: 8
+
+      form_factor:
+        type: enum
+        generator: weighted
+        choices:
+          laptop: 78
+          desktop: 15
+          virtual: 7
+
+      serial_number:
+        type: string
+        generator: pattern
+        pattern: "{A-Z}{A-Z}{0000}{A-Z:2}{00}"
+
+      ip_address:
+        type: ip_address
+        generator: ip
+        network: 10.40.0.0/14
+
+      mac_address:
+        type: mac_address
+        generator: mac
+
+      purchased_on:
+        type: date
+        generator: datetime
+        start: "2020-01-01"
+        end: "2026-01-31"
+
+      warranty_months:
+        type: integer
+        generator: weighted
+        choices:
+          12: 20
+          24: 45
+          36: 30
+          48: 5
+
+      encrypted:
+        type: boolean
+        generator: boolean
+        probability: 0.94
+
+  # ------------------------------------------------------------------ #
+  location:
+    count: 5
+    description: A physical office.
+    primary_key: site_code
+
+    fields:
+      site_code:
+        type: string
+        generator: lookup
+        mode: cycle
+        values: [DEN, AUS, PDX, RDU, REM]
+
+      city:
+        type: string
+        generator: lookup
+        mode: cycle
+        values: [Denver, Austin, Portland, Raleigh, Remote]
+
+      country:
+        type: string
+        generator: constant
+        value: United States
+
+      headcount_capacity:
+        type: integer
+        generator: random
+        min: 40
+        max: 900
+
+      opened_on:
+        type: date
+        generator: datetime
+        start: "2009-01-01"
+        end: "2023-01-01"
+
+outputs:
+  developer_db:
+    format: jsonl
+    path: out/corporate
+  analytics:
+    format: parquet
+    path: out/corporate-analytics

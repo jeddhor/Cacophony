@@ -1,0 +1,401 @@
+# Security Operations
+# Design document section 71: the sophisticated starter project.
+#
+# Section 71 names twelve entities and eight scenarios. This template ships the
+# entities that phase one can generate honestly - the ones whose fields are
+# deterministic or independently distributed - and declares the scenarios so
+# they are recorded in the schema and survive into the phase that executes
+# them.
+#
+# The entities section 71 lists that are deliberately absent here (Incident,
+# Analyst, and the correlated Alert-to-Incident chain) are the ones whose value
+# comes entirely from cross-record coherence. Generating them as independent
+# rows would produce data that looks right and means nothing, which is exactly
+# what section 15 warns against. They arrive with the relational and scenario
+# phases.
+
+project:
+  name: Security Operations
+  description: >
+    Endpoints, users, authentication activity and security findings for a
+    fictional enterprise. Addresses come from documentation ranges, so nothing
+    generated here can point at a real host.
+  seed: 31337
+  locale: en_US
+  profile: balanced
+
+entities:
+
+  # ------------------------------------------------------------------ #
+  user:
+    count: 4800
+    description: A workforce identity.
+    primary_key: user_id
+
+    fields:
+      user_id:
+        type: string
+        generator: sequence
+        format: "USR-{000000}"
+        unique: true
+
+      upn:
+        type: email
+        generator: faker
+        provider: company_email
+
+      display_name:
+        type: string
+        generator: faker
+        provider: name
+
+      department:
+        type: enum
+        generator: weighted
+        choices:
+          Engineering: 26
+          Sales: 17
+          Operations: 15
+          Finance: 11
+          Support: 11
+          Marketing: 8
+          Human Resources: 6
+          Legal: 3
+          Security: 3
+
+      privilege_tier:
+        type: enum
+        semantic: "How much access this identity carries"
+        generator: weighted
+        choices:
+          standard: 86
+          elevated: 9
+          administrator: 4
+          service_account: 1
+
+      mfa_enrolled:
+        type: boolean
+        generator: boolean
+        probability: 0.91
+
+      account_enabled:
+        type: boolean
+        generator: boolean
+        probability: 0.96
+
+      created_at:
+        type: datetime
+        generator: datetime
+        start: "2014-01-01T00:00:00"
+        end: "2026-01-01T00:00:00"
+
+  # ------------------------------------------------------------------ #
+  device:
+    count: 8000
+    description: A managed endpoint.
+    primary_key: device_id
+
+    fields:
+      device_id:
+        type: string
+        generator: sequence
+        format: "DEV-{000000}"
+        unique: true
+
+      hostname:
+        type: hostname
+        generator: pattern
+        pattern: "ep-{a-z:2}{0000}"
+
+      os_platform:
+        type: enum
+        generator: weighted
+        choices:
+          Windows: 67
+          macOS: 18
+          Linux: 13
+          Other: 2
+
+      os_version:
+        type: string
+        generator: weighted
+        choices:
+          "10.0.22631": 41
+          "10.0.19045": 14
+          "15.3": 12
+          "14.7": 6
+          "24.04": 9
+          "22.04": 5
+          "unknown": 13
+
+      ip_address:
+        type: ip_address
+        generator: ip
+        network: 10.64.0.0/12
+
+      mac_address:
+        type: mac_address
+        generator: mac
+
+      edr_installed:
+        type: boolean
+        generator: boolean
+        probability: 0.93
+
+      disk_encrypted:
+        type: boolean
+        generator: boolean
+        probability: 0.89
+
+      last_seen_at:
+        type: datetime
+        generator: datetime
+        start: "2026-01-01T00:00:00"
+        end: "2026-02-01T00:00:00"
+        business_hours: true
+
+  # ------------------------------------------------------------------ #
+  authentication:
+    count: 2000000
+    description: >
+      A sign-in event. Weighted towards office hours on weekdays, which is what
+      makes anomaly detection over this dataset a meaningful exercise.
+
+    fields:
+      event_id:
+        type: uuid
+
+      timestamp:
+        type: datetime
+        generator: datetime
+        start: "2026-01-01T00:00:00"
+        end: "2026-02-01T00:00:00"
+        business_hours: true
+        weekdays_only: true
+
+      upn:
+        type: email
+        generator: faker
+        provider: company_email
+
+      source_ip:
+        type: ip_address
+        # Documentation range - see design document section 62.
+        generator: ip
+
+      application:
+        type: enum
+        generator: weighted
+        choices:
+          Microsoft 365: 34
+          VPN Gateway: 19
+          Salesforce: 12
+          Internal Wiki: 11
+          Jira: 9
+          GitHub Enterprise: 8
+          Expense Portal: 4
+          Admin Console: 3
+
+      auth_method:
+        type: enum
+        generator: weighted
+        choices:
+          password_plus_mfa: 71
+          password_only: 16
+          certificate: 7
+          passwordless: 6
+
+      result:
+        type: enum
+        generator: weighted
+        choices:
+          success: 93
+          failure_bad_password: 5
+          failure_mfa_denied: 1
+          failure_account_locked: 1
+
+      failure_reason:
+        type: string
+        nullable: true
+        null_probability: 0.93
+        generator: weighted
+        choices:
+          InvalidUserNameOrPassword: 58
+          MfaDenied: 17
+          UserAccountLocked: 12
+          ConditionalAccessBlocked: 9
+          ExpiredPassword: 4
+
+      user_agent:
+        type: string
+        generator: faker
+        provider: user_agent
+
+      risk_score:
+        type: integer
+        semantic: "Sign-in risk, 0 (benign) to 100 (certainly malicious)"
+        generator: distribution
+        distribution: beta
+        alpha: 1.4
+        beta: 12
+        min: 0
+        max: 100
+
+  # ------------------------------------------------------------------ #
+  security_finding:
+    count: 25000
+    description: A detection raised against a device or identity.
+    primary_key: finding_id
+
+    fields:
+      finding_id:
+        type: string
+        generator: sequence
+        format: "FND-{0000000}"
+        unique: true
+
+      detected_at:
+        type: datetime
+        generator: datetime
+        start: "2026-01-01T00:00:00"
+        end: "2026-02-01T00:00:00"
+
+      rule_name:
+        type: string
+        generator: weighted
+        choices:
+          Suspicious PowerShell Encoded Command: 14
+          Impossible Travel: 11
+          Credential Dumping Attempt: 9
+          Anomalous Data Egress: 9
+          Multiple Failed Sign-ins: 16
+          Malicious File Quarantined: 12
+          Unusual Process Ancestry: 8
+          Persistence via Scheduled Task: 7
+          Disabled Security Tooling: 5
+          Lateral Movement via SMB: 5
+          Rare Parent-Child Process: 4
+
+      severity:
+        type: enum
+        generator: weighted
+        choices:
+          informational: 34
+          low: 31
+          medium: 24
+          high: 9
+          critical: 2
+
+      confidence:
+        type: integer
+        generator: distribution
+        distribution: normal
+        mean: 68
+        stddev: 18
+        min: 5
+        max: 100
+
+      cvss_score:
+        type: float
+        semantic: "CVSS-like base score"
+        generator: distribution
+        distribution: beta
+        alpha: 3.5
+        beta: 3.0
+        min: 0.0
+        max: 10.0
+        precision: 1
+
+      cve_id:
+        type: string
+        semantic: "A CVE-shaped identifier. Fictional - these do not exist."
+        nullable: true
+        null_probability: 0.72
+        generator: pattern
+        pattern: "CVE-20{00}-{0000}"
+
+      mitre_technique:
+        type: string
+        generator: pattern
+        pattern: "T{0000}"
+
+      file_hash:
+        type: string
+        semantic: "A SHA-256-shaped value"
+        nullable: true
+        null_probability: 0.55
+        generator: pattern
+        pattern: "{0-9:64}"
+
+      status:
+        type: enum
+        generator: weighted
+        choices:
+          new: 18
+          triaged: 22
+          investigating: 11
+          resolved_true_positive: 12
+          resolved_false_positive: 34
+          suppressed: 3
+
+# Declared now so they are recorded in the schema and version-controlled with
+# it. The scenario engine that executes them is design document section 17.
+scenarios:
+  normal_workday:
+    description: Baseline weekday activity with office-hours weighting.
+    applies_to: [authentication]
+    enabled: true
+
+  password_spray:
+    description: One source address attempting many accounts with few passwords.
+    applies_to: [authentication, security_finding]
+    affects_fraction: 0.002
+    enabled: false
+
+  impossible_travel:
+    description: Successful sign-ins from geographically incompatible locations.
+    applies_to: [authentication, security_finding]
+    affects_fraction: 0.001
+    enabled: false
+
+  malware_infection:
+    description: Payload execution followed by persistence and defence evasion.
+    applies_to: [device, security_finding]
+    affects_fraction: 0.004
+    enabled: false
+
+  phishing:
+    description: Credential harvesting from a delivered message.
+    applies_to: [user, authentication, security_finding]
+    affects_fraction: 0.02
+    enabled: false
+
+  lateral_movement:
+    description: Authenticated movement between endpoints after initial access.
+    applies_to: [authentication, device, security_finding]
+    affects_fraction: 0.001
+    enabled: false
+
+  insider_exfiltration:
+    description: Sustained abnormal data egress by a legitimate identity.
+    applies_to: [user, security_finding]
+    affects_fraction: 0.0005
+    enabled: false
+
+  ransomware:
+    description: >
+      The section 17 timeline: sign-in, phishing email opened, payload
+      execution, suspicious PowerShell, credential access, lateral movement,
+      then encryption.
+    applies_to: [user, device, authentication, security_finding]
+    affects_fraction: 0.0002
+    enabled: false
+
+outputs:
+  siem:
+    format: jsonl
+    path: out/secops
+  analytics:
+    format: parquet
+    path: out/secops-analytics
+    partition_by: [year, month, day]

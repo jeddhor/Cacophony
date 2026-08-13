@@ -1,0 +1,188 @@
+# Forward-looking example
+#
+# This schema uses every generator Cacophony will eventually support, including
+# the ones whose backends are not built yet. It exists to prove the claim in
+# design document section 111: the architectural interfaces for image, speech,
+# scenario and plugin providers already exist, so future multimodal work
+# *extends* the platform rather than forcing a rewrite.
+#
+# Today this file:
+#
+#   cacophony validate examples/forward-looking.yaml     compiles cleanly
+#   cacophony plan     examples/forward-looking.yaml     orders every field correctly
+#   cacophony lint     examples/forward-looking.yaml     reports real design warnings
+#   cacophony generate examples/forward-looking.yaml     runs, with marked placeholders
+#
+# Nothing about it will need to change when the providers land - the
+# `on_unavailable: placeholder` lines simply stop having any effect.
+
+project:
+  name: Forward-Looking Example
+  description: >
+    An employee record that reaches across every phase of the roadmap: rules,
+    Faker, expressions, a language model, an image and a voice.
+  seed: 20260813
+  provenance: field
+
+providers:
+  local_llm:
+    type: language_model
+    adapter: ollama
+    base_url: http://localhost:11434
+    model: llama3.1:8b
+    concurrency: 4
+
+  local_images:
+    type: image
+    adapter: invokeai
+    base_url: http://localhost:9090
+    concurrency: 1
+
+  local_voice:
+    type: speech
+    adapter: piper
+    base_url: http://localhost:5000
+    concurrency: 2
+
+entities:
+
+  employee:
+    count: 200
+    primary_key: employee_id
+
+    fields:
+      # ---- Phase 1: deterministic ------------------------------------ #
+      employee_id:
+        type: string
+        generator: sequence
+        format: "E{00000}"
+        unique: true
+
+      first_name:
+        type: string
+        semantic: "Person's given name"
+
+      last_name:
+        type: string
+        semantic: "Person's family name"
+
+      age:
+        type: integer
+        semantic: "The employee's age in years"
+
+      department:
+        type: enum
+        generator: weighted
+        choices:
+          Infrastructure: 30
+          Security: 20
+          Platform: 25
+          Data: 15
+          Support: 10
+
+      seniority:
+        type: enum
+        generator: weighted
+        choices:
+          Junior: 28
+          Mid: 40
+          Senior: 24
+          Principal: 8
+
+      hire_date:
+        type: date
+        generator: datetime
+        start: "2012-01-01"
+        end: "2026-01-01"
+        weekdays_only: true
+
+      email:
+        type: email
+        generator: template
+        template: "{first_name|lower}.{last_name|lower}@example.com"
+
+      years_at_company:
+        type: integer
+        # Depends on hire_date, so the compiler orders it afterwards.
+        # This is design document section 14's cross-field coherence: it is
+        # impossible for years_at_company to contradict hire_date, because it
+        # is derived from it.
+        generator: expression
+        expression: "max(0, 2026 - year(hire_date))"
+
+      # ---- Phase 2: language model ----------------------------------- #
+      title:
+        type: string
+        semantic: >
+          Realistic corporate job title appropriate to this employee's
+          department and seniority.
+        generator: llm
+        provider: local_llm
+        context: [department, seniority]
+        on_unavailable: placeholder
+        constraints:
+          max_length: 60
+
+      biography:
+        type: text
+        semantic: >
+          A short fictional professional biography consistent with the
+          employee's department, title, age and hire date.
+        generator: llm
+        provider: local_llm
+        context: [department, title, age, hire_date]
+        tone: Neutral professional
+        on_unavailable: placeholder
+        constraints:
+          min_length: 120
+          max_length: 600
+
+      appearance_description:
+        type: string
+        semantic: >
+          A brief neutral physical description suitable as an image prompt.
+          No named individuals, no distinguishing marks.
+        generator: llm
+        provider: local_llm
+        context: [age]
+        on_unavailable: placeholder
+        constraints:
+          max_length: 200
+
+      # ---- Phase 6: multimodal --------------------------------------- #
+      portrait:
+        type: image
+        semantic: "A corporate headshot of a fictional person."
+        generator: image
+        provider: local_images
+        workflow: employee_portrait_v3
+        width: 512
+        height: 512
+        steps: 30
+        context: [appearance_description]
+        on_unavailable: placeholder
+
+      voicemail_greeting:
+        type: audio
+        semantic: "A spoken voicemail greeting."
+        generator: tts
+        provider: local_voice
+        source: greeting_text
+        on_unavailable: placeholder
+
+      greeting_text:
+        type: string
+        semantic: >
+          The words of a professional voicemail greeting, naming the employee
+          and their department.
+        generator: llm
+        provider: local_llm
+        context: [first_name, last_name, department]
+        on_unavailable: placeholder
+        constraints:
+          max_length: 200
+
+outputs:
+  fixtures:
+    format: jsonl
+    path: out/forward-looking

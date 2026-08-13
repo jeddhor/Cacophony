@@ -1,0 +1,179 @@
+# Helpdesk
+# Design document section 70: users, devices, tickets and resolutions.
+#
+# Demonstrates the section 9 semantic-annotation pattern: the two prose fields
+# describe what they *mean* and let the language model write them, while every
+# structured field around them stays deterministic. Both prose fields carry
+# `on_unavailable: placeholder`, so this template runs end to end today and
+# starts producing real prose the moment a provider is configured.
+
+project:
+  name: Helpdesk
+  description: >
+    An enterprise IT helpdesk: users, their devices, and the tickets they open.
+  seed: 8675309
+  locale: en_US
+  profile: balanced
+
+providers:
+  local_llm:
+    type: language_model
+    adapter: ollama
+    base_url: http://localhost:11434
+    model: llama3.1:8b
+    concurrency: 4
+
+entities:
+
+  ticket:
+    count: 25000
+    description: One helpdesk ticket.
+    primary_key: ticket_id
+
+    fields:
+      ticket_id:
+        type: string
+        generator: sequence
+        format: "TKT-{0000000}"
+        unique: true
+
+      opened_at:
+        type: datetime
+        generator: datetime
+        start: "2025-01-01T00:00:00"
+        end: "2025-12-31T23:59:59"
+        business_hours: true
+        weekdays_only: true
+
+      category:
+        type: enum
+        generator: weighted
+        choices:
+          Password / MFA: 24
+          VPN: 16
+          Hardware: 14
+          Email: 12
+          Software install: 11
+          Network: 9
+          Printing: 7
+          Access request: 5
+          Other: 2
+
+      severity:
+        type: enum
+        generator: weighted
+        choices:
+          low: 46
+          medium: 38
+          high: 13
+          critical: 3
+
+      channel:
+        type: enum
+        generator: weighted
+        choices:
+          portal: 52
+          email: 28
+          phone: 14
+          walk_up: 6
+
+      device_type:
+        type: enum
+        generator: weighted
+        choices:
+          laptop: 62
+          desktop: 18
+          mobile: 14
+          printer: 4
+          other: 2
+
+      requester_email:
+        type: email
+        generator: faker
+        provider: company_email
+
+      assigned_team:
+        type: enum
+        generator: weighted
+        choices:
+          Service Desk: 58
+          Endpoint Engineering: 17
+          Network Operations: 12
+          Identity: 9
+          Field Services: 4
+
+      status:
+        type: enum
+        generator: weighted
+        choices:
+          resolved: 74
+          closed: 14
+          in_progress: 8
+          waiting_on_user: 4
+
+      time_to_resolve_minutes:
+        type: integer
+        semantic: "Minutes between the ticket opening and being resolved"
+        generator: distribution
+        distribution: lognormal
+        mean: 4.2
+        stddev: 1.1
+        min: 3
+        max: 20160
+
+      reopened:
+        type: boolean
+        generator: boolean
+        probability: 0.07
+
+      satisfaction_score:
+        type: integer
+        generator: weighted
+        nullable: true
+        null_probability: 0.42
+        choices:
+          5: 44
+          4: 28
+          3: 14
+          2: 8
+          1: 6
+
+      # ------------------------------------------------------------------ #
+      # Section 9: describe the meaning, not the prompt. The prompt compiler
+      # builds the instruction from this description plus the field's type,
+      # constraints and declared context.
+      summary:
+        type: string
+        semantic: >
+          A one-line subject written by an employee opening a helpdesk ticket.
+          Plain, slightly informal, no ticket number, no greeting.
+        generator: llm
+        provider: local_llm
+        context: [category, device_type, severity]
+        on_unavailable: placeholder
+        constraints:
+          min_length: 12
+          max_length: 90
+
+      resolution_notes:
+        type: text
+        semantic: >
+          Natural-language notes written by an IT support technician explaining
+          how the ticket was resolved. Concise internal enterprise IT helpdesk
+          writing.
+        generator: llm
+        provider: local_llm
+        context: [category, device_type, status, assigned_team]
+        tone: Concise internal enterprise IT helpdesk writing
+        on_unavailable: placeholder
+        constraints:
+          min_length: 40
+          max_length: 300
+
+outputs:
+  analytics:
+    format: parquet
+    path: out/helpdesk
+  fixtures:
+    format: jsonl
+    path: out/helpdesk-fixtures
