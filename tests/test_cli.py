@@ -242,7 +242,7 @@ entities:
         )
         result = invoke("generate", str(path), "-d", str(tmp_path / "out"))
         assert result.exit_code == 3
-        assert "provider phase" in result.stderr
+        assert "language model" in result.stderr
 
 
 class TestStreamSeparation:
@@ -288,6 +288,178 @@ class TestInformationalCommands:
     def test_no_arguments_shows_help(self) -> None:
         result = invoke()
         assert "validate" in result.stdout and "generate" in result.stdout
+
+
+class TestProviderCommands:
+    """Commands added with the provider layer (design document sections 12, 36)."""
+
+    MOCK_YAML = """
+project:
+  name: Mock LLM
+  seed: 11
+providers:
+  assistant:
+    type: language_model
+    adapter: mock
+    model: mock-1
+entities:
+  note:
+    count: 6
+    fields:
+      note_id:
+        type: string
+        generator: sequence
+        format: "N-{0000}"
+      topic:
+        type: enum
+        generator: weighted
+        choices: [billing, access, hardware]
+      body:
+        type: text
+        semantic: A short internal note about the topic.
+        generator: llm
+        provider: assistant
+        context: [topic]
+        constraints:
+          max_length: 200
+"""
+
+    @pytest.fixture
+    def mock_project(self, tmp_path: Path) -> Path:
+        path = tmp_path / "mock.yaml"
+        path.write_text(self.MOCK_YAML, encoding="utf-8")
+        return path
+
+    def test_providers_lists_the_secret_id_not_the_secret(self, tmp_path: Path) -> None:
+        path = tmp_path / "secret.yaml"
+        path.write_text(
+            self.MOCK_YAML.replace("    model: mock-1", "    model: mock-1\n    secret: my-key"),
+            encoding="utf-8",
+        )
+        result = invoke("providers", str(path))
+        assert result.exit_code == 0
+        assert "my-key" in result.stdout
+
+    def test_providers_test_probes_health(self, mock_project: Path) -> None:
+        result = invoke("providers", str(mock_project), "--test")
+        assert result.exit_code == 0
+        assert "ok" in result.stdout
+
+    def test_providers_test_exits_one_when_a_provider_is_down(self, tmp_path: Path) -> None:
+        path = tmp_path / "down.yaml"
+        path.write_text(
+            self.MOCK_YAML.replace(
+                "    model: mock-1", "    model: mock-1\n    options:\n      healthy: false"
+            ),
+            encoding="utf-8",
+        )
+        result = invoke("providers", str(path), "--test")
+        assert result.exit_code == 1
+        assert "down" in result.stdout
+
+    def test_models_lists_what_the_provider_serves(self, mock_project: Path) -> None:
+        result = invoke("models", str(mock_project))
+        assert result.exit_code == 0
+        assert "mock-1" in result.stdout
+
+    def test_models_rejects_an_unknown_provider(self, mock_project: Path) -> None:
+        result = invoke("models", str(mock_project), "--provider", "ghost")
+        assert result.exit_code == 2
+
+    def test_models_needs_a_project_with_providers(self, project_file: Path) -> None:
+        result = invoke("models", str(project_file))
+        assert result.exit_code == 2
+
+    def test_prompt_shows_the_compiled_instruction(self, mock_project: Path) -> None:
+        """Section 9: users should rarely engineer prompts, but must be able to read them."""
+        result = invoke("prompt", str(mock_project))
+        assert result.exit_code == 0
+        assert "SYSTEM" in result.stdout and "USER" in result.stdout
+        assert "STRICT JSON" in result.stdout
+        assert "A short internal note about the topic." in result.stdout
+
+    def test_prompt_can_show_the_schema(self, mock_project: Path) -> None:
+        result = invoke("prompt", str(mock_project), "--schema")
+        assert "JSON SCHEMA" in result.stdout
+        assert "maxLength" in result.stdout
+
+    def test_prompt_on_a_project_without_ai_fields(self, project_file: Path) -> None:
+        result = invoke("prompt", str(project_file))
+        assert result.exit_code == 0
+        assert "no language-model fields" in result.stdout
+
+    def test_generate_reports_provider_activity(self, mock_project: Path, tmp_path: Path) -> None:
+        result = invoke("generate", str(mock_project), "-d", str(tmp_path / "out"))
+        assert result.exit_code == 0, result.stdout
+        assert "language-model calls" in result.stdout
+
+    def test_generated_records_carry_model_written_text(
+        self, mock_project: Path, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "out"
+        invoke("generate", str(mock_project), "-d", str(out))
+        rows = [
+            json.loads(line)
+            for line in (out / "note.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        assert len(rows) == 6
+        assert all(row["body"] for row in rows)
+        assert all(len(row["body"]) <= 200 for row in rows)
+
+    def test_cache_makes_a_second_run_free(self, mock_project: Path, tmp_path: Path) -> None:
+        """Section 76: identical requests should not be paid for twice."""
+        cache = tmp_path / "cache.db"
+        first = invoke(
+            "generate",
+            str(mock_project),
+            "-d",
+            str(tmp_path / "a"),
+            "--cache",
+            "read_write",
+            "--cache-path",
+            str(cache),
+        )
+        assert first.exit_code == 0
+        assert "0 hits" in first.stdout
+
+        second = invoke(
+            "generate",
+            str(mock_project),
+            "-d",
+            str(tmp_path / "b"),
+            "--cache",
+            "read_write",
+            "--cache-path",
+            str(cache),
+        )
+        assert second.exit_code == 0
+        assert "6 hits" in second.stdout
+        # And the data is identical, not merely as numerous.
+        assert (tmp_path / "a" / "note.jsonl").read_bytes() == (
+            tmp_path / "b" / "note.jsonl"
+        ).read_bytes()
+
+    def test_unknown_cache_mode_exits_two(self, mock_project: Path, tmp_path: Path) -> None:
+        result = invoke("generate", str(mock_project), "-d", str(tmp_path), "--cache", "telepathy")
+        assert result.exit_code == 2
+
+    def test_llm_batch_size_reduces_calls(self, tmp_path: Path) -> None:
+        path = tmp_path / "batch.yaml"
+        path.write_text(
+            self.MOCK_YAML.replace(
+                "        generator: llm", "        generator: llm\n        mode: batch"
+            ),
+            encoding="utf-8",
+        )
+        result = invoke("generate", str(path), "-d", str(tmp_path / "out"), "--llm-batch-size", "6")
+        assert result.exit_code == 0, result.stdout
+        assert "language-model calls  1" in result.stdout
+
+    def test_preview_uses_the_provider(self, mock_project: Path) -> None:
+        result = invoke("preview", str(mock_project), "-n", "3", "--json")
+        assert result.exit_code == 0
+        rows = [json.loads(line) for line in result.stdout.strip().splitlines()]
+        assert all(row["body"] for row in rows)
 
 
 class TestShippedTemplatesEndToEnd:

@@ -13,11 +13,11 @@ built and how to run it.
 
 ---
 
-## Status: Phase 1 — Foundation
+## Status: Phase 2 — Providers
 
-Phase 1 delivers the deterministic core: the schema language, the compiler and
-its dependency graph, the generator registry, validation, exporters and a
-working CLI. Everything runs locally with no network and no model server.
+Phase 1 delivered the deterministic core. Phase 2 makes `generator: llm` real:
+local models write the semantic fields, and everything that comes back is
+parsed, validated, repaired and retried before it is allowed near a dataset.
 
 **Working now**
 
@@ -28,22 +28,31 @@ working CLI. Everything runs locally with no network and no model server.
 - Schema linter with the checks from design document section 102
 - Generator recommendation engine — a field with only a semantic description
   still gets a sensible generator instead of an expensive language-model call
-- 20 built-in generators: constant, sequence, uuid, random, boolean,
+- 25 registered generators: constant, sequence, uuid, random, boolean,
   distribution, weighted, lookup, pattern, template, expression, datetime, ip,
-  mac, faker, composite, transform, null, plus the pending llm/image/tts/
-  reference/script declarations
+  mac, phone, government_id, faker, composite, transform, null and llm, plus
+  the pending image/tts/reference/script declarations
 - Hierarchical deterministic seeds — record *n* is identical whether generated
   first, last, in parallel, or after a resume
 - Structural and constraint validation with repair
 - Streaming exporters: CSV, JSON, JSON Lines, Parquet
-- CLI: `validate`, `lint`, `plan`, `preview`, `generate`, `generators`,
-  `providers`
+- Language-model generation against Ollama, llama.cpp and any
+  OpenAI-compatible server, addressed by URI
+- The Prompt Compiler — you write what a field *means*, it writes the
+  instruction and the JSON Schema that constrains the answer
+- Structured output enforcement: extract, parse, validate, repair, retry
+- Four generation modes: per-field, per-record, batch, contextual expansion
+- Content-addressed cache, so a re-run costs nothing it has already paid for
+- Credentials resolved from the environment or the OS keychain, never from the
+  project file
+- CLI: `validate`, `lint`, `plan`, `prompt`, `preview`, `generate`,
+  `generators`, `providers --test`, `models`
 
 **Declared but not yet implemented** — the interfaces exist so later phases
 extend the platform rather than rewrite it, as design document section 111
 requires. Fields using these compile, lint, plan and estimate correctly:
 
-- `llm`, `image`, `tts` — need the provider phase
+- `image`, `tts` — need the multimodal phase
 - `reference` — needs the relational phase
 - `script` — needs sandboxed execution
 
@@ -87,6 +96,40 @@ cacophony generate templates/corporate-directory.yaml \
   --out-dir out/
 ```
 
+### Language-model fields
+
+`templates/conversational-ai.yaml` points at the built-in `mock` adapter, an
+in-process model that answers against the schema the prompt compiler produces.
+It runs with no server, so the whole path is visible immediately:
+
+```bash
+# See the prompt Cacophony wrote on your behalf
+cacophony prompt templates/conversational-ai.yaml --schema
+
+# Generate, with a cache so the second run is free
+cacophony generate templates/conversational-ai.yaml -n 200 \
+  --cache read_write --cache-path .cacophony/cache.db
+```
+
+Point it at a real model by changing three lines:
+
+```yaml
+providers:
+  assistant:
+    adapter: ollama            # or llamacpp, or openai_compatible
+    base_url: http://localhost:11434
+    model: llama3.1:8b
+```
+
+Then check it is reachable:
+
+```bash
+cacophony providers templates/conversational-ai.yaml --test
+cacophony models templates/conversational-ai.yaml
+```
+
+Nothing else in the schema changes.
+
 ## A schema
 
 ```yaml
@@ -125,6 +168,16 @@ entities:
           Sales: 25
           Finance: 15
           Operations: 20
+
+      biography:
+        type: text
+        semantic: >
+          A short fictional professional biography consistent with the
+          employee's department and start date.
+        generator: llm
+        context: [department, first_name, last_name]
+        constraints:
+          max_length: 400
 ```
 
 `first_name` and `last_name` name no generator. The recommendation engine
@@ -132,6 +185,12 @@ routes them to Faker — not to a language model, which at ten thousand records
 would cost hours for values Faker produces in microseconds.
 
 `email` depends on both, so the compiler orders it after them automatically.
+
+`biography` names no prompt. The prompt compiler writes one from the meaning,
+the type, the length constraint and the declared context — and because the
+deterministic fields are generated first, the model is asked to *enrich* a
+record that already has a name and a department rather than invent one from
+nothing.
 
 ---
 
@@ -146,7 +205,7 @@ backend/cacophony/
 ├── generation/    generator registry, built-in generators, recommendation, engine
 ├── validation/    structural and constraint validators, the record pipeline
 ├── outputs/       CSV, JSON, JSONL and Parquet writers
-├── providers/     language-model, image and speech provider interfaces
+├── providers/     language-model adapters, cache, secrets, provider registry
 ├── scenarios/     scenario engine (later phase)
 ├── plugins/       plugin protocol (later phase)
 ├── api/           REST API (later phase)
@@ -187,3 +246,14 @@ where realistic-valid values are genuinely needed.
 **Everything streams.** The engine yields bounded batches and writers flush
 them, so a dataset far larger than RAM costs the same memory as a small one
 (section 31).
+
+**The model is never trusted.** Output is extracted from whatever wrapper it
+arrived in, parsed, type-checked, constraint-checked and repaired where repair
+needs no judgement. What cannot be repaired is retried with a prompt quoting
+what was wrong, then with the schema restated. The ladder is three model calls
+long and then stops (sections 13 and 66).
+
+**Prompts are compiled, not written.** A field's meaning, type, constraints,
+dependencies, tone and examples are all already in the schema, so the prompt
+compiler assembles them (section 12). `cacophony prompt` shows you exactly what
+was assembled.

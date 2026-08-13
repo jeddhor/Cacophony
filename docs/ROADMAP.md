@@ -39,23 +39,42 @@ means nothing.
 
 ---
 
-## Phase 2 — Providers
+## Phase 2 — Providers ✅
 
-*Design document sections 10–13, 66, 76, 85.*
+**Delivered.** Design document sections 10–13, 30, 43, 61, 63, 66, 76, 85.
 
-Makes `generator: llm` real.
+`generator: llm` is real. A field that says what it *means* is written by a
+local model, and nothing the model returns reaches a dataset unexamined.
 
-- `LanguageModelProvider` adapters: Ollama, llama.cpp, OpenAI-compatible
-- The Prompt Compiler (section 12) — turns semantic annotations, types,
-  constraints and dependencies into provider-specific prompts, so users rarely
-  engineer prompts by hand
-- Structured output enforcement (section 13): extract, parse, validate, repair,
-  retry, accept
-- Generation modes (section 11): per-field, per-record, batch, contextual
-  expansion
-- Bounded retry with repair prompts (section 66)
-- Content-addressed cache (section 76)
-- `cacophony providers --test`, model listing, health checks
+- Adapters: `ollama`, `llamacpp`, `openai_compatible`, plus an in-process
+  `mock` for tests and rehearsals. All addressed by URI; Cacophony owns no
+  models (section 85)
+- The Prompt Compiler (section 12): semantic annotations, types, constraints,
+  dependencies, examples, forbidden values, tone, locale and entity context
+  become a prompt and a JSON Schema. `cacophony prompt` shows the result
+- Structured output enforcement (section 13): extraction from fenced blocks,
+  preambles and truncated responses; parsing; type and constraint validation;
+  deterministic repair; retry
+- The retry ladder of section 66, exactly: normal, repair prompt, explicit
+  schema, then stop. Three model calls and no more
+- Generation modes (section 11): per-field, per-record, batch and contextual
+  expansion. Deterministic fields are always produced first, so the model
+  enriches a record rather than inventing one
+- Content-addressed cache over provider, model, prompt, settings and seed,
+  with `disabled` / `read_only` / `read_write` modes (section 76)
+- Per-provider concurrency limits (section 30) and a circuit breaker, so a
+  downed server costs one call rather than one per record
+- Secrets resolved from the environment or the OS keychain; the loader rejects
+  a credential written into a project file (section 63)
+- Prompts instruct against real identities and domains (section 61)
+- CLI: `prompt`, `providers --test`, `models`, `--cache`, `--llm-batch-size`
+
+**Structural change in this phase:** the engine now builds a chunk of records
+in lockstep, layer by layer, instead of one record at a time. That is what
+allows one call to cover several fields of several records. Deterministic
+generation is unaffected — same order, same seeds, same output.
+
+---
 
 ## Phase 3 — Runs
 
@@ -64,7 +83,8 @@ Makes `generator: llm` real.
 Makes generation durable and observable.
 
 - Job system with states, checkpoints and resume (sections 29, 32)
-- Per-provider concurrency and backpressure (section 30)
+- Backpressure and cross-provider scheduling (section 30; per-provider limits
+  landed with Phase 2)
 - Metadata database (section 42)
 - REST API and WebSocket progress feed (section 36)
 - Structured logging and metrics (section 86)
@@ -113,7 +133,7 @@ remote workers, capability discovery, job leasing, shared artifact storage.
 
 ---
 
-## Interpretations recorded during Phase 1
+## Interpretations recorded during development
 
 Where the design document left room, these are the readings taken and why.
 
@@ -143,11 +163,29 @@ mixer used for the per-record and per-field levels, where the derivation runs
 once per generated value. Both are deterministic, order-independent and well
 distributed; neither is cryptographic, and nothing depends on their being so.
 
-**Unimplemented generators (section 111).** `llm`, `image`, `tts`, `reference`
-and `script` are registered and compilable now, so a forward-looking schema
+**Unimplemented generators (section 111).** `image`, `tts`, `reference` and
+`script` are registered and compilable now, so a forward-looking schema
 validates, lints, plans and estimates correctly. At generation time they follow
 section 65's failure-policy list: error by default, or emit a marked
-placeholder, or emit null.
+placeholder, or emit null. `llm` followed the same pattern until Phase 2
+implemented it; nothing about the schemas written against it had to change.
+
+**Generation modes (section 11).** `expansion` is a synonym for `per_record`
+rather than a separate code path, because contextual expansion is what every
+mode already does: the engine produces deterministic fields first and asks the
+model to enrich them. Section 11 calls that "often the optimal strategy", so it
+is the default rather than an option.
+
+**Structured output (section 13).** Repair is limited to fixes that need no
+judgement — unwrapping a fenced block, closing a truncated string, trimming to
+a declared maximum, clamping a number into range. Anything requiring a decision
+becomes a retry, because a repair that guesses at meaning is indistinguishable
+from fabricated data.
+
+**Batch shortfalls.** A model asked for ten records that returns nine has given
+a wrong answer to a well-formed question, so it goes back up the retry ladder
+like any other. Records that did arrive are kept; only the remainder falls
+through to the field's failure policy.
 
 **Field `context` (section 49).** The field editor's Context list mixes related
 entities and sibling fields, so each name is resolved against both, and a name

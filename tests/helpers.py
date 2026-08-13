@@ -20,12 +20,19 @@ TEMPLATES = REPO_ROOT / "templates"
 EXAMPLES = REPO_ROOT / "examples"
 
 
-def make_project(entities: dict[str, Any], **project_keys: Any) -> ProjectSpec:
+def make_project(
+    entities: dict[str, Any],
+    *,
+    providers: dict[str, Any] | None = None,
+    **project_keys: Any,
+) -> ProjectSpec:
     """Build a project from a plain mapping, the way a YAML file would."""
     payload: dict[str, Any] = {
         "project": {"name": "Test Project", "seed": 1234, **project_keys},
         "entities": entities,
     }
+    if providers:
+        payload["providers"] = providers
     return load_project_data(payload)
 
 
@@ -51,5 +58,10 @@ def make_context(
     )
 
 
-def compile_from(entities: dict[str, Any], **project_keys: Any) -> Any:
-    return compile_project(make_project(entities, **project_keys))
+def compile_from(
+    entities: dict[str, Any],
+    *,
+    providers: dict[str, Any] | None = None,
+    **project_keys: Any,
+) -> Any:
+    return compile_project(make_project(entities, providers=providers, **project_keys))

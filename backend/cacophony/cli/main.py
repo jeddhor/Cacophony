@@ -6,7 +6,9 @@
     cacophony preview project.yaml --entity employee --count 25
     cacophony generate project.yaml --records 1000000 --seed 42069 --output parquet
     cacophony generators
-    cacophony providers project.yaml
+    cacophony providers project.yaml --test
+    cacophony models project.yaml --provider local_llm
+    cacophony prompt project.yaml --entity ticket
 
 Every command that reads a project compiles it first, so a schema error is
 reported the same way regardless of which command found it.
@@ -28,7 +30,9 @@ from ..core.provenance import ProvenanceMode
 from ..core.record import to_jsonable
 from ..generation.engine import DEFAULT_BATCH_SIZE, FailurePolicy, GenerationEngine
 from ..generation.registry import REGISTRY
+from ..generation.runtime import GenerationRuntime
 from ..outputs import OUTPUT_FORMATS, create_writer, output_path_for
+from ..providers.cache import CacheMode, GenerationCache
 from ..schema.compiler import compile_project
 from ..schema.linter import Severity, lint_project
 from ..schema.loader import load_project
@@ -65,6 +69,40 @@ def _load(path: Path, seed: int | None = None) -> CompiledProject:
     except CacophonyError as exc:
         error_console.print(f"[cacophony.error]error[/] {exc}")
         raise typer.Exit(code=2) from exc
+
+
+CacheOpt = Annotated[
+    str, typer.Option("--cache", help=f"One of: {', '.join(m.value for m in CacheMode)}.")
+]
+CachePathOpt = Annotated[
+    Path | None, typer.Option("--cache-path", help="Where to keep the generation cache.")
+]
+
+
+def _runtime(
+    compiled: CompiledProject,
+    *,
+    cache_mode: str = "disabled",
+    cache_path: Path | None = None,
+    llm_batch_size: int = 20,
+) -> GenerationRuntime | None:
+    """Build the provider runtime for a project that declares providers."""
+    if not compiled.spec.providers:
+        return None
+    try:
+        mode = CacheMode(cache_mode)
+    except ValueError as exc:
+        error_console.print(
+            f"[cacophony.error]error[/] unknown cache mode '{cache_mode}'. "
+            f"Choose one of: {', '.join(m.value for m in CacheMode)}"
+        )
+        raise typer.Exit(code=2) from exc
+
+    cache = GenerationCache(
+        cache_path if mode.reads else None,
+        mode=mode,
+    )
+    return GenerationRuntime.for_project(compiled.spec, cache=cache, llm_batch_size=llm_batch_size)
 
 
 def _banner(title: str, subtitle: str = "") -> None:
@@ -239,6 +277,8 @@ def preview(
             help="Draw a different sample instead of the records a real run would produce.",
         ),
     ] = False,
+    cache: CacheOpt = "disabled",
+    cache_path: CachePathOpt = None,
 ) -> None:
     """Generate a small sample (design document sections 51 and 103).
 
@@ -258,6 +298,7 @@ def preview(
         compiled,
         seed_namespace=f"preview-{time.time_ns()}" if isolate else None,
         failure_policy=FailurePolicy.ABORT,
+        runtime=_runtime(compiled, cache_mode=cache, cache_path=cache_path),
     )
 
     if not as_json:
@@ -284,6 +325,7 @@ def preview(
             console.print(f"[cacophony.warn]{failures} record(s) failed validation[/]")
         else:
             console.print("[cacophony.ok]all sampled records passed validation[/]")
+        _print_provider_activity(engine)
 
 
 #: Roughly the narrowest a preview column can be and still say anything.
@@ -387,6 +429,12 @@ def generate(
     no_validate: Annotated[
         bool, typer.Option("--no-validate", help="Skip validation entirely.")
     ] = False,
+    cache: CacheOpt = "disabled",
+    cache_path: CachePathOpt = None,
+    llm_batch_size: Annotated[
+        int,
+        typer.Option("--llm-batch-size", help="Records per language-model call in batch mode."),
+    ] = 20,
 ) -> None:
     """Generate a dataset and stream it to disk (design document section 37)."""
     compiled = _load(project, seed)
@@ -426,6 +474,12 @@ def generate(
         drop_invalid=drop_invalid,
         provenance=provenance_mode,
         failure_policy=on_failure,
+        runtime=_runtime(
+            compiled,
+            cache_mode=cache,
+            cache_path=cache_path,
+            llm_batch_size=llm_batch_size,
+        ),
     )
 
     try:
@@ -456,6 +510,8 @@ def generate(
     rejected = sum(stats.rejected for stats in engine.stats.values())
     if rejected:
         console.print(f"  [cacophony.warn]validation failures  {rejected:,}[/]")
+    _print_provider_activity(engine)
+    asyncio.run(engine.aclose())
 
 
 async def _run_generation(
@@ -564,9 +620,13 @@ def providers(
     project: Annotated[
         Path | None, typer.Argument(help="Optional project whose providers to list.")
     ] = None,
+    test: Annotated[
+        bool, typer.Option("--test", help="Probe each configured provider's health.")
+    ] = False,
 ) -> None:
-    """List configured providers and available adapters (section 43)."""
+    """List configured providers and available adapters (sections 36, 43)."""
     from ..providers.registry import PROVIDER_REGISTRY
+    from ..providers.secrets import DEFAULT_RESOLVER, redact
 
     _banner("providers")
     adapters = PROVIDER_REGISTRY.adapters()
@@ -585,10 +645,212 @@ def providers(
     console.print()
     for spec in compiled.spec.providers.values():
         console.print(f"[cacophony.highlight]{spec.id}[/]  [cacophony.muted]{spec.type}[/]")
-        console.print(f"  adapter    {spec.adapter}")
-        console.print(f"  url        {spec.base_url or '-'}")
-        console.print(f"  model      {spec.model or '-'}")
-        console.print(f"  secret id  {spec.secret or '-'}")
+        console.print(f"  adapter      {spec.adapter}")
+        console.print(f"  url          {spec.base_url or '-'}")
+        console.print(f"  model        {spec.model or '-'}")
+        if spec.secret:
+            resolved = DEFAULT_RESOLVER.resolve(spec.secret)
+            state = redact(resolved) if resolved else "[cacophony.warn]not found[/]"
+            console.print(f"  secret id    {spec.secret} -> {state}")
+        console.print(f"  concurrency  {spec.concurrency}")
+
+    if not test:
+        console.print("\n[cacophony.muted]Pass --test to probe each provider.[/]")
+        return
+
+    console.print()
+    results = asyncio.run(_probe_providers(compiled))
+    unhealthy = 0
+    for provider_id, status in results:
+        if status.healthy:
+            latency = f" ({status.latency_ms:.0f} ms)" if status.latency_ms else ""
+            console.print(f"[cacophony.ok]  ok    [/] {provider_id}{latency}  {status.message}")
+            for key, value in status.details.items():
+                console.print(f"          [cacophony.muted]{key}: {value}[/]")
+        else:
+            unhealthy += 1
+            console.print(f"[cacophony.error]  down  [/] {provider_id}  {status.message}")
+
+    if unhealthy:
+        raise typer.Exit(code=1)
+
+
+async def _probe_providers(compiled: CompiledProject) -> list[tuple[str, Any]]:
+    """Health-check every provider a project declares, concurrently."""
+    from ..core.errors import CacophonyError as _Error
+    from ..core.interfaces import HealthStatus
+
+    runtime = GenerationRuntime.for_project(compiled.spec)
+    results: list[tuple[str, Any]] = []
+
+    for provider_id in compiled.spec.providers:
+        reason = runtime.is_unavailable(provider_id)
+        if reason is not None:
+            results.append((provider_id, HealthStatus.down(reason)))
+            continue
+        try:
+            provider = runtime.providers.get(provider_id)
+            results.append((provider_id, await provider.health_check()))
+        except _Error as exc:
+            results.append((provider_id, HealthStatus.down(str(exc))))
+
+    await runtime.aclose()
+    return results
+
+
+@app.command()
+def models(
+    project: ProjectArg,
+    provider: Annotated[
+        str | None, typer.Option("--provider", "-p", help="Which provider to ask.")
+    ] = None,
+) -> None:
+    """List the models a provider is serving (design document section 36)."""
+    compiled = _load(project)
+    if not compiled.spec.providers:
+        error_console.print("[cacophony.error]error[/] this project configures no providers")
+        raise typer.Exit(code=2)
+
+    wanted = [provider] if provider else list(compiled.spec.providers)
+    for provider_id in wanted:
+        if provider_id not in compiled.spec.providers:
+            error_console.print(
+                f"[cacophony.error]error[/] no provider '{provider_id}'. "
+                f"Configured: {', '.join(compiled.spec.providers)}"
+            )
+            raise typer.Exit(code=2)
+
+    _banner("models", compiled.name)
+    runtime = GenerationRuntime.for_project(compiled.spec)
+    failures = 0
+
+    for provider_id in wanted:
+        console.print(f"[cacophony.highlight]{provider_id}[/]")
+        try:
+            instance = runtime.providers.get(provider_id)
+            # Prefer the async lister where an adapter offers one; the
+            # synchronous form in the section 10 interface wraps it anyway.
+            lister = getattr(instance, "list_models_async", None)
+            if lister is not None:
+                found = asyncio.run(lister())
+            else:
+                found = getattr(instance, "list_models", list)()
+        except CacophonyError as exc:
+            failures += 1
+            console.print(f"  [cacophony.error]{exc}[/]")
+            continue
+
+        if not found:
+            console.print("  [cacophony.muted]no models reported[/]")
+        for info in found:
+            detail = " ".join(
+                part for part in (info.parameter_size, info.quantization, info.family) if part
+            )
+            console.print(f"  {info.name:<40} [cacophony.muted]{detail}[/]")
+
+    asyncio.run(runtime.aclose())
+    if failures:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def prompt(
+    project: ProjectArg,
+    entity: EntityOpt = None,
+    batch_size: Annotated[
+        int, typer.Option("--batch-size", help="Batch size to render for batch-mode fields.")
+    ] = 3,
+    show_schema: Annotated[
+        bool, typer.Option("--schema", help="Also print the JSON Schema.")
+    ] = False,
+) -> None:
+    """Show the prompts the compiler builds (design document section 12).
+
+    Section 9 says users should rarely need to engineer prompts by hand. This
+    is how they check what was written on their behalf.
+    """
+    from ..generation.enrichment import plan_enrichment
+
+    compiled = _load(project)
+    runtime = GenerationRuntime.for_project(compiled.spec, create_providers=False)
+    entity_names = [entity] if entity else list(compiled.entity_order)
+
+    _banner("prompt", compiled.name)
+    found = False
+
+    for name in entity_names:
+        compiled_entity = compiled.entity(name)
+        for layer in compiled_entity.layers():
+            ai_fields = [
+                field
+                for field in layer
+                if type(field.generator).requires_provider == "language_model"
+            ]
+            if not ai_fields:
+                continue
+            found = True
+            for group in plan_enrichment(
+                compiled_entity, ai_fields, runtime, batch_size=batch_size
+            ):
+                console.rule(
+                    f"[cacophony.highlight]{name}: {group.describe()}", style="cacophony.rule"
+                )
+                console.print(f"[cacophony.muted]prompt hash {group.prompt.hash}[/]\n")
+                console.print("[cacophony.accent]SYSTEM[/]")
+                console.print(group.prompt.system)
+                console.print("\n[cacophony.accent]USER[/]")
+                console.print(group.prompt.instruction)
+                if group.context_fields:
+                    console.print(
+                        f"\n[cacophony.muted]plus known values for: "
+                        f"{', '.join(group.context_fields)}[/]"
+                    )
+                if show_schema:
+                    console.print("\n[cacophony.accent]JSON SCHEMA[/]")
+                    console.print_json(json.dumps(group.prompt.json_schema))
+                console.print()
+
+    if not found:
+        console.print("[cacophony.muted]no language-model fields in this project[/]")
+
+
+def _print_provider_activity(engine: GenerationEngine) -> None:
+    """Report what the providers actually did (sections 58, 86)."""
+    runtime = getattr(engine, "runtime", None)
+    if runtime is None:
+        return
+
+    for provider_id, reason in runtime.unavailable.items():
+        console.print(f"[cacophony.warn]provider '{provider_id}' unavailable[/] {reason}")
+
+    stats = runtime.stats
+    cache = runtime.cache
+    # A run served entirely from cache makes no calls at all, and that is
+    # precisely the fact worth reporting - so the cache counters, not the call
+    # count, decide whether there is anything to say.
+    if not stats.llm_calls and not cache.stats.hits:
+        return
+
+    console.print()
+    console.print(f"  language-model calls  {stats.llm_calls:,}")
+    console.print(f"  records enriched      {stats.records_enriched:,}")
+    console.print(
+        f"  tokens                {stats.prompt_tokens:,} in / {stats.completion_tokens:,} out"
+    )
+    console.print(f"  mean latency          {stats.mean_latency_ms:.0f} ms")
+    if stats.llm_retries:
+        console.print(f"  [cacophony.warn]retries               {stats.llm_retries:,}[/]")
+    if stats.parse_failures:
+        console.print(f"  [cacophony.warn]parse failures        {stats.parse_failures:,}[/]")
+    if stats.repairs:
+        console.print(f"  repairs               {stats.repairs:,}")
+    if stats.fallbacks:
+        console.print(f"  [cacophony.warn]degraded fields       {stats.fallbacks:,}[/]")
+    if runtime.cache.mode.reads:
+        cache = runtime.cache.describe()
+        console.print(
+            f"  cache                 {cache['hits']:,} hits / {cache['misses']:,} misses"
+        )
 
 
 @app.command()

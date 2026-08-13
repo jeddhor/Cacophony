@@ -46,6 +46,10 @@ class GenerationContext:
     scenario: Any | None = None
     timeline: Any | None = None
     run_id: str | None = None
+    #: Provider-backed services: providers, cache, prompt compiler, secrets.
+    #: A :class:`cacophony.generation.runtime.GenerationRuntime`, typed loosely
+    #: here so that ``core`` keeps its independence from the provider layer.
+    runtime: Any | None = None
     attempt: int = 1
     extras: dict[str, Any] = dataclass_field(default_factory=dict)
 
@@ -97,6 +101,7 @@ class GenerationContext:
             scenario=self.scenario,
             timeline=self.timeline,
             run_id=self.run_id,
+            runtime=self.runtime,
             attempt=self.attempt,
             extras=self.extras,
         )
@@ -114,6 +119,7 @@ class GenerationContext:
             scenario=self.scenario,
             timeline=self.timeline,
             run_id=self.run_id,
+            runtime=self.runtime,
             attempt=self.attempt,
             extras=self.extras,
         )

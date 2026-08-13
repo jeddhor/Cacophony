@@ -1,7 +1,8 @@
 # Schema reference
 
-The complete Phase 1 project schema. See [CACOPHONY.md](../CACOPHONY.md) for
-the design rationale and [ROADMAP.md](ROADMAP.md) for what is not built yet.
+The complete project schema as of Phase 2. See [CACOPHONY.md](../CACOPHONY.md)
+for the design rationale and [ROADMAP.md](ROADMAP.md) for what is not built
+yet.
 
 A project is one YAML or JSON file with up to six top-level keys:
 
@@ -79,7 +80,7 @@ fields:
 | Key | Meaning |
 |---|---|
 | `type` | One of the primitive types below. Default `string`. |
-| `semantic` | What the field **means**, in natural language. Drives generator recommendation and, from Phase 2, prompt compilation. |
+| `semantic` | What the field **means**, in natural language. Drives generator recommendation and prompt compilation. |
 | `description` | Documentation. Used as a fallback for `semantic`. |
 | `generator` | Which strategy produces the value. Omit it and one is recommended. |
 | `unique` | Enforced by the validator; the linter rejects domains too small to satisfy it. |
@@ -267,10 +268,51 @@ provider. Domain-bearing values are rewritten onto reserved domains unless
 ### `null` — aliases `none`, `empty`
 Always null.
 
+### `llm` — aliases `language_model`, `ai`, `gpt`
+
+`provider`, `mode`, `context`, `max_tokens`, `temperature`, `on_unavailable`.
+
+No prompt. The field's `semantic`, `type`, `constraints`, `tone`, `examples`
+and `context` are compiled into one by the prompt compiler; run
+`cacophony prompt <project>` to read what it wrote.
+
+```yaml
+resolution_notes:
+  type: text
+  semantic: >
+    Natural-language notes written by an IT support technician explaining
+    how the ticket was resolved.
+  tone: Concise internal enterprise IT helpdesk writing
+  generator: llm
+  provider: local_llm
+  mode: per_record
+  context: [category, device_type, status]
+  constraints:
+    min_length: 40
+    max_length: 300
+```
+
+`mode` chooses how many fields and records one call covers:
+
+| Mode | Calls for 1,000 records × 3 AI fields | When |
+|---|---|---|
+| `per_field` | 3,000 | Maximum control; each field gets the model's full attention |
+| `per_record` *(default)* | 1,000 | Fields of one record stay mutually consistent |
+| `batch` | 1,000 ÷ `--llm-batch-size` | Bulk generation; far fewer calls |
+| `expansion` | same as `per_record` | Explicit name for what every mode already does |
+
+`context` names the already-generated fields the model is shown. Omit it and
+every deterministic field of the record is offered — a model given no context
+will write a biography that contradicts the record it belongs to.
+
+`on_unavailable` governs what happens when no model can answer: `error`
+(default), `placeholder` (a marked stand-in, fitted to the field's length
+constraints) or `null`.
+
 ### Declared, not yet implemented
 
-`llm` `image` `tts` `reference` `script` — see [ROADMAP.md](ROADMAP.md). All
-accept `on_unavailable`: `error` (default), `placeholder`, `null`.
+`image` `tts` `reference` `script` — see [ROADMAP.md](ROADMAP.md). All accept
+`on_unavailable`: `error` (default), `placeholder`, `null`.
 
 ---
 
@@ -300,11 +342,29 @@ providers:
     secret: my-secret-id        # a logical id, never a credential
     concurrency: 4
     timeout_seconds: 120
+    options:                    # adapter-specific
+      structured_output: auto
 ```
 
+| Adapter | Aliases | Endpoint | Structured output |
+|---|---|---|---|
+| `ollama` | – | `/api/generate` | JSON Schema, enforced during decoding |
+| `llamacpp` | `llama.cpp`, `llama_cpp` | `/completion` | JSON Schema, via GBNF grammar |
+| `openai_compatible` | `openai`, `vllm`, `lmstudio`, `tgi` | `/v1/chat/completions` | Negotiated: `json_schema`, then `json_object`, then prompt-only |
+| `mock` | `fake`, `mock_llm` | none — in process | Synthesised from the schema |
+
+`openai_compatible` accepts `structured_output`: `auto` (default),
+`json_schema`, `json_object` or `none`. `auto` discovers what the server
+supports on the first call and remembers the answer.
+
+`mock` accepts `failure_rate`, `malformed_rate`, `latency_ms`, `responses` and
+`healthy` — useful for rehearsing a run's shape, and for exercising the retry
+ladder deliberately.
+
 Credentials never appear in a project file. `secret` names an entry resolved at
-run time from the OS keychain, an environment variable or an encrypted store;
-the loader rejects anything that looks like a literal key.
+run time from the environment variable `CACOPHONY_SECRET_<ID>`, from a variable
+named after the id itself, or from the OS keychain under service `cacophony`.
+The loader rejects anything that looks like a literal key.
 
 ## `scenarios`
 
@@ -364,9 +424,14 @@ cacophony generate  project.yaml [-n N] [--seed N] [-o FORMAT] [-d DIR] [-e ENTI
                                  [--batch-size N] [--provenance MODE]
                                  [--on-failure POLICY] [--drop-invalid] [--no-validate]
 cacophony generators [--json]
-cacophony providers  [project.yaml]
+cacophony providers  [project.yaml] [--test]
+cacophony models     project.yaml [-p PROVIDER]
+cacophony prompt     project.yaml [-e ENTITY] [--batch-size N] [--schema]
 cacophony version
 ```
+
+`generate` and `preview` also accept `--cache MODE` (`disabled`, `read_only`,
+`read_write`), `--cache-path FILE` and `--llm-batch-size N`.
 
 Exit codes: `0` success, `1` lint errors, `2` bad schema or bad arguments,
 `3` generation failure. Errors go to stderr, so `cacophony preview --json | jq`

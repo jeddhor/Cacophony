@@ -78,6 +78,18 @@ class CompiledEntity:
                 return compiled
         raise KeyError(f"Entity '{self.name}' has no field '{name}'")
 
+    def layers(self) -> list[list[CompiledField]]:
+        """Fields grouped into levels that may be produced together.
+
+        Layer 0 depends on nothing; layer *n* depends only on earlier layers.
+        Within a layer the fields are independent, which is what allows several
+        language-model fields to share one call (section 11).
+        """
+        by_name = {compiled.name: compiled for compiled in self.fields}
+        if not self.field_layers:
+            return [list(self.fields)]
+        return [[by_name[name] for name in layer] for layer in self.field_layers]
+
     def seed_chain(self, project_seed: int) -> SeedChain:
         """The seed chain rooted at this entity.
 

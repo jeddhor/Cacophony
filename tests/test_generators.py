@@ -560,27 +560,27 @@ class TestTransformAndComposite:
 
 
 class TestPendingGenerators:
-    def test_llm_errors_by_default(self) -> None:
-        generator, field_spec = build("llm", {})
-        with pytest.raises(GenerationError, match="provider phase"):
+    """Generators still waiting on a backend (image, tts, reference, script)."""
+
+    def test_image_errors_by_default(self) -> None:
+        generator, field_spec = build("image", {}, type=DataType.IMAGE)
+        with pytest.raises(GenerationError, match="multimodal phase"):
             generator.generate_sync(make_context(field_spec))
 
     def test_placeholder_policy_produces_a_marked_value(self) -> None:
-        value = draw("llm", {"on_unavailable": "placeholder"}, type=DataType.TEXT)
-        assert "PLACEHOLDER" in value
+        value = draw("image", {"on_unavailable": "placeholder"}, type=DataType.IMAGE)
+        assert "placeholder" in value
 
     def test_placeholder_respects_length_constraints(self) -> None:
         value = draw(
-            "llm",
-            {"on_unavailable": "placeholder"},
-            type=DataType.TEXT,
-            semantic="a very long description " * 20,
-            constraints=ConstraintSpec(max_length=40, min_length=10),
+            "reference",
+            {"entity": "other", "on_unavailable": "placeholder"},
+            constraints=ConstraintSpec(max_length=12, min_length=8),
         )
-        assert 10 <= len(value) <= 40
+        assert 8 <= len(value) <= 12
 
     def test_null_policy(self) -> None:
-        assert draw("llm", {"on_unavailable": "null"}) is None
+        assert draw("image", {"on_unavailable": "null"}, type=DataType.IMAGE) is None
 
     def test_reference_requires_a_target_entity(self) -> None:
         with pytest.raises(GeneratorConfigError, match="entity"):
@@ -590,6 +590,52 @@ class TestPendingGenerators:
         with pytest.raises(GeneratorConfigError, match="code"):
             build("script", {})
 
-    def test_llm_declares_its_context_as_dependencies(self) -> None:
-        generator, _ = build("llm", {"context": ["a", "b"]})
+    def test_tts_declares_its_source_as_a_dependency(self) -> None:
+        generator, _ = build("tts", {"source": "greeting_text"}, type=DataType.AUDIO)
+        assert "greeting_text" in generator.dependencies()
+
+
+class TestLanguageModelGenerator:
+    """Option handling only; behaviour is covered in test_providers.py."""
+
+    def test_modes(self) -> None:
+        for mode in ("per_field", "per_record", "batch"):
+            generator, _ = build("llm", {"mode": mode}, type=DataType.TEXT)
+            assert generator.mode == mode
+
+    def test_expansion_is_per_record(self) -> None:
+        """Section 11's contextual expansion is what every mode already does."""
+        generator, _ = build("llm", {"mode": "expansion"}, type=DataType.TEXT)
+        assert generator.mode == "per_record"
+
+    def test_unknown_mode_is_rejected(self) -> None:
+        with pytest.raises(GeneratorConfigError, match="must be one of"):
+            build("llm", {"mode": "telepathy"})
+
+    def test_temperature_bounds(self) -> None:
+        with pytest.raises(GeneratorConfigError, match="temperature"):
+            build("llm", {"temperature": 5})
+
+    def test_max_tokens_must_be_positive(self) -> None:
+        with pytest.raises(GeneratorConfigError, match="max_tokens"):
+            build("llm", {"max_tokens": 0})
+
+    def test_declares_its_context_as_dependencies(self) -> None:
+        generator, _ = build("llm", {"context": ["a", "b"]}, type=DataType.TEXT)
         assert tuple(generator.dependencies()) == ("a", "b")
+
+    def test_without_a_runtime_the_policy_applies(self) -> None:
+        import asyncio
+
+        generator, field_spec = build(
+            "llm", {"on_unavailable": "placeholder"}, type=DataType.TEXT, semantic="a bio"
+        )
+        produced = asyncio.run(generator.generate(make_context(field_spec)))
+        assert "PLACEHOLDER" in produced.value
+
+    def test_without_a_runtime_the_error_names_the_remedy(self) -> None:
+        import asyncio
+
+        generator, field_spec = build("llm", {}, type=DataType.TEXT)
+        with pytest.raises(GenerationError, match="providers:"):
+            asyncio.run(generator.generate(make_context(field_spec)))

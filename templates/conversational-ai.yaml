@@ -1,0 +1,173 @@
+# Conversational AI
+# Design document section 70: users, conversations and labeled intents.
+#
+# This template runs end to end with no model server, because it points at the
+# built-in `mock` adapter - an in-process model that synthesises answers against
+# the JSON Schema the prompt compiler produces. It is the fastest way to see the
+# whole language-model path work:
+#
+#   cacophony prompt   templates/conversational-ai.yaml    # what gets asked
+#   cacophony generate templates/conversational-ai.yaml -n 50
+#
+# To use a real model, point `adapter` and `base_url` at one:
+#
+#   providers:
+#     assistant:
+#       adapter: ollama            # or llamacpp, or openai_compatible
+#       base_url: http://localhost:11434
+#       model: llama3.1:8b
+#
+# Nothing else in this file needs to change.
+
+project:
+  name: Conversational AI
+  description: >
+    Support conversations with labelled intents, for training and evaluating
+    classifiers. Every turn is fictional.
+  seed: 90210
+  locale: en_US
+  profile: balanced
+
+providers:
+  assistant:
+    type: language_model
+    adapter: mock
+    model: mock-1
+    concurrency: 4
+
+entities:
+
+  conversation:
+    count: 500
+    description: >
+      One customer-support conversation, already labelled with the intent it
+      turned out to be about.
+    primary_key: conversation_id
+
+    fields:
+      conversation_id:
+        type: string
+        generator: sequence
+        format: "CNV-{000000}"
+        unique: true
+
+      started_at:
+        type: datetime
+        generator: datetime
+        start: "2026-01-01T00:00:00"
+        end: "2026-03-31T23:59:59"
+        business_hours: true
+
+      channel:
+        type: enum
+        generator: weighted
+        choices:
+          web_chat: 46
+          mobile_app: 27
+          email: 18
+          voice: 9
+
+      intent:
+        type: enum
+        semantic: "The labelled intent this conversation is an example of"
+        generator: weighted
+        choices:
+          billing_question: 22
+          password_reset: 18
+          order_status: 16
+          cancel_subscription: 12
+          technical_fault: 12
+          refund_request: 9
+          address_change: 6
+          complaint: 5
+
+      customer_tier:
+        type: enum
+        generator: weighted
+        choices:
+          free: 52
+          standard: 31
+          premium: 13
+          enterprise: 4
+
+      turns:
+        type: integer
+        semantic: "How many messages the conversation ran to"
+        generator: distribution
+        distribution: lognormal
+        mean: 1.5
+        stddev: 0.6
+        min: 2
+        max: 24
+
+      resolved:
+        type: boolean
+        generator: boolean
+        probability: 0.78
+
+      # ---------------------------------------------------------------- #
+      # Everything below is written by the model. Notice that none of it
+      # contains a prompt: the fields say what they *mean*, and the prompt
+      # compiler (section 12) writes the instruction from the meaning plus
+      # the type, the constraints and the declared context.
+      #
+      # All three share one provider and one mode, so the engine asks for
+      # them together - one call per record, not three (section 11).
+
+      opening_message:
+        type: string
+        semantic: >
+          The customer's first message. Written the way a real person types
+          into a support box: no greeting to a named agent, no signature,
+          occasionally imperfect punctuation.
+        generator: llm
+        provider: assistant
+        mode: per_record
+        context: [intent, channel, customer_tier]
+        tone: Natural customer writing, informal
+        constraints:
+          min_length: 20
+          max_length: 240
+
+      agent_reply:
+        type: text
+        semantic: >
+          The support agent's first reply. Acknowledges the specific problem
+          the customer described and states the next concrete step.
+        generator: llm
+        provider: assistant
+        mode: per_record
+        context: [intent, customer_tier, resolved]
+        tone: Warm, professional, concise
+        constraints:
+          min_length: 40
+          max_length: 400
+
+      summary:
+        type: string
+        semantic: >
+          A one-line internal summary of the conversation, written for a
+          supervisor scanning a queue.
+        generator: llm
+        provider: assistant
+        mode: per_record
+        context: [intent, resolved, turns]
+        constraints:
+          max_length: 120
+
+      sentiment:
+        type: enum
+        semantic: "How the customer appeared to feel by the end"
+        generator: weighted
+        choices:
+          positive: 34
+          neutral: 44
+          negative: 22
+
+outputs:
+  training_set:
+    format: jsonl
+    path: out/conversations
+  analytics:
+    format: parquet
+    path: out/conversations-analytics

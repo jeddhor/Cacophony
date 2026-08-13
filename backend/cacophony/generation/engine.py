@@ -1,14 +1,19 @@
 """The generation engine (design document sections 27, 31, 75 and 98).
 
-The engine walks a compiled entity's fields in dependency order, builds one
-:class:`~cacophony.core.record.GeneratedRecord` at a time, validates it, and
-yields records in bounded batches::
+The engine walks a compiled entity's fields in dependency *layers*, builds a
+chunk of :class:`~cacophony.core.record.GeneratedRecord` objects in lockstep,
+validates them, and yields records in bounded batches::
 
     Generate batch -> Validate batch -> Write batch -> Release memory
 
 Nothing accumulates. ``stream`` is an async generator, so a run over ten
 million records holds one batch in memory regardless of dataset size
 (section 31).
+
+Records are built together rather than one after another because that is what
+lets a single language-model call cover several fields of several records
+(section 11). Deterministic fields are unaffected - they are still produced per
+record, in dependency order, at the same cost as before.
 
 Records are addressed by absolute index. Because seeds are derived by hashing
 that index rather than by advancing an RNG (section 75), record *n* is
@@ -34,6 +39,7 @@ from ..validation.results import ValidationResult
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..schema.plan import CompiledEntity, CompiledField, CompiledProject
+    from .runtime import GenerationRuntime
 
 __all__ = ["EntityStats", "FailurePolicy", "GenerationEngine"]
 
@@ -90,6 +96,7 @@ class GenerationEngine:
         max_attempts: int = 3,
         seed_namespace: str | None = None,
         run_id: str | None = None,
+        runtime: GenerationRuntime | None = None,
     ) -> None:
         if failure_policy not in FailurePolicy.ALL:
             raise ValueError(
@@ -106,9 +113,50 @@ class GenerationEngine:
         self.max_attempts = max(1, min(max_attempts, 10))
         self.seed_namespace = seed_namespace
         self.run_id = run_id
+        self.runtime = runtime
+        if self.runtime is None and compiled.spec.providers:
+            # A project that declares providers means them to be used. Building
+            # the runtime here creates provider objects but opens no
+            # connections, so this costs nothing on a run that never calls one.
+            from .runtime import GenerationRuntime
+
+            self.runtime = GenerationRuntime.for_project(compiled.spec)
 
         self.stats: dict[str, EntityStats] = {}
         self._validators: dict[str, RecordValidator] = {}
+        self._enricher: Any = None
+        self._group_cache: dict[tuple[str, int, int], list[Any]] = {}
+
+    # -- provider services -------------------------------------------------- #
+
+    @property
+    def enricher(self) -> Any:
+        """The language-model enricher, built once per engine."""
+        if self._enricher is None and self.runtime is not None:
+            from .enrichment import Enricher
+
+            self._enricher = Enricher(self.runtime, max_attempts=self.max_attempts)
+        return self._enricher
+
+    def _enrichment_groups(
+        self, entity: CompiledEntity, fields: Sequence[CompiledField], batch_size: int
+    ) -> list[Any]:
+        """Group a layer's model-backed fields, compiling prompts once.
+
+        Prompts depend on the schema, not on the record, so they are compiled
+        the first time a layer is seen and reused for every batch after it. On
+        a ten-million-record run that is the difference between compiling a
+        prompt once and compiling it ten million times.
+        """
+        from .enrichment import plan_enrichment
+
+        key = (entity.name, id(fields[0]), batch_size)
+        groups = self._group_cache.get(key)
+        if groups is None:
+            assert self.runtime is not None
+            groups = plan_enrichment(entity, fields, self.runtime, batch_size=batch_size)
+            self._group_cache[key] = groups
+        return groups
 
     # -- seeds -------------------------------------------------------------- #
 
@@ -135,56 +183,133 @@ class GenerationEngine:
         related: dict[str, GeneratedRecord] | None = None,
     ) -> GeneratedRecord:
         """Build one record at absolute position ``index``."""
-        seeds = (entity_seeds or self.seed_chain_for(entity)).record(index)
+        records = await self.generate_chunk(
+            entity, [index], entity_seeds=entity_seeds, related=related
+        )
+        return records[0]
+
+    async def generate_chunk(
+        self,
+        entity: CompiledEntity,
+        indices: Sequence[int],
+        *,
+        entity_seeds: SeedChain | None = None,
+        related: dict[str, GeneratedRecord] | None = None,
+    ) -> list[GeneratedRecord]:
+        """Build several records together, layer by layer.
+
+        Records are built in lockstep rather than one at a time, because that
+        is what allows one language-model call to cover several fields and
+        several records (section 11). Deterministic fields do not care either
+        way - they are produced per record inside each layer exactly as before.
+
+        Field order within a record is unaffected: the layers come from the
+        dependency graph, so every field still sees everything it declared a
+        dependency on.
+        """
+        seeds_root = entity_seeds or self.seed_chain_for(entity)
         stats = self._stats_for(entity.name)
+        track_fields = self.provenance_mode.tracks_fields
+        authored = entity.spec.field_names()
 
-        record = GeneratedRecord(entity=entity.name, values={})
-        provenance = (
-            RecordProvenance(
-                entity=entity.name,
-                record_index=index,
-                seed=seeds.seed,
-                run_id=self.run_id,
-                schema_version=self.compiled.spec.project.version,
+        records: list[GeneratedRecord] = []
+        contexts: list[GenerationContext] = []
+        record_seeds: list[SeedChain] = []
+
+        for index in indices:
+            seeds = seeds_root.record(index)
+            # Values are pre-seeded in *authored* order so that the serialised
+            # record reads like the schema, whatever order the dependency graph
+            # decided to produce the fields in.
+            record = GeneratedRecord(entity=entity.name, values=dict.fromkeys(authored))
+            if self.provenance_mode.tracks_records:
+                record.provenance = RecordProvenance(
+                    entity=entity.name,
+                    record_index=index,
+                    seed=seeds.seed,
+                    run_id=self.run_id,
+                    schema_version=self.compiled.spec.project.version,
+                )
+            # One context per record, repointed at each field, rather than one
+            # per field. Constructing a fresh context per value was measurably
+            # the second-largest cost in the generation loop after the
+            # generators themselves. Generators receive the context for the
+            # duration of a single call and must not retain it; ``sub_context``
+            # exists for the cases that need an independent one.
+            contexts.append(
+                GenerationContext(
+                    project=self.compiled.spec,
+                    entity=entity.spec,
+                    record_index=index,
+                    seeds=seeds,
+                    current_record=record.values,
+                    related_records=related or {},
+                    run_id=self.run_id,
+                    runtime=self.runtime,
+                )
             )
-            if self.provenance_mode.tracks_records
-            else None
+            records.append(record)
+            record_seeds.append(seeds)
+
+        for layer in entity.layers():
+            enrichable = [compiled for compiled in layer if self._is_enrichable(compiled)]
+            direct = [compiled for compiled in layer if compiled not in enrichable]
+
+            for record, context, seeds in zip(records, contexts, record_seeds, strict=True):
+                for compiled_field in direct:
+                    context.field = compiled_field.spec
+                    context.seeds = (
+                        seeds.labelled_field(compiled_field.name)
+                        if self.provenance_mode.tracks_payloads
+                        else seeds.field(compiled_field.name)
+                    )
+                    context.attempt = 1
+                    value, field_provenance = await self._generate_field(
+                        compiled_field, context, stats
+                    )
+                    record.values[compiled_field.name] = value
+                    if track_fields and record.provenance is not None:
+                        record.provenance.fields[compiled_field.name] = field_provenance
+
+            if enrichable:
+                await self._enrich_layer(entity, enrichable, records, contexts, stats)
+
+        for record, index in zip(records, indices, strict=True):
+            record.id = self._record_id(entity, record, index)
+        return records
+
+    def _is_enrichable(self, compiled_field: CompiledField) -> bool:
+        """Whether this field should be produced by a grouped model call."""
+        return (
+            self.runtime is not None
+            and type(compiled_field.generator).requires_provider == "language_model"
         )
 
-        # One context per record, repointed at each field, rather than one per
-        # field. Constructing a fresh context per value was measurably the
-        # second-largest cost in the generation loop after the generators
-        # themselves. Generators receive the context for the duration of a
-        # single call and must not retain it; ``sub_context`` exists for the
-        # cases that need an independent one.
-        context = GenerationContext(
-            project=self.compiled.spec,
-            entity=entity.spec,
-            record_index=index,
-            seeds=seeds,
-            current_record=record.values,
-            related_records=related or {},
-            run_id=self.run_id,
-        )
+    async def _enrich_layer(
+        self,
+        entity: CompiledEntity,
+        fields: Sequence[CompiledField],
+        records: Sequence[GeneratedRecord],
+        contexts: Sequence[GenerationContext],
+        stats: EntityStats,
+    ) -> None:
+        enricher = self.enricher
+        assert enricher is not None
 
-        track_fields = provenance is not None and self.provenance_mode.tracks_fields
-        for compiled_field in entity.fields:
-            context.field = compiled_field.spec
-            context.seeds = (
-                seeds.labelled_field(compiled_field.name)
-                if self.provenance_mode.tracks_payloads
-                else seeds.field(compiled_field.name)
-            )
-            context.attempt = 1
-
-            value, field_provenance = await self._generate_field(compiled_field, context, stats)
-            record.values[compiled_field.name] = value
-            if track_fields:
-                provenance.fields[compiled_field.name] = field_provenance  # type: ignore[union-attr]
-
-        record.provenance = provenance
-        record.id = self._record_id(entity, record, index)
-        return record
+        for group in self._enrichment_groups(entity, fields, len(records)):
+            try:
+                await enricher.run(group, records, contexts)
+            except GenerationError:
+                if self.failure_policy == FailurePolicy.ABORT:
+                    raise
+                stats.field_failures += len(records)
+                for record in records:
+                    for compiled in group.fields:
+                        record.values[compiled.name] = (
+                            f"[FAILED:{compiled.name}]"
+                            if self.failure_policy == FailurePolicy.PLACEHOLDER
+                            else None
+                        )
 
     async def _generate_field(
         self,
@@ -262,28 +387,28 @@ class GenerationEngine:
         stats = self._stats_for(entity.name)
         validator = self._validator_for(entity) if self.validate_records else None
 
-        batch: list[GeneratedRecord] = []
-        for index in range(offset, offset + total):
-            record = await self.generate_record(entity, index, entity_seeds=entity_seeds)
+        # The write batch is also the generation chunk, so a batch-mode model
+        # call can cover as many records as the batch holds. Memory stays
+        # bounded by batch_size either way, which is section 31's requirement.
+        for chunk_start in range(offset, offset + total, batch_size):
+            indices = range(chunk_start, min(chunk_start + batch_size, offset + total))
+            records = await self.generate_chunk(entity, list(indices), entity_seeds=entity_seeds)
 
-            if validator is not None:
-                result = validator.validate(record)
-                self._apply_result(result, stats)
-                if not result.ok and self.drop_invalid:
-                    continue
+            batch: list[GeneratedRecord] = []
+            for record in records:
+                if validator is not None:
+                    result = validator.validate(record)
+                    self._apply_result(result, stats)
+                    if not result.ok and self.drop_invalid:
+                        continue
+                batch.append(record)
+                stats.generated += 1
 
-            batch.append(record)
-            stats.generated += 1
-
-            if len(batch) >= batch_size:
+            if batch:
                 yield batch
-                batch = []
-                # Give the event loop a turn so a long CPU-bound run stays
-                # cancellable and, later, so writers can drain concurrently.
-                await asyncio.sleep(0)
-
-        if batch:
-            yield batch
+            # Give the event loop a turn so a long CPU-bound run stays
+            # cancellable and, later, so writers can drain concurrently.
+            await asyncio.sleep(0)
 
     async def generate_batch(
         self, entity_name: str, count: int, *, offset: int = 0
@@ -332,13 +457,21 @@ class GenerationEngine:
         return {name: validator.stats.to_dict() for name, validator in self._validators.items()}
 
     def summary(self) -> dict[str, Any]:
-        return {
+        summary: dict[str, Any] = {
             "project": self.compiled.name,
             "seed": self.compiled.seed,
             "run_id": self.run_id,
             "entities": {name: stats.to_dict() for name, stats in self.stats.items()},
             "validation": self.validation_stats(),
         }
+        if self.runtime is not None:
+            summary.update(self.runtime.summary())
+        return summary
+
+    async def aclose(self) -> None:
+        """Release provider connections held for this run."""
+        if self.runtime is not None:
+            await self.runtime.aclose()
 
     def entity_order(self) -> Sequence[str]:
         return self.compiled.entity_order

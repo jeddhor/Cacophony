@@ -10,14 +10,15 @@ from .categorical import LookupGenerator, WeightedGenerator
 from .composite import CompositeGenerator, TransformGenerator
 from .deferred import (
     ImageGenerator,
-    LanguageModelGenerator,
     PendingGenerator,
+    PlaceholderMixin,
     ReferenceGenerator,
     ScriptGenerator,
     SpeechGenerator,
 )
 from .faker_gen import FakerGenerator
 from .identifiers import GovernmentIdGenerator, PhoneNumberGenerator
+from .llm import LanguageModelGenerator
 from .network import IpAddressGenerator, MacAddressGenerator
 from .numeric import BooleanGenerator, DistributionGenerator, RandomGenerator
 from .simple import ConstantGenerator, NullGenerator, SequenceGenerator, UuidGenerator
@@ -42,6 +43,7 @@ __all__ = [
     "PatternGenerator",
     "PendingGenerator",
     "PhoneNumberGenerator",
+    "PlaceholderMixin",
     "RandomGenerator",
     "ReferenceGenerator",
     "ScriptGenerator",

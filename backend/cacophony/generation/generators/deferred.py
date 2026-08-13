@@ -6,8 +6,12 @@ implementations are initially empty, so that later multimodal work *extends*
 the platform rather than forcing a rewrite.
 
 These generators are therefore real, registered and compilable today. A schema
-that uses ``generator: llm`` validates, lints, plans and estimates correctly -
-it simply cannot produce a value until the provider phase lands.
+that uses ``generator: image`` validates, lints, plans and estimates correctly -
+it simply cannot produce a value until the multimodal phase lands.
+
+``llm`` used to live here. It now has a working implementation in
+:mod:`cacophony.generation.generators.llm`; only the media, reference and
+script generators are still waiting on their backends.
 
 What happens at generation time follows section 65's failure-policy list:
 
@@ -36,15 +40,48 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = [
     "ImageGenerator",
-    "LanguageModelGenerator",
     "PendingGenerator",
+    "PlaceholderMixin",
     "ReferenceGenerator",
     "ScriptGenerator",
     "SpeechGenerator",
 ]
 
 
-class PendingGenerator(OptionsMixin, SyncGenerator):
+class PlaceholderMixin:
+    """Deterministic stand-in values for a generator that cannot run.
+
+    Shared with the language-model generator, which is implemented but can
+    still find itself without a reachable provider. Section 65 lists
+    "use placeholder" among the failure policies, and a placeholder is only
+    useful if it survives the validators - so it is fitted to the field's
+    declared length before being returned.
+    """
+
+    def placeholder(self, context: GenerationContext) -> Any:
+        """A deterministic, obviously-synthetic stand-in value."""
+        where = self.field.name if self.field else "?"  # type: ignore[attr-defined]
+        return f"[{self.name}:{context.entity.name}.{where}#{context.record_index}]"  # type: ignore[attr-defined]
+
+    def _fit(self, value: Any) -> Any:
+        """Clamp a placeholder to the field's length constraints.
+
+        A stand-in that fails validation would report a schema problem that
+        does not exist, and bury the real ones. Whatever the eventual provider
+        returns has to satisfy these constraints, so the placeholder does too.
+        """
+        field_spec = getattr(self, "field", None)
+        if not isinstance(value, str) or field_spec is None:
+            return value
+        constraints = field_spec.constraints
+        if constraints.max_length is not None and len(value) > constraints.max_length:
+            value = value[: max(constraints.max_length - 1, 0)] + "…"
+        if constraints.min_length is not None and len(value) < constraints.min_length:
+            value = value.ljust(constraints.min_length, ".")
+        return value
+
+
+class PendingGenerator(OptionsMixin, PlaceholderMixin, SyncGenerator):
     """Base for generators whose backend is not implemented yet."""
 
     #: Which development phase implements this generator.
@@ -75,64 +112,9 @@ class PendingGenerator(OptionsMixin, SyncGenerator):
             "rest of the pipeline in the meantime."
         )
 
-    def placeholder(self, context: GenerationContext) -> Any:
-        """A deterministic, obviously-synthetic stand-in value."""
-        where = self.field.name if self.field else "?"
-        return f"[{self.name}:{context.entity.name}.{where}#{context.record_index}]"
-
-    def _fit(self, value: Any) -> Any:
-        """Clamp a placeholder to the field's length constraints.
-
-        A stand-in that fails validation would report a schema problem that
-        does not exist, and bury the real ones. Whatever the eventual provider
-        returns has to satisfy these constraints, so the placeholder does too.
-        """
-        if not isinstance(value, str) or self.field is None:
-            return value
-        constraints = self.field.constraints
-        if constraints.max_length is not None and len(value) > constraints.max_length:
-            value = value[: max(constraints.max_length - 1, 0)] + "…"
-        if constraints.min_length is not None and len(value) < constraints.min_length:
-            value = value.ljust(constraints.min_length, ".")
-        return value
-
     def describe(self) -> str:
         suffix = "" if self.on_unavailable == "error" else f", {self.on_unavailable}"
         return f"{self.name}(pending{suffix})"
-
-
-@register_generator("llm", aliases=("language_model", "ai", "gpt"))
-class LanguageModelGenerator(PendingGenerator):
-    """Semantic content generated from field and record context (section 8).
-
-    Options:
-        ``provider``   id of a configured language-model provider
-        ``context``    fields the model may see
-        ``mode``       ``per_field``, ``per_record``, ``batch`` or ``expansion``
-        ``max_tokens`` / ``temperature``
-
-    The prompt is not written by the user. Section 9's semantic annotations
-    plus the field's type, constraints and dependencies are compiled into one
-    by the prompt compiler (section 12).
-    """
-
-    requires_provider = "language_model"
-    cost_class = "llm"
-    phase = "the provider phase"
-    kind = "text"
-
-    def prepare(self) -> None:
-        super().prepare()
-        self.mode = self.opt_choice(
-            "mode", ("per_field", "per_record", "batch", "expansion"), "per_field"
-        )
-        self.max_tokens = self.opt_int("max_tokens", 256)
-        self.temperature = self.opt_float("temperature", 0.8)
-
-    def placeholder(self, context: GenerationContext) -> Any:
-        meaning = (self.field.meaning if self.field else None) or "generated text"
-        summary = " ".join(meaning.split())[:80]
-        return f"[LLM PLACEHOLDER] {summary} (record {context.record_index})"
 
 
 @register_generator("image", aliases=("invokeai", "text_to_image"))
