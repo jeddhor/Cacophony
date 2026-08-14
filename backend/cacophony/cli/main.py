@@ -26,17 +26,29 @@ import typer
 
 from .. import __version__
 from ..core.errors import CacophonyError
-from ..core.provenance import ProvenanceMode
 from ..core.record import to_jsonable
 from ..generation.engine import DEFAULT_BATCH_SIZE, FailurePolicy, GenerationEngine
 from ..generation.registry import REGISTRY
 from ..generation.runtime import GenerationRuntime
-from ..outputs import OUTPUT_FORMATS, create_writer, output_path_for
+from ..observability.logging import configure_logging
+from ..outputs import OUTPUT_FORMATS
 from ..providers.cache import CacheMode, GenerationCache
+from ..runs.coordinator import Conductor
 from ..schema.compiler import compile_project
 from ..schema.linter import Severity, lint_project
 from ..schema.loader import load_project
 from ..schema.plan import CompiledProject
+from ..store.database import default_store_path
+from .runs import (
+    STATE_STYLES,
+    build_run_config,
+    compile_stored_revision,
+    drive,
+    open_repository,
+    pick_run,
+    register_project,
+    report_outcome,
+)
 from .theme import console, error_console, label_for_generator, style_for_generator
 
 app = typer.Typer(
@@ -77,6 +89,11 @@ CacheOpt = Annotated[
 CachePathOpt = Annotated[
     Path | None, typer.Option("--cache-path", help="Where to keep the generation cache.")
 ]
+
+
+StoreOpt = Annotated[Path | None, typer.Option("--store", help="Path to the run store (SQLite).")]
+LogLevelOpt = Annotated[str, typer.Option("--log-level", help="debug, info, warning or error.")]
+LogFormatOpt = Annotated[str, typer.Option("--log-format", help="text or json.")]
 
 
 def _runtime(
@@ -417,6 +434,7 @@ def generate(
     batch_size: Annotated[
         int, typer.Option("--batch-size", help="Records per write batch.")
     ] = DEFAULT_BATCH_SIZE,
+    workers: Annotated[int, typer.Option("--workers", help="Entities generated concurrently.")] = 4,
     provenance: Annotated[
         str, typer.Option("--provenance", help="none, run, record, field or full.")
     ] = "none",
@@ -435,149 +453,310 @@ def generate(
         int,
         typer.Option("--llm-batch-size", help="Records per language-model call in batch mode."),
     ] = 20,
+    checkpoint_every: Annotated[
+        int, typer.Option("--checkpoint-every", help="Records between checkpoints.")
+    ] = 10_000,
+    store: StoreOpt = None,
+    no_history: Annotated[
+        bool, typer.Option("--no-history", help="Do not record this run in the store.")
+    ] = False,
+    log_level: LogLevelOpt = "warning",
+    log_format: LogFormatOpt = "text",
 ) -> None:
-    """Generate a dataset and stream it to disk (design document section 37)."""
+    """Generate a dataset and stream it to disk (design document section 37).
+
+    The run is recorded, checkpointed and resumable. If it stops - a full disk,
+    a killed process, Ctrl-C - ``cacophony resume`` picks it up from the last
+    checkpoint rather than from the beginning (section 32).
+    """
+    configure_logging(log_level, fmt=log_format)
     compiled = _load(project, seed)
 
-    try:
-        provenance_mode = ProvenanceMode(provenance)
-    except ValueError as exc:
+    if entity and entity not in compiled.entities:
         error_console.print(
-            f"[cacophony.error]error[/] unknown provenance mode '{provenance}'. "
-            f"Choose one of: {', '.join(mode.value for mode in ProvenanceMode)}"
-        )
-        raise typer.Exit(code=2) from exc
-
-    if output.lower() not in OUTPUT_FORMATS:
-        error_console.print(
-            f"[cacophony.error]error[/] unknown output format '{output}'. "
-            f"Available: {', '.join(sorted(OUTPUT_FORMATS))}"
+            f"[cacophony.error]error[/] no entity '{entity}'. "
+            f"Known entities: {', '.join(compiled.entity_order)}"
         )
         raise typer.Exit(code=2)
 
-    entity_names = [entity] if entity else list(compiled.entity_order)
-    for name in entity_names:
-        if name not in compiled.entities:
-            error_console.print(
-                f"[cacophony.error]error[/] no entity '{name}'. "
-                f"Known entities: {', '.join(compiled.entity_order)}"
-            )
-            raise typer.Exit(code=2)
+    config = build_run_config(
+        out_dir=out_dir,
+        output=output,
+        entity=entity,
+        records=records,
+        seed=seed,
+        no_validate=no_validate,
+        drop_invalid=drop_invalid,
+        provenance=provenance,
+        on_failure=on_failure,
+        cache=cache,
+        cache_path=cache_path,
+        batch_size=batch_size,
+        workers=workers,
+        llm_batch_size=llm_batch_size,
+        checkpoint_every=checkpoint_every,
+        record_history=not no_history,
+    )
+
+    repository, project_id, revision_id = register_project(project, compiled, store, config)
 
     _banner("generate", compiled.name)
     console.print(f"[cacophony.muted]seed[/] {compiled.seed}   [cacophony.muted]format[/] {output}")
     console.print(f"[cacophony.muted]output[/] {out_dir.resolve()}\n")
 
-    engine = GenerationEngine(
+    conductor = Conductor(
         compiled,
-        validate=not no_validate,
-        drop_invalid=drop_invalid,
-        provenance=provenance_mode,
-        failure_policy=on_failure,
-        runtime=_runtime(
-            compiled,
-            cache_mode=cache,
-            cache_path=cache_path,
-            llm_batch_size=llm_batch_size,
-        ),
+        config,
+        repository=repository,
+        project_id=project_id,
+        revision_id=revision_id,
     )
+    outcome = drive(conductor)
+    report_outcome(outcome, on_provider_activity=lambda: _print_provider_activity(conductor))
 
-    try:
-        totals = asyncio.run(
-            _run_generation(
-                compiled=compiled,
-                engine=engine,
-                entity_names=entity_names,
-                records=records,
-                fmt=output,
-                out_dir=out_dir,
-                batch_size=batch_size,
-                provenance_mode=provenance_mode,
-            )
+
+@app.command()
+def resume(
+    run: Annotated[
+        str | None,
+        typer.Argument(help="Run id to resume. Omit to take the most recent resumable run."),
+    ] = None,
+    project: Annotated[
+        Path | None, typer.Option("--project", "-p", help="Project whose store to read.")
+    ] = None,
+    store: StoreOpt = None,
+    log_level: LogLevelOpt = "warning",
+    log_format: LogFormatOpt = "text",
+) -> None:
+    """Continue an interrupted run from its checkpoints (section 32).
+
+    The run's original configuration is reused - the same seed, format and
+    provenance mode - so a resumed dataset is the one the first attempt was
+    producing, not a second dataset generated differently.
+    """
+    configure_logging(log_level, fmt=log_format)
+    repository = open_repository(store, project)
+    if repository is None:
+        error_console.print(
+            "[cacophony.error]error[/] no run store found. Pass --store, or --project to "
+            "locate the store beside a schema file."
         )
-    except CacophonyError as exc:
-        error_console.print(f"\n[cacophony.error]error[/] {exc}")
-        raise typer.Exit(code=3) from exc
+        raise typer.Exit(code=2)
 
-    console.rule(style="cacophony.rule")
+    stored = pick_run(repository, run)
+    compiled = compile_stored_revision(repository, stored)
+
+    _banner("resume", stored["id"][:8])
+    completed = sum(job["completed"] for job in stored.get("jobs", []))
     console.print(
-        f"[cacophony.ok]complete[/]  {totals['records']:,} records in {totals['seconds']:.2f}s"
+        f"[cacophony.muted]state[/] {stored['state']}   "
+        f"[cacophony.muted]progress[/] {completed:,} / {stored['records_requested']:,}"
     )
-    if totals["seconds"] > 0:
-        console.print(f"  throughput      {totals['records'] / totals['seconds']:,.0f} records/sec")
-    console.print(f"  files           {totals['files']}")
+    if stored.get("revision_id") is not None:
+        # Section 73: the run continues under the schema it started with, not
+        # under whatever the file says now. Saying so avoids a confusing
+        # second failure when someone edits the schema and resumes.
+        console.print(
+            f"[cacophony.muted]schema[/] revision {stored['revision_id']} "
+            "(the one this run started with)"
+        )
+    console.print(f"[cacophony.muted]output[/] {stored.get('output_dir')}\n")
 
-    rejected = sum(stats.rejected for stats in engine.stats.values())
-    if rejected:
-        console.print(f"  [cacophony.warn]validation failures  {rejected:,}[/]")
-    _print_provider_activity(engine)
-    asyncio.run(engine.aclose())
+    conductor = Conductor.resume(compiled, stored, repository=repository)
+    outcome = drive(conductor, resume=True)
+    report_outcome(outcome, on_provider_activity=lambda: _print_provider_activity(conductor))
 
 
-async def _run_generation(
-    *,
-    compiled: CompiledProject,
-    engine: GenerationEngine,
-    entity_names: list[str],
-    records: int | None,
-    fmt: str,
-    out_dir: Path,
-    batch_size: int,
-    provenance_mode: ProvenanceMode,
-) -> dict[str, Any]:
-    from rich.progress import (
-        BarColumn,
-        MofNCompleteColumn,
-        Progress,
-        SpinnerColumn,
-        TextColumn,
-        TimeElapsedColumn,
+@app.command(name="runs")
+def list_runs(
+    project: Annotated[
+        Path | None, typer.Option("--project", "-p", help="Project whose store to read.")
+    ] = None,
+    store: StoreOpt = None,
+    state: Annotated[str | None, typer.Option("--state", help="Filter by run state.")] = None,
+    limit: Annotated[int, typer.Option("--limit", help="How many runs to show.")] = 20,
+    as_json: Annotated[bool, typer.Option("--json", help="Emit as JSON.")] = False,
+) -> None:
+    """List recorded runs (design document section 56)."""
+    repository = open_repository(store, project)
+    if repository is None:
+        if as_json:
+            print("[]")
+            return
+        console.print("[cacophony.muted]no run store found[/]")
+        return
+
+    rows = repository.list_runs(state=state, limit=limit)
+    if as_json:
+        console.print_json(json.dumps(rows))
+        return
+
+    from rich.table import Table
+
+    _banner("runs", f"{len(rows)} recorded")
+    if not rows:
+        console.print("[cacophony.muted]no runs yet[/]")
+        return
+
+    table = Table(header_style="cacophony.accent", border_style="cacophony.rule")
+    table.add_column("run", style="cacophony.highlight")
+    table.add_column("state")
+    table.add_column("records", justify="right")
+    table.add_column("progress", justify="right")
+    table.add_column("duration", justify="right")
+    table.add_column("started", style="cacophony.muted")
+
+    for row in rows:
+        table.add_row(
+            row["id"][:8],
+            f"[{STATE_STYLES.get(row['state'], 'cacophony.muted')}]{row['state']}[/]",
+            f"{row['records_written']:,}",
+            f"{row['progress'] * 100:.0f}%",
+            f"{row['duration_seconds']:.1f}s" if row["duration_seconds"] else "-",
+            (row["started_at"] or row["created_at"] or "")[:19].replace("T", " "),
+        )
+    console.print(table)
+    console.print(
+        "\n[cacophony.muted]'cacophony run <id>' inspects one; "
+        "'cacophony resume <id>' continues it.[/]"
     )
 
-    started = time.perf_counter()
-    total_records = 0
-    files: list[str] = []
 
-    with Progress(
-        SpinnerColumn(style="cacophony.highlight"),
-        TextColumn("[cacophony.accent]{task.description}"),
-        BarColumn(complete_style="cacophony.brand", finished_style="cacophony.ok"),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=console,
-    ) as progress:
-        for name in entity_names:
-            entity = compiled.entity(name)
-            count = records if records is not None else entity.count
-            if count <= 0:
-                continue
+@app.command(name="run")
+def show_run(
+    run: Annotated[str, typer.Argument(help="Run id, or a unique prefix of one.")],
+    project: Annotated[
+        Path | None, typer.Option("--project", "-p", help="Project whose store to read.")
+    ] = None,
+    store: StoreOpt = None,
+    events: Annotated[int, typer.Option("--events", help="How many recent events to show.")] = 0,
+    as_json: Annotated[bool, typer.Option("--json", help="Emit as JSON.")] = False,
+) -> None:
+    """The run inspector (design document section 56)."""
+    repository = open_repository(store, project)
+    if repository is None:
+        error_console.print("[cacophony.error]error[/] no run store found")
+        raise typer.Exit(code=2)
 
-            path = output_path_for(out_dir, name, fmt)
-            writer = create_writer(
-                fmt,
-                path,
-                columns=entity.spec.field_names(),
-                provenance=provenance_mode,
-            )
-            task = progress.add_task(name, total=count)
+    stored = pick_run(repository, run)
+    if as_json:
+        stored["events"] = repository.get_events(stored["id"], limit=events or 200)
+        console.print_json(json.dumps(stored))
+        return
 
-            await writer.open()
-            try:
-                async for batch in engine.stream(name, count=count, batch_size=batch_size):
-                    await writer.write_batch(batch)
-                    progress.advance(task, len(batch))
-                    total_records += len(batch)
-            finally:
-                await writer.close()
+    _banner("run", stored["id"])
+    state = stored["state"]
+    console.print(
+        f"[{STATE_STYLES.get(state, 'cacophony.muted')}]{state}[/]   "
+        f"{stored['records_written']:,} / {stored['records_requested']:,} records"
+    )
+    if stored["duration_seconds"]:
+        rate = stored["records_written"] / stored["duration_seconds"]
+        console.print(
+            f"  duration        {stored['duration_seconds']:.2f}s  ({rate:,.0f} records/sec)"
+        )
+    console.print(f"  seed            {stored['seed']}")
+    console.print(f"  output          {stored.get('output_dir')} ({stored.get('output_format')})")
+    if stored.get("revision_id"):
+        console.print(f"  schema revision {stored['revision_id']}")
+    if stored.get("error"):
+        console.print(f"  [cacophony.error]error[/]           {stored['error']}")
 
-            files.append(str(path))
+    from rich.table import Table
 
-    return {
-        "records": total_records,
-        "seconds": time.perf_counter() - started,
-        "files": len(files),
-        "paths": files,
+    console.print()
+    table = Table(header_style="cacophony.accent", border_style="cacophony.rule", title="jobs")
+    table.add_column("entity", style="cacophony.highlight")
+    table.add_column("state")
+    table.add_column("done", justify="right")
+    table.add_column("requested", justify="right")
+    table.add_column("part", justify="right")
+    for job in stored.get("jobs", []):
+        table.add_row(
+            job["entity"] or job["type"],
+            f"[{STATE_STYLES.get(job['state'], 'cacophony.muted')}]{job['state']}[/]",
+            f"{job['completed']:,}",
+            f"{job['requested']:,}",
+            str(job["part"]),
+        )
+    console.print(table)
+
+    # Quality scores are ratios and read as percentages; run counters are
+    # counts and read as numbers. Formatting them the same way turned 900
+    # records written into "900.00%".
+    statistics = stored.get("statistics", [])
+    quality = {
+        s["name"]: s["value"]
+        for s in statistics
+        if s["scope"] == "quality" and s["value"] is not None
     }
+    counters = {
+        s["name"]: s["value"] for s in statistics if s["scope"] == "run" and s["value"] is not None
+    }
+
+    if quality:
+        console.print("\n[cacophony.accent]quality[/]  (design document section 58)")
+        for name, value in sorted(quality.items()):
+            console.print(f"  {name:<24} {value:.2%}")
+    if counters:
+        console.print("\n[cacophony.accent]totals[/]")
+        for name, value in sorted(counters.items()):
+            rendered = f"{value:,.0f}" if float(value).is_integer() else f"{value:,.2f}"
+            console.print(f"  {name:<24} {rendered}")
+
+    summary = stored.get("summary") or {}
+    if summary.get("files"):
+        console.print("\n[cacophony.accent]output[/]")
+        for path in summary["files"]:
+            console.print(f"  {path}")
+
+    if events:
+        console.print("\n[cacophony.accent]events[/]")
+        for record in repository.get_events(stored["id"], limit=events):
+            style = "cacophony.error" if record["level"] == "error" else "cacophony.muted"
+            console.print(f"  [{style}]{record['event']:<16}[/] {record['message']}")
+    else:
+        console.print("\n[cacophony.muted]Pass --events N to see the log.[/]")
+
+
+@app.command()
+def serve(
+    host: Annotated[str, typer.Option("--host", help="Interface to bind.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="Port to listen on.")] = 8765,
+    store: StoreOpt = None,
+    project: Annotated[
+        Path | None, typer.Option("--project", "-p", help="Project whose store to serve.")
+    ] = None,
+    reload: Annotated[bool, typer.Option("--reload", help="Reload on source changes.")] = False,
+    log_level: LogLevelOpt = "info",
+) -> None:
+    """Serve the REST API and live run feed (design document sections 36, 55)."""
+    try:
+        import uvicorn
+
+        from ..api.app import create_app
+    except ImportError as exc:
+        error_console.print(
+            "[cacophony.error]error[/] the API needs FastAPI and uvicorn. "
+            "Install them with: pip install 'cacophony[api]'"
+        )
+        raise typer.Exit(code=2) from exc
+
+    store_path = store or (default_store_path(project) if project else default_store_path())
+    configure_logging(log_level)
+
+    _banner("serve", f"http://{host}:{port}")
+    console.print(f"[cacophony.muted]store[/] {store_path}")
+    console.print(f"[cacophony.muted]docs [/] http://{host}:{port}/docs")
+    console.print(f"[cacophony.muted]live [/] ws://{host}:{port}/api/runs/{{run_id}}/stream\n")
+
+    uvicorn.run(
+        create_app(store_path=store_path),
+        host=host,
+        port=port,
+        log_level=log_level,
+        reload=reload,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -814,9 +993,13 @@ def prompt(
         console.print("[cacophony.muted]no language-model fields in this project[/]")
 
 
-def _print_provider_activity(engine: GenerationEngine) -> None:
-    """Report what the providers actually did (sections 58, 86)."""
-    runtime = getattr(engine, "runtime", None)
+def _print_provider_activity(owner: GenerationEngine | Conductor) -> None:
+    """Report what the providers actually did (sections 58, 86).
+
+    Takes an engine or a conductor: both hold a runtime, and both want to say
+    the same thing about it.
+    """
+    runtime = getattr(owner, "runtime", None)
     if runtime is None:
         return
 

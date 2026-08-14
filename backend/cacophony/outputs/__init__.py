@@ -7,7 +7,14 @@ from typing import Any
 
 from ..core.errors import OutputError
 from ..core.interfaces import OutputWriter
-from .writers import CsvWriter, FileWriter, JsonLinesWriter, JsonWriter, ParquetWriter
+from .writers import (
+    CsvWriter,
+    FileWriter,
+    JsonLinesWriter,
+    JsonWriter,
+    ParquetWriter,
+    align_to_records,
+)
 
 __all__ = [
     "OUTPUT_FORMATS",
@@ -16,6 +23,7 @@ __all__ = [
     "JsonLinesWriter",
     "JsonWriter",
     "ParquetWriter",
+    "align_to_records",
     "create_writer",
     "output_path_for",
 ]

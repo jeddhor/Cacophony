@@ -199,7 +199,7 @@ class TestGenerate:
         result = invoke("generate", str(project_file), "-o", "papyrus", "-d", str(tmp_path))
         assert result.exit_code == 2
         # Errors belong on stderr so `cacophony preview --json | jq` stays usable.
-        assert "Available" in result.stderr
+        assert "Choose one of" in result.stderr
 
     def test_unknown_entity_exits_two(self, project_file: Path, tmp_path: Path) -> None:
         result = invoke("generate", str(project_file), "-e", "ghost", "-d", str(tmp_path))
@@ -460,6 +460,232 @@ entities:
         assert result.exit_code == 0
         rows = [json.loads(line) for line in result.stdout.strip().splitlines()]
         assert all(row["body"] for row in rows)
+
+
+class TestRunCommands:
+    """Run history, the inspector and resume (sections 32, 37, 56)."""
+
+    @pytest.fixture
+    def workspace(self, tmp_path: Path) -> Path:
+        """A project file with its own store directory beside it."""
+        path = tmp_path / "proj.yaml"
+        path.write_text(SIMPLE_YAML, encoding="utf-8")
+        return path
+
+    def test_generate_records_a_run(self, workspace: Path, tmp_path: Path) -> None:
+        result = invoke("generate", str(workspace), "-d", str(tmp_path / "out"))
+        assert result.exit_code == 0, result.stdout
+        assert "run " in result.stdout
+
+        listing = invoke("runs", "--project", str(workspace), "--json")
+        rows = json.loads(listing.stdout)
+        assert len(rows) == 1
+        assert rows[0]["state"] == "completed"
+        assert rows[0]["records_written"] == 20
+
+    def test_the_store_lands_beside_the_project(self, workspace: Path, tmp_path: Path) -> None:
+        invoke("generate", str(workspace), "-d", str(tmp_path / "out"))
+        assert (workspace.parent / ".cacophony" / "cacophony.db").exists()
+
+    def test_history_can_be_switched_off(self, workspace: Path, tmp_path: Path) -> None:
+        invoke("generate", str(workspace), "-d", str(tmp_path / "out"), "--no-history")
+        assert not (workspace.parent / ".cacophony").exists()
+
+    def test_a_custom_store_path(self, workspace: Path, tmp_path: Path) -> None:
+        store = tmp_path / "elsewhere" / "runs.db"
+        invoke("generate", str(workspace), "-d", str(tmp_path / "out"), "--store", str(store))
+        assert store.exists()
+        rows = json.loads(invoke("runs", "--store", str(store), "--json").stdout)
+        assert len(rows) == 1
+
+    def test_runs_without_a_store_says_so(self, tmp_path: Path) -> None:
+        path = tmp_path / "unused.yaml"
+        path.write_text(SIMPLE_YAML, encoding="utf-8")
+        result = invoke("runs", "--project", str(path))
+        assert result.exit_code == 0
+        assert "no run store" in result.stdout
+
+    def test_the_run_inspector(self, workspace: Path, tmp_path: Path) -> None:
+        """Section 56: completed, duration, records, errors, output size."""
+        invoke("generate", str(workspace), "-d", str(tmp_path / "out"))
+        run_id = json.loads(invoke("runs", "--project", str(workspace), "--json").stdout)[0]["id"]
+
+        result = invoke("run", run_id, "--project", str(workspace))
+        assert result.exit_code == 0
+        assert "completed" in result.stdout
+        assert "widget" in result.stdout
+        assert "quality" in result.stdout
+        assert "constraint_validity" in result.stdout
+
+    def test_the_inspector_accepts_a_prefix(self, workspace: Path, tmp_path: Path) -> None:
+        invoke("generate", str(workspace), "-d", str(tmp_path / "out"))
+        run_id = json.loads(invoke("runs", "--project", str(workspace), "--json").stdout)[0]["id"]
+        assert invoke("run", run_id[:8], "--project", str(workspace)).exit_code == 0
+
+    def test_an_unknown_run_exits_two(self, workspace: Path, tmp_path: Path) -> None:
+        invoke("generate", str(workspace), "-d", str(tmp_path / "out"))
+        result = invoke("run", "zzzzzzzz", "--project", str(workspace))
+        assert result.exit_code == 2
+        assert "no run matching" in result.stderr
+
+    def test_the_inspector_as_json(self, workspace: Path, tmp_path: Path) -> None:
+        invoke("generate", str(workspace), "-d", str(tmp_path / "out"))
+        run_id = json.loads(invoke("runs", "--project", str(workspace), "--json").stdout)[0]["id"]
+        payload = json.loads(invoke("run", run_id, "--project", str(workspace), "--json").stdout)
+        assert payload["state"] == "completed"
+        assert len(payload["jobs"]) == 1
+        assert payload["summary"]["files"]
+
+    def test_the_schema_revision_is_recorded(self, workspace: Path, tmp_path: Path) -> None:
+        """Section 73: a run records the exact schema it used."""
+        invoke("generate", str(workspace), "-d", str(tmp_path / "out"))
+        run_id = json.loads(invoke("runs", "--project", str(workspace), "--json").stdout)[0]["id"]
+        payload = json.loads(invoke("run", run_id, "--project", str(workspace), "--json").stdout)
+        assert payload["revision_id"] is not None
+
+    def test_resume_with_nothing_to_resume(self, workspace: Path, tmp_path: Path) -> None:
+        invoke("generate", str(workspace), "-d", str(tmp_path / "out"))
+        result = invoke("resume", "--project", str(workspace))
+        assert result.exit_code == 2
+        assert "no resumable run" in result.stderr
+
+    def test_resume_without_a_store(self, tmp_path: Path) -> None:
+        path = tmp_path / "unused.yaml"
+        path.write_text(SIMPLE_YAML, encoding="utf-8")
+        result = invoke("resume", "--project", str(path))
+        assert result.exit_code == 2
+        assert "no run store" in result.stderr
+
+    def test_a_failed_run_exits_three_and_offers_a_resume(self, tmp_path: Path) -> None:
+        path = tmp_path / "boom.yaml"
+        path.write_text(
+            """
+project:
+  name: Boom
+  seed: 1
+entities:
+  e:
+    count: 5
+    fields:
+      words:
+        type: text
+        semantic: Some prose
+        generator: llm
+""",
+            encoding="utf-8",
+        )
+        result = invoke("generate", str(path), "-d", str(tmp_path / "out"))
+        assert result.exit_code == 3
+        assert "resume with" in result.stdout
+
+        rows = json.loads(invoke("runs", "--project", str(path), "--json").stdout)
+        assert rows[0]["state"] == "failed"
+
+    def test_resume_uses_the_schema_the_run_started_with(self, tmp_path: Path) -> None:
+        """Section 73. Resuming under an edited schema would produce a dataset
+        generated two different ways, so the recorded revision wins."""
+        path = tmp_path / "fixable.yaml"
+        broken = """
+project:
+  name: Fixable
+  seed: 1
+entities:
+  e:
+    count: 6
+    fields:
+      id:
+        type: string
+        generator: sequence
+      words:
+        type: text
+        semantic: Some prose
+        generator: llm
+"""
+        path.write_text(broken, encoding="utf-8")
+        assert invoke("generate", str(path), "-d", str(tmp_path / "out")).exit_code == 3
+
+        fixed = broken.replace(
+            "        generator: llm",
+            "        generator: llm\n        on_unavailable: placeholder",
+        )
+        path.write_text(fixed, encoding="utf-8")
+
+        # The resume continues under revision 1, so it fails the same way.
+        result = invoke("resume", "--project", str(path))
+        assert result.exit_code == 3
+        assert "revision" in result.stdout
+
+    def test_a_fresh_run_picks_up_a_fixed_schema(self, tmp_path: Path) -> None:
+        path = tmp_path / "fixable.yaml"
+        broken = """
+project:
+  name: Fixable
+  seed: 1
+entities:
+  e:
+    count: 6
+    fields:
+      id:
+        type: string
+        generator: sequence
+      words:
+        type: text
+        semantic: Some prose
+        generator: llm
+"""
+        path.write_text(broken, encoding="utf-8")
+        assert invoke("generate", str(path), "-d", str(tmp_path / "out")).exit_code == 3
+
+        path.write_text(
+            broken.replace(
+                "        generator: llm",
+                "        generator: llm\n        on_unavailable: placeholder",
+            ),
+            encoding="utf-8",
+        )
+        assert invoke("generate", str(path), "-d", str(tmp_path / "out2")).exit_code == 0
+        rows = (tmp_path / "out2" / "e.jsonl").read_text().strip().splitlines()
+        assert len(rows) == 6
+
+        # And the store now holds two revisions of the schema.
+        payload = json.loads(invoke("runs", "--project", str(path), "--json").stdout)
+        assert len({row["id"] for row in payload}) == 2
+
+    def test_workers_and_checkpoint_options_are_accepted(
+        self, workspace: Path, tmp_path: Path
+    ) -> None:
+        result = invoke(
+            "generate",
+            str(workspace),
+            "-d",
+            str(tmp_path / "out"),
+            "--workers",
+            "2",
+            "--checkpoint-every",
+            "5",
+            "--batch-size",
+            "5",
+        )
+        assert result.exit_code == 0, result.stdout
+
+    def test_json_logging(self, workspace: Path, tmp_path: Path) -> None:
+        """Section 86: structured logs, one JSON object per line."""
+        result = invoke(
+            "generate",
+            str(workspace),
+            "-d",
+            str(tmp_path / "out"),
+            "--log-level",
+            "info",
+            "--log-format",
+            "json",
+        )
+        assert result.exit_code == 0
+        lines = [line for line in result.stderr.splitlines() if line.startswith("{")]
+        assert lines
+        payload = json.loads(lines[0])
+        assert payload["run_id"]
+        assert "timestamp" in payload and "level" in payload
 
 
 class TestShippedTemplatesEndToEnd:

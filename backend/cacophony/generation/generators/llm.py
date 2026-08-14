@@ -166,7 +166,9 @@ class LanguageModelGenerator(OptionsMixin, PlaceholderMixin, Generator):
             return None
         if self.on_unavailable == "placeholder":
             return self._fit(self.placeholder(context))
-        raise GenerationError(f"{context.location}: {reason}")
+        # The engine prefixes the field location when it reports a field
+        # failure, so adding it here produced "e.words: e.words: ...".
+        raise GenerationError(reason)
 
     # -- presentation ------------------------------------------------------- #
 

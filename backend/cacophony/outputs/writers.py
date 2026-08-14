@@ -35,6 +35,7 @@ __all__ = [
     "JsonLinesWriter",
     "JsonWriter",
     "ParquetWriter",
+    "align_to_records",
 ]
 
 
@@ -48,9 +49,15 @@ class FileWriter(OutputWriter):
         columns: Sequence[str] | None = None,
         provenance: ProvenanceMode = ProvenanceMode.NONE,
         include_assets: bool = True,
+        append: bool = False,
+        part: int | None = None,
         **options: Any,
     ) -> None:
-        self.path = Path(path)
+        self.path = _part_path(Path(path), part)
+        #: Continue an existing file rather than truncating it. Only meaningful
+        #: for appendable formats; the others take a new part number instead.
+        self.append = append and type(self).appendable
+        self.part = part
         self.columns = list(columns) if columns else None
         self.provenance = provenance
         self.include_assets = include_assets
@@ -85,11 +92,14 @@ class JsonLinesWriter(FileWriter):
 
     format = "jsonl"
     extension = ".jsonl"
+    appendable = True
 
     async def open(self) -> None:
         await super().open()
         try:
-            self._handle = self.path.open("w", encoding="utf-8", newline="\n")
+            self._handle = self.path.open(
+                "a" if self.append else "w", encoding="utf-8", newline="\n"
+            )
         except OSError as exc:
             raise OutputError(f"could not open {self.path} for writing: {exc}") from exc
 
@@ -158,11 +168,14 @@ class CsvWriter(FileWriter):
 
     format = "csv"
     extension = ".csv"
+    appendable = True
 
     async def open(self) -> None:
         await super().open()
+        # Appending to a file that already has a header must not write another.
+        self._needs_header = not (self.append and self.path.exists() and self.path.stat().st_size)
         try:
-            self._handle = self.path.open("w", encoding="utf-8", newline="")
+            self._handle = self.path.open("a" if self.append else "w", encoding="utf-8", newline="")
         except OSError as exc:
             raise OutputError(f"could not open {self.path} for writing: {exc}") from exc
         self._writer: Any = None
@@ -183,7 +196,8 @@ class CsvWriter(FileWriter):
                 extrasaction="ignore",
                 lineterminator="\n",
             )
-            self._writer.writeheader()
+            if self._needs_header:
+                self._writer.writeheader()
 
         self._writer.writerows(_flatten_for_csv(self._row(record)) for record in records)
         self.records_written += len(records)
@@ -254,6 +268,69 @@ class ParquetWriter(FileWriter):
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+
+
+def align_to_records(path: Path, records: int, fmt: str) -> int:
+    """Trim a line-oriented file to exactly ``records`` records.
+
+    Resuming appends to what is already on disk, so the two must agree
+    precisely. They can disagree in either direction after an unclean stop: the
+    store's checkpoint may lag the file, or a buffer lost to a SIGKILL may
+    leave the file short of the checkpoint.
+
+    Counting the file is the only answer that is right in both cases, so the
+    file wins and the checkpoint is corrected to match. Returns the number of
+    records actually present afterwards.
+    """
+    if not path.exists():
+        return 0
+
+    writer_class = _APPENDABLE.get(fmt.lower())
+    if writer_class is None:
+        # A format with a footer cannot be trimmed; the caller starts a new
+        # part instead and keeps whatever the closed file legitimately holds.
+        return records
+
+    header_lines = 1 if writer_class is CsvWriter else 0
+    kept = 0
+    offset = 0
+    with path.open("rb") as handle:
+        for index, line in enumerate(handle):
+            if index < header_lines:
+                offset += len(line)
+                continue
+            if kept >= records:
+                break
+            # A final line without a newline is a partial write; drop it.
+            if not line.endswith(b"\n"):
+                break
+            offset += len(line)
+            kept += 1
+
+    if offset != path.stat().st_size:
+        with path.open("r+b") as handle:
+            handle.truncate(offset)
+    return kept
+
+
+def _part_path(path: Path, part: int | None) -> Path:
+    """``employee.parquet`` plus part 2 becomes ``employee.part0002.parquet``.
+
+    A run that resumes into a format with a footer cannot continue the file it
+    was writing, so it starts a new part instead. Readers for these formats
+    accept a directory of parts, so the dataset stays whole.
+    """
+    if part is None:
+        return path
+    return path.with_name(f"{path.stem}.part{part:04d}{path.suffix}")
+
+
+#: Formats whose files can be continued in place.
+_APPENDABLE: dict[str, type[FileWriter]] = {
+    "jsonl": JsonLinesWriter,
+    "ndjson": JsonLinesWriter,
+    "csv": CsvWriter,
+}
 
 
 def _flatten_for_csv(row: dict[str, Any]) -> dict[str, Any]:

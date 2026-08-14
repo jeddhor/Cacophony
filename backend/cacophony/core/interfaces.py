@@ -250,6 +250,12 @@ class OutputWriter(ABC):
     #: Conventional file extension, used when deriving default paths.
     extension: ClassVar[str] = ""
 
+    #: Whether an interrupted run can reopen this destination and continue
+    #: writing to it. Line-oriented formats can; a JSON array or a Parquet
+    #: file has a footer, so continuing means starting a new part file
+    #: instead (design document section 32).
+    appendable: ClassVar[bool] = False
+
     @abstractmethod
     async def open(self) -> None:
         raise NotImplementedError

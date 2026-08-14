@@ -427,11 +427,85 @@ cacophony generators [--json]
 cacophony providers  [project.yaml] [--test]
 cacophony models     project.yaml [-p PROVIDER]
 cacophony prompt     project.yaml [-e ENTITY] [--batch-size N] [--schema]
+
+cacophony runs       [-p PROJECT] [--store FILE] [--state STATE] [--json]
+cacophony run        RUN_ID [-p PROJECT] [--events N] [--json]
+cacophony resume     [RUN_ID] [-p PROJECT] [--store FILE]
+cacophony serve      [--host H] [--port P] [--store FILE]
 cacophony version
 ```
 
 `generate` and `preview` also accept `--cache MODE` (`disabled`, `read_only`,
 `read_write`), `--cache-path FILE` and `--llm-batch-size N`.
+
+`generate` additionally accepts `--workers N` (entities generated
+concurrently), `--checkpoint-every N`, `--store FILE`, `--no-history`,
+`--log-level LEVEL` and `--log-format text|json`.
+
+Exit code `4` means a run was cancelled rather than failed.
+
+---
+
+## Runs
+
+Every `generate` records a run in a SQLite store, by default
+`.cacophony/cacophony.db` beside the schema file. The store holds projects,
+schema revisions, runs, jobs, checkpoints, events and statistics — never the
+generated data itself.
+
+```bash
+cacophony generate project.yaml -o parquet -d out/   # ^C at any point
+cacophony runs                                       # what has been run
+cacophony run 4f2a91c3 --events 20                   # the inspector
+cacophony resume 4f2a91c3                            # carry on
+```
+
+A job checkpoints after every batch. On resume the file on disk is counted and
+the checkpoint corrected to match, so an unclean stop cannot leave duplicated
+or skipped records. Formats that cannot be appended to — JSON arrays, Parquet —
+resume into a new part file (`employee.part0001.parquet`); readers for both
+accept a directory of parts.
+
+A resumed run continues under the schema revision it started with, and reuses
+its original configuration. Editing a schema and resuming would produce a
+dataset generated two different ways; start a new run instead.
+
+`--no-history` skips the store entirely.
+
+---
+
+## The API
+
+```bash
+pip install 'cacophony[api]'
+cacophony serve --port 8765
+```
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/projects` | List registered projects |
+| `POST` | `/api/projects` | Register one, by `path` or inline `source` |
+| `GET` | `/api/projects/{id}` | Project with its schema revisions |
+| `GET` | `/api/projects/{id}/plan` | The compiled generation plan |
+| `GET` | `/api/projects/{id}/lint` | Linter findings |
+| `POST` | `/api/projects/{id}/preview` | Sample records, with column sources |
+| `POST` | `/api/projects/{id}/runs` | Start a run |
+| `GET` | `/api/runs` | List runs, filterable by state |
+| `GET` | `/api/runs/{id}` | A run, plus live metrics while it executes |
+| `GET` | `/api/runs/{id}/jobs` | Jobs and their checkpoints |
+| `GET` | `/api/runs/{id}/events` | Structured event log |
+| `POST` | `/api/runs/{id}/pause` | Pause at the next batch boundary |
+| `POST` | `/api/runs/{id}/resume` | Unpause, or restart from checkpoints |
+| `POST` | `/api/runs/{id}/cancel` | Cancel, checkpointing on the way out |
+| `DELETE` | `/api/runs/{id}` | Delete a finished run |
+| `WS` | `/api/runs/{id}/stream` | Live progress |
+| `GET` | `/api/providers` | Adapters, and a project's configured providers |
+| `GET` | `/api/providers/{id}/models` | Models a provider serves |
+| `POST` | `/api/providers/{id}/test` | Health check |
+| `GET` | `/api/generators` | The generator registry |
+| `GET` | `/api/system` | Version and store statistics |
+
+Interactive documentation is at `/docs`.
 
 Exit codes: `0` success, `1` lint errors, `2` bad schema or bad arguments,
 `3` generation failure. Errors go to stderr, so `cacophony preview --json | jq`

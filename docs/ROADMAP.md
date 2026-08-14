@@ -76,20 +76,45 @@ generation is unaffected — same order, same seeds, same output.
 
 ---
 
-## Phase 3 — Runs
+## Phase 3 — Runs ✅
 
-*Design document sections 29–32, 36, 55, 56, 64, 86.*
+**Delivered.** Design document sections 6, 28–32, 36, 42, 51, 55, 56, 64, 73,
+86, 87, 108.
 
-Makes generation durable and observable.
+Generation is now durable. A run is a set of jobs; it checkpoints as it goes,
+records the exact schema revision it used, and can be paused, cancelled and
+resumed from a terminal or over HTTP.
 
-- Job system with states, checkpoints and resume (sections 29, 32)
-- Backpressure and cross-provider scheduling (section 30; per-provider limits
-  landed with Phase 2)
-- Metadata database (section 42)
-- REST API and WebSocket progress feed (section 36)
-- Structured logging and metrics (section 86)
-- Resource controls (section 64)
-- Run inspector (section 56)
+- The **Conductor** (section 108): plans a run into jobs, executes independent
+  entities concurrently within `--workers`, and honours pause/resume/cancel at
+  batch boundaries — never mid-record
+- Job states and types exactly as section 29 lists them, with declared
+  transitions rather than implied ones
+- Checkpointing (section 32) after *every* batch, plus reconciliation against
+  the file on disk before appending, so an interrupted run resumes without
+  duplicating or skipping a record
+- Formats with a footer — JSON arrays, Parquet — resume into a new part file
+  rather than corrupting the one they were writing
+- Metadata store in SQLite (section 42): projects, schema revisions, runs,
+  jobs, events, statistics. Generated datasets are deliberately not in it
+- Schema revisions (section 73): a run records the schema it used, verbatim,
+  and resumes under that one
+- REST API (section 36) and a WebSocket feed of live progress (section 55)
+- Structured logging with section 86's fields, in text or JSON; debug payloads
+  withheld unless asked for (section 87)
+- Resource controls (section 64), including a disk check before the first
+  record rather than after the last
+- Run inspector (section 56) and quality metrics (section 58)
+- CLI: `generate` now records a run, plus `runs`, `run`, `resume`, `serve`
+
+**Deliberately not shredded into tables.** Section 42 lists `entities`,
+`fields`, `relationships`, `generator_configs` and `scenarios` as tables. They
+are stored instead as the schema text they came from, because section 74 wants
+that schema reviewed in Git and two sources of truth would immediately drift.
+Section 73's requirement — that a run record the exact revision it used — is
+what the store actually needs, and a verbatim revision satisfies it exactly.
+
+---
 
 ## Phase 4 — Studio
 
@@ -97,7 +122,7 @@ Makes generation durable and observable.
 
 The React/TypeScript front end: project dashboard, schema studio, field editor,
 distribution preview, relationship graph, generate screen, live run
-visualisation.
+visualisation. The API and the WebSocket feed it needs are already in place.
 
 ## Phase 5 — Relational
 
@@ -186,6 +211,34 @@ from fabricated data.
 a wrong answer to a well-formed question, so it goes back up the retry ladder
 like any other. Records that did arrive are kept; only the remainder falls
 through to the field's failure policy.
+
+**Checkpoint granularity (section 32).** One job per entity, not per chunk.
+Section 32's own example is per entity, and a single integer is a complete
+checkpoint here because seeds are derived from record indices rather than from
+RNG state — there is nothing else to restore.
+
+**Checkpoint frequency.** Progress is written after every batch, not every
+`--checkpoint-every` records; that option controls how often a checkpoint is
+*announced* to the log and the live feed. A checkpoint that lagged the file
+would make a resume duplicate whatever fell in the gap, and one small UPDATE
+per batch is far cheaper than being wrong.
+
+**Job types (section 29).** `llm_batch`, `image` and `audio` are declared but
+are not separate jobs yet; that work happens inside the entity job that needs
+it. Scheduling a record and the biography that belongs to it as independent
+units would add a round trip for no benefit until there are separate machines
+to schedule them onto (section 95).
+
+**Alembic (section 39).** Recommended, and not yet used. Alembic earns its keep
+when there are deployed databases to migrate *from*; every store today was
+written by a pre-release build. There is a version stamp and an explicit
+upgrade ladder, checked on every open, so the day a real migration is needed
+the store says so rather than failing obscurely.
+
+**Runs execute in the API process.** No broker, no worker pool. Section 39 is
+explicit that Redis and Celery should be avoided until distributed execution is
+actually required (section 95), and generation yields to the event loop between
+batches, so the API stays responsive during a run.
 
 **Field `context` (section 49).** The field editor's Context list mixes related
 entities and sibling fields, so each name is resolved against both, and a name

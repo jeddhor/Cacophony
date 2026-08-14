@@ -13,11 +13,12 @@ built and how to run it.
 
 ---
 
-## Status: Phase 2 — Providers
+## Status: Phase 3 — Runs
 
-Phase 1 delivered the deterministic core. Phase 2 makes `generator: llm` real:
-local models write the semantic fields, and everything that comes back is
-parsed, validated, repaired and retried before it is allowed near a dataset.
+Phase 1 delivered the deterministic core; Phase 2 made `generator: llm` real.
+Phase 3 makes generation *durable*: every run is planned as jobs, checkpointed
+as it goes, recorded against the exact schema revision it used, and resumable
+from wherever it stopped. There is a REST API and a live WebSocket feed.
 
 **Working now**
 
@@ -45,8 +46,14 @@ parsed, validated, repaired and retried before it is allowed near a dataset.
 - Content-addressed cache, so a re-run costs nothing it has already paid for
 - Credentials resolved from the environment or the OS keychain, never from the
   project file
-- CLI: `validate`, `lint`, `plan`, `prompt`, `preview`, `generate`,
-  `generators`, `providers --test`, `models`
+- Durable runs: one job per entity, checkpointed after every batch, resumable
+  from an interruption without duplicating or skipping a record
+- Run history in a SQLite store beside the project, recording the exact schema
+  revision each run used
+- REST API and a WebSocket feed of live progress
+- Structured logging with the fields design document section 86 asks for
+- CLI: `validate`, `lint`, `plan`, `prompt`, `preview`, `generate`, `resume`,
+  `runs`, `run`, `serve`, `generators`, `providers --test`, `models`
 
 **Declared but not yet implemented** — the interfaces exist so later phases
 extend the platform rather than rewrite it, as design document section 111
@@ -130,6 +137,39 @@ cacophony models templates/conversational-ai.yaml
 
 Nothing else in the schema changes.
 
+### Runs that survive being interrupted
+
+```bash
+# Start something long. Ctrl-C it, pull the power, fill the disk.
+cacophony generate templates/security-operations.yaml -o parquet -d out/
+
+# See what happened
+cacophony runs
+cacophony run 4f2a91c3            # the inspector: jobs, quality, output
+
+# Carry on from the last checkpoint
+cacophony resume 4f2a91c3
+```
+
+A resumed run continues under the schema revision it *started* with, not
+whatever the file says now — otherwise the dataset would be generated two
+different ways. Fix a schema and you start a new run; the store keeps both
+revisions.
+
+### Serving the API
+
+```bash
+cacophony serve --port 8765        # docs at /docs
+```
+
+```
+POST /api/projects                 GET  /api/projects/{id}/plan
+POST /api/projects/{id}/runs       POST /api/projects/{id}/preview
+GET  /api/runs/{id}                POST /api/runs/{id}/pause
+POST /api/runs/{id}/resume         POST /api/runs/{id}/cancel
+WS   /api/runs/{id}/stream         GET  /api/providers/{id}/models
+```
+
 ## A schema
 
 ```yaml
@@ -205,10 +245,13 @@ backend/cacophony/
 ├── generation/    generator registry, built-in generators, recommendation, engine
 ├── validation/    structural and constraint validators, the record pipeline
 ├── outputs/       CSV, JSON, JSONL and Parquet writers
+├── runs/          the Conductor: jobs, checkpoints, pause/resume/cancel
+├── store/         SQLite metadata: projects, schema revisions, runs, jobs
+├── observability/ structured logging and run metrics
 ├── providers/     language-model adapters, cache, secrets, provider registry
 ├── scenarios/     scenario engine (later phase)
 ├── plugins/       plugin protocol (later phase)
-├── api/           REST API (later phase)
+├── api/           REST API and the live run feed
 └── cli/           command-line interface
 templates/         starter project schemas
 examples/          worked examples
@@ -257,3 +300,9 @@ long and then stops (sections 13 and 66).
 dependencies, tone and examples are all already in the schema, so the prompt
 compiler assembles them (section 12). `cacophony prompt` shows you exactly what
 was assembled.
+
+**A checkpoint is one integer.** Because a record's seed is derived from its
+index, resuming needs to know only how many records a job finished — there is
+no RNG state to serialise. And because a stale checkpoint would silently
+duplicate records, the file on disk is counted and the checkpoint corrected to
+match before anything is appended (section 32).
