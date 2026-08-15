@@ -226,6 +226,215 @@ class TestRuns:
 
 
 # --------------------------------------------------------------------------- #
+# The Schema Studio (sections 48, 49, 52)
+# --------------------------------------------------------------------------- #
+
+
+class TestStudio:
+    @pytest.fixture
+    def editable(self, client, tmp_path: Path) -> tuple[int, Path]:
+        """A copy of a documented template, so edits can be written back."""
+        import shutil
+
+        path = tmp_path / "project.yaml"
+        shutil.copy(TEMPLATES / "corporate-directory.yaml", path)
+        project_id = client.post("/api/projects", json={"path": str(path)}).json()["id"]
+        return project_id, path
+
+    def test_the_schema_view_carries_what_the_studio_needs(self, client, project_id) -> None:
+        body = client.get(f"/api/projects/{project_id}/schema").json()
+        assert body["entity_order"] == ["employee", "device", "location"]
+        assert body["source"].startswith("# Corporate Directory")
+
+        employee = body["entities"]["employee"]
+        assert employee["count"] == 5000
+        assert employee["primary_key"] == "employee_id"
+        # Authored order, not dependency order: the schema as it reads.
+        assert employee["field_order"][0] == "employee_id"
+        assert len(employee["layers"]) >= 1
+
+    def test_fields_report_their_generator_and_dependencies(self, client, project_id) -> None:
+        fields = client.get(f"/api/projects/{project_id}/schema").json()["entities"]["employee"][
+            "fields"
+        ]
+        assert fields["email"]["generator"] == "template"
+        assert fields["email"]["dependencies"] == ["first_name", "last_name"]
+        # Section 68: a field with only a semantic description still gets one.
+        assert fields["first_name"]["generator"] == "faker"
+        assert fields["first_name"]["inferred"] is True
+        assert fields["employee_id"]["inferred"] is False
+
+    def test_categorical_fields_report_a_distribution(self, client, project_id) -> None:
+        """Section 52: the Studio draws these as bars."""
+        fields = client.get(f"/api/projects/{project_id}/schema").json()["entities"]["employee"][
+            "fields"
+        ]
+        distribution = fields["department"]["distribution"]
+        assert distribution is not None
+        assert abs(sum(distribution.values()) - 1.0) < 1e-6
+        assert distribution["Engineering"] > distribution["Legal"]
+
+    def test_a_non_categorical_field_has_no_distribution(self, client, project_id) -> None:
+        fields = client.get(f"/api/projects/{project_id}/schema").json()["entities"]["employee"][
+            "fields"
+        ]
+        assert fields["employee_id"]["distribution"] is None
+
+    def test_editability_is_reported_honestly(self, client, tmp_path) -> None:
+        inline = client.post(
+            "/api/projects",
+            json={
+                "source": "project:\n  name: Inline\nentities:\n  e:\n    fields:\n"
+                "      id:\n        type: string\n"
+            },
+        ).json()["id"]
+        assert client.get(f"/api/projects/{inline}/schema").json()["editable"] is False
+
+    def test_patching_a_field_preserves_the_document(self, client, editable) -> None:
+        project_id, path = editable
+        before = path.read_text(encoding="utf-8")
+
+        response = client.patch(
+            f"/api/projects/{project_id}/schema",
+            json={
+                "operations": [
+                    {
+                        "op": "set_field",
+                        "entity": "employee",
+                        "field": "age",
+                        "key": "semantic",
+                        "value": "Age in whole years",
+                    }
+                ]
+            },
+        )
+        assert response.status_code == 200
+        after = path.read_text(encoding="utf-8")
+        assert "# Corporate Directory" in after
+        assert "Age in whole years" in after
+        assert len(after.splitlines()) >= len(before.splitlines())
+
+    def test_a_patch_creates_a_new_schema_revision(self, client, editable) -> None:
+        """Section 73: every state a run could have used is recorded."""
+        project_id, _path = editable
+        first = client.get(f"/api/projects/{project_id}/schema").json()["revision_id"]
+        response = client.patch(
+            f"/api/projects/{project_id}/schema",
+            json={
+                "operations": [
+                    {"op": "set_entity", "entity": "device", "key": "count", "value": 42}
+                ]
+            },
+        )
+        assert response.json()["revision_id"] != first
+        assert len(client.get(f"/api/projects/{project_id}").json()["revisions"]) == 2
+
+    def test_an_invalid_patch_leaves_the_file_alone(self, client, editable) -> None:
+        project_id, path = editable
+        before = path.read_text(encoding="utf-8")
+        response = client.patch(
+            f"/api/projects/{project_id}/schema",
+            json={
+                "operations": [
+                    {
+                        "op": "set_field",
+                        "entity": "employee",
+                        "field": "age",
+                        "key": "type",
+                        "value": "banana",
+                    }
+                ]
+            },
+        )
+        assert response.status_code == 400
+        assert path.read_text(encoding="utf-8") == before
+
+    def test_the_plan_reflects_an_edit_immediately(self, client, editable) -> None:
+        project_id, _path = editable
+        client.patch(
+            f"/api/projects/{project_id}/schema",
+            json={
+                "operations": [
+                    {"op": "set_entity", "entity": "location", "key": "count", "value": 11}
+                ]
+            },
+        )
+        plan = client.get(f"/api/projects/{project_id}/plan").json()
+        step = next(item for item in plan["steps"] if item["entity"] == "location")
+        assert step["count"] == 11
+
+    def test_writing_a_whole_schema(self, client, editable) -> None:
+        project_id, path = editable
+        source = (
+            "project:\n  name: Replaced\n  seed: 5\n"
+            "entities:\n  thing:\n    count: 3\n    fields:\n"
+            "      id:\n        type: string\n        generator: sequence\n"
+        )
+        response = client.put(f"/api/projects/{project_id}/schema", json={"source": source})
+        assert response.status_code == 200
+        assert path.read_text(encoding="utf-8") == source
+        assert client.get(f"/api/projects/{project_id}/schema").json()["name"] == "Replaced"
+
+    def test_writing_a_schema_that_will_not_compile_is_refused(self, client, editable) -> None:
+        project_id, path = editable
+        before = path.read_text(encoding="utf-8")
+        response = client.put(f"/api/projects/{project_id}/schema", json={"source": "project: {}"})
+        assert response.status_code == 400
+        assert path.read_text(encoding="utf-8") == before
+
+    def test_editing_a_project_with_no_file_is_refused(self, client) -> None:
+        inline = client.post(
+            "/api/projects",
+            json={
+                "source": "project:\n  name: Inline\nentities:\n  e:\n    fields:\n"
+                "      id:\n        type: string\n"
+            },
+        ).json()["id"]
+        response = client.patch(
+            f"/api/projects/{inline}/schema",
+            json={"operations": [{"op": "set_project", "key": "seed", "value": 1}]},
+        )
+        assert response.status_code == 400
+        assert "no file to write to" in response.json()["detail"]
+
+    def test_the_editor_controls_are_described(self, client) -> None:
+        body = client.get("/api/schema/types").json()
+        assert any(entry["value"] == "string" for entry in body["types"])
+        assert any(generator["name"] == "llm" for generator in body["generators"])
+        assert "field" in body["provenance"]
+
+    def test_the_operations_are_documented(self, client) -> None:
+        operations = {entry["op"] for entry in client.get("/api/schema/operations").json()}
+        assert {"set_field", "add_field", "rename_field"} <= operations
+
+
+# --------------------------------------------------------------------------- #
+# Serving the built Studio
+# --------------------------------------------------------------------------- #
+
+
+class TestStaticStudio:
+    def test_the_studio_is_served_when_it_has_been_built(self, service, tmp_path) -> None:
+        static = tmp_path / "static"
+        (static / "assets").mkdir(parents=True)
+        (static / "index.html").write_text("<div id='root'></div>", encoding="utf-8")
+        (static / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
+
+        with TestClient(create_app(service=service, static_dir=static)) as client:
+            assert client.get("/").text == "<div id='root'></div>"
+            assert "console.log" in client.get("/assets/app.js").text
+            # The client router owns its own URLs, so a deep link must not 404.
+            assert client.get("/runs/abc123").text == "<div id='root'></div>"
+            # And the API must not be shadowed by the fallback.
+            assert client.get("/api/system").status_code == 200
+
+    def test_nothing_is_mounted_without_a_build(self, service) -> None:
+        with TestClient(create_app(service=service, static_dir="/nonexistent")) as client:
+            assert client.get("/api/system").status_code == 200
+            assert client.get("/").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
 # Providers and system
 # --------------------------------------------------------------------------- #
 

@@ -505,6 +505,47 @@ cacophony serve --port 8765
 | `GET` | `/api/generators` | The generator registry |
 | `GET` | `/api/system` | Version and store statistics |
 
+### The Schema Studio
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/projects/{id}/schema` | Source text plus the compiled shape |
+| `PATCH` | `/api/projects/{id}/schema` | Targeted edits, preserving the document |
+| `PUT` | `/api/projects/{id}/schema` | Replace the whole document |
+| `GET` | `/api/schema/types` | Types and generators, for the editor controls |
+| `GET` | `/api/schema/operations` | The edit operations and their arguments |
+
+A `PATCH` body is a list of operations applied as one transaction:
+
+```json
+{
+  "operations": [
+    {"op": "set_entity", "entity": "employee", "key": "count", "value": 10000},
+    {"op": "set_field", "entity": "employee", "field": "biography",
+     "key": "semantic", "value": "A short professional biography."}
+  ]
+}
+```
+
+| Operation | Arguments |
+|---|---|
+| `set_project` | `key`, `value` |
+| `set_entity` | `entity`, `key`, `value` |
+| `add_entity` / `remove_entity` | `name` |
+| `set_field` / `unset_field` | `entity`, `field`, `key`, `value` |
+| `add_field` | `entity`, `name`, optional `value`, `index` |
+| `remove_field` | `entity`, `name` |
+| `rename_field` | `entity`, `field`, `name` |
+| `move_field` | `entity`, `name`, `index` |
+
+A `value` of `null` removes the key rather than writing `null`, because that is
+what clearing a control in a form means.
+
+Edits are applied to the YAML document in place, so comments, ordering and
+formatting survive. The result must load and compile or the whole patch is
+refused and the file is untouched. Every accepted patch creates a schema
+revision (section 73).
+
 Interactive documentation is at `/docs`.
 
 Exit codes: `0` success, `1` lint errors, `2` bad schema or bad arguments,

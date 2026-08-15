@@ -13,12 +13,11 @@ built and how to run it.
 
 ---
 
-## Status: Phase 3 — Runs
+## Status: Phase 4 — Studio
 
-Phase 1 delivered the deterministic core; Phase 2 made `generator: llm` real.
-Phase 3 makes generation *durable*: every run is planned as jobs, checkpointed
-as it goes, recorded against the exact schema revision it used, and resumable
-from wherever it stopped. There is a REST API and a live WebSocket feed.
+Phases 1–3 built the engine, the providers and the run system. Phase 4 puts a
+face on them: Cacophony Studio, a React front end for designing schemas,
+previewing what they produce, launching runs and watching them happen.
 
 **Working now**
 
@@ -54,6 +53,11 @@ from wherever it stopped. There is a REST API and a live WebSocket feed.
 - Structured logging with the fields design document section 86 asks for
 - CLI: `validate`, `lint`, `plan`, `prompt`, `preview`, `generate`, `resume`,
   `runs`, `run`, `serve`, `generators`, `providers --test`, `models`
+- **Cacophony Studio**: project dashboard, schema editor with live preview,
+  distribution and relationship views, a generate screen with cost estimates,
+  and a live run view fed by the WebSocket
+- Schema edits are applied as targeted patches, so a documented YAML file keeps
+  its comments, its ordering and its formatting
 
 **Declared but not yet implemented** — the interfaces exist so later phases
 extend the platform rather than rewrite it, as design document section 111
@@ -156,7 +160,22 @@ whatever the file says now — otherwise the dataset would be generated two
 different ways. Fix a schema and you start a new run; the store keeps both
 revisions.
 
-### Serving the API
+### The Studio
+
+```bash
+cd frontend && npm install && npm run build && cd ..
+cacophony serve --port 8765        # Studio at /, API docs at /docs
+```
+
+During front-end development, run the Vite server instead — it proxies the API
+and the WebSocket to the backend, so both halves talk to the same routes:
+
+```bash
+cacophony serve &                  # terminal one
+cd frontend && npm run dev         # terminal two, on :5173
+```
+
+### Serving the API alone
 
 ```bash
 cacophony serve --port 8765        # docs at /docs
@@ -251,8 +270,9 @@ backend/cacophony/
 ├── providers/     language-model adapters, cache, secrets, provider registry
 ├── scenarios/     scenario engine (later phase)
 ├── plugins/       plugin protocol (later phase)
-├── api/           REST API and the live run feed
+├── api/           REST API, the live run feed, and the built Studio
 └── cli/           command-line interface
+frontend/          Cacophony Studio (React, TypeScript, Vite)
 templates/         starter project schemas
 examples/          worked examples
 tests/             unit and integration tests
@@ -268,10 +288,15 @@ run-time planning strategies while the schema-level planner lives in
 ## Development
 
 ```bash
-pytest                  # tests
+pytest                  # backend tests
 ruff check .            # lint
 ruff format .           # format
 mypy                    # type check
+
+cd frontend
+npm test                # Studio tests
+npm run typecheck       # TypeScript
+npm run build           # build into the package
 ```
 
 ## Design notes worth knowing
@@ -300,6 +325,12 @@ long and then stops (sections 13 and 66).
 dependencies, tone and examples are all already in the schema, so the prompt
 compiler assembles them (section 12). `cacophony prompt` shows you exactly what
 was assembled.
+
+**The Studio never rewrites your schema.** A form that saved by
+re-serialising its own model would produce a correct file with every comment
+and every deliberate ordering stripped out. Edits are sent as targeted
+operations and applied to the YAML document in place, so the only thing that
+changes is the thing you changed (sections 48, 74).
 
 **A checkpoint is one integer.** Because a record's seed is derived from its
 index, resuming needs to know only how many records a job finished — there is

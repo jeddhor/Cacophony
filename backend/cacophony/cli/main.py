@@ -727,10 +727,14 @@ def serve(
     project: Annotated[
         Path | None, typer.Option("--project", "-p", help="Project whose store to serve.")
     ] = None,
+    studio: Annotated[
+        Path | None,
+        typer.Option("--studio", help="Directory holding a built Studio to serve."),
+    ] = None,
     reload: Annotated[bool, typer.Option("--reload", help="Reload on source changes.")] = False,
     log_level: LogLevelOpt = "info",
 ) -> None:
-    """Serve the REST API and live run feed (design document sections 36, 55)."""
+    """Serve the API, the live feed and the Studio (sections 36, 45-56)."""
     try:
         import uvicorn
 
@@ -745,18 +749,22 @@ def serve(
     store_path = store or (default_store_path(project) if project else default_store_path())
     configure_logging(log_level)
 
-    _banner("serve", f"http://{host}:{port}")
-    console.print(f"[cacophony.muted]store[/] {store_path}")
-    console.print(f"[cacophony.muted]docs [/] http://{host}:{port}/docs")
-    console.print(f"[cacophony.muted]live [/] ws://{host}:{port}/api/runs/{{run_id}}/stream\n")
+    app = create_app(store_path=store_path, static_dir=studio)
+    has_studio = getattr(app.state, "studio_root", None) is not None
 
-    uvicorn.run(
-        create_app(store_path=store_path),
-        host=host,
-        port=port,
-        log_level=log_level,
-        reload=reload,
-    )
+    _banner("serve", f"http://{host}:{port}")
+    console.print(f"[cacophony.muted]store [/] {store_path}")
+    console.print(f"[cacophony.muted]api   [/] http://{host}:{port}/docs")
+    console.print(f"[cacophony.muted]live  [/] ws://{host}:{port}/api/runs/{{run_id}}/stream")
+    if has_studio:
+        console.print(f"[cacophony.muted]studio[/] http://{host}:{port}/")
+    else:
+        console.print(
+            "[cacophony.muted]studio[/] not built - run 'npm install && npm run build' in frontend/"
+        )
+    console.print()
+
+    uvicorn.run(app, host=host, port=port, log_level=log_level, reload=reload)
 
 
 # --------------------------------------------------------------------------- #

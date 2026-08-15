@@ -45,7 +45,13 @@ from ..core.errors import (
     SchemaError,
 )
 from ..runs.state import RunState
-from .schemas import CreateProjectRequest, CreateRunRequest, PreviewRequest
+from .schemas import (
+    CreateProjectRequest,
+    CreateRunRequest,
+    PatchSchemaRequest,
+    PreviewRequest,
+    WriteSchemaRequest,
+)
 from .service import RunService
 
 __all__ = ["create_app"]
@@ -54,12 +60,36 @@ __all__ = ["create_app"]
 FINAL_EVENT_KINDS = frozenset({"run.completed", "run.failed", "run.cancelled"})
 
 
+def _jsonable(value: Any) -> Any:
+    """Options may hold anything a generator was configured with."""
+    from ..core.record import to_jsonable
+
+    return to_jsonable(value)
+
+
+def _distribution_of(field: Any) -> dict[str, float] | None:
+    """Normalised weights for a categorical field (design document section 52)."""
+    reporter = getattr(field.generator, "distribution", None)
+    if reporter is None:
+        return None
+    try:
+        return {str(key): round(value, 6) for key, value in reporter().items()}
+    except Exception:
+        return None
+
+
 def create_app(
     *,
     store_path: str | Path | None = None,
     service: RunService | None = None,
+    static_dir: str | Path | None = None,
 ) -> FastAPI:
-    """Build the FastAPI application."""
+    """Build the FastAPI application.
+
+    ``static_dir`` mounts a built Studio at the root, so one process serves
+    both the API and the UI. In development the Vite server proxies to this
+    instead, and nothing is mounted.
+    """
     runs = service or RunService(store_path=store_path)
 
     @asynccontextmanager
@@ -187,6 +217,115 @@ def create_app(
             # Section 51: the preview identifies each column's source.
             "sources": {field.name: field.generator_name for field in compiled_entity.fields},
             "records": [record.to_dict(jsonable=True) for record in records],
+        }
+
+    # -- the Schema Studio (section 48) ------------------------------------- #
+
+    @app.get("/api/projects/{project_id}/schema", tags=["studio"])
+    async def get_schema(project_id: int) -> dict[str, Any]:
+        """The compiled schema, as the Studio needs to render it.
+
+        Both the source text and the compiled shape: the source so an editor
+        can show exactly what is on disk, the compiled shape so the Studio can
+        show which generator each field resolved to and why.
+        """
+        compiled, revision_id, name = runs.load_for_run(project_id)
+        source, source_format = runs.schema_source(project_id)
+        return {
+            "project_id": project_id,
+            "name": name,
+            "revision_id": revision_id,
+            "source": source,
+            "source_format": source_format,
+            "editable": runs.schema_is_editable(project_id),
+            "project": compiled.spec.model_dump(mode="json", by_alias=True),
+            "entity_order": list(compiled.entity_order),
+            "entities": {
+                entity.name: {
+                    "name": entity.name,
+                    "count": entity.count,
+                    "description": entity.spec.description,
+                    "primary_key": entity.spec.resolved_primary_key(),
+                    "depends_on": list(entity.depends_on),
+                    "layers": entity.field_layers,
+                    # Authored order is what the schema reads like; the
+                    # dependency order is an implementation detail.
+                    "field_order": entity.spec.field_names(),
+                    "fields": {
+                        field.name: {
+                            "name": field.name,
+                            "type": field.spec.type.value,
+                            "semantic": field.spec.semantic,
+                            "description": field.spec.description,
+                            "generator": field.generator_name,
+                            "generator_describe": field.generator.describe(),
+                            "generator_options": _jsonable(field.generator.options),
+                            "inferred": field.inferred_generator,
+                            "requires_provider": type(field.generator).requires_provider,
+                            "deterministic": field.generator.deterministic,
+                            "dependencies": list(field.dependencies),
+                            "related_entities": list(field.related_entities),
+                            "nullable": field.spec.nullable,
+                            "null_probability": field.spec.effective_null_probability,
+                            "unique": field.spec.unique,
+                            "primary_key": field.spec.primary_key,
+                            "tone": field.spec.tone,
+                            "constraints": field.spec.constraints.model_dump(
+                                mode="json", exclude_none=True
+                            ),
+                            "distribution": _distribution_of(field),
+                        }
+                        for field in entity.fields
+                    },
+                }
+                for entity in compiled.ordered_entities()
+            },
+            "relationships": [
+                relationship.model_dump(mode="json", by_alias=True)
+                for relationship in compiled.spec.relationships
+            ],
+        }
+
+    @app.patch("/api/projects/{project_id}/schema", tags=["studio"])
+    async def patch_schema(project_id: int, body: PatchSchemaRequest) -> dict[str, Any]:
+        """Apply targeted edits, preserving the rest of the document.
+
+        The whole patch is verified before anything is written, so a rejected
+        edit leaves the file exactly as it was.
+        """
+        return runs.patch_schema(project_id, [op.model_dump() for op in body.operations])
+
+    @app.put("/api/projects/{project_id}/schema", tags=["studio"])
+    async def put_schema(project_id: int, body: WriteSchemaRequest) -> dict[str, Any]:
+        """Replace the whole schema, for the source editor."""
+        return runs.write_schema(project_id, body.source)
+
+    @app.get("/api/schema/operations", tags=["studio"])
+    async def schema_operations() -> list[dict[str, Any]]:
+        from ..schema.editor import describe_operations
+
+        return describe_operations()
+
+    @app.get("/api/schema/types", tags=["studio"])
+    async def schema_types() -> dict[str, Any]:
+        """Everything the field editor needs to populate its controls."""
+        from ..core.types import DataType
+        from ..generation.registry import REGISTRY
+
+        return {
+            "types": [
+                {
+                    "value": data_type.value,
+                    "numeric": data_type.is_numeric,
+                    "textual": data_type.is_textual,
+                    "temporal": data_type.is_temporal,
+                    "media": data_type.is_media,
+                }
+                for data_type in DataType
+            ],
+            "generators": REGISTRY.describe(),
+            "provenance": ["none", "run", "record", "field", "full"],
+            "profiles": ["quick_mock", "balanced", "high_realism", "maximum_chaos"],
         }
 
     @app.post("/api/projects/{project_id}/runs", status_code=202, tags=["runs"])
@@ -367,4 +506,41 @@ def create_app(
     async def prune(keep: int = Body(default=50, embed=True)) -> dict[str, int]:
         return {"deleted": runs.repository.prune_runs(keep=keep)}
 
+    _mount_studio(app, static_dir)
     return app
+
+
+def _mount_studio(app: FastAPI, static_dir: str | Path | None) -> None:
+    """Serve a built Studio, if one was pointed at.
+
+    Mounted after every route so it can never shadow the API, and served
+    through a fallback so the client-side router owns its own URLs: a browser
+    reloading /runs/abc123 must get the application, not a 404.
+    """
+    root = Path(static_dir) if static_dir else _bundled_studio()
+    if root is None or not root.is_dir():
+        return
+
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    index = root / "index.html"
+    assets = root / "assets"
+    if assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def studio(full_path: str) -> Any:
+        candidate = (root / full_path).resolve()
+        # Only files genuinely inside the build directory are served.
+        if full_path and root.resolve() in candidate.parents and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(index)
+
+    app.state.studio_root = root
+
+
+def _bundled_studio() -> Path | None:
+    """The Studio built into an installed package, when there is one."""
+    candidate = Path(__file__).resolve().parent / "static"
+    return candidate if candidate.is_dir() else None

@@ -14,8 +14,11 @@ from ..runs.config import ResourceLimits, RunConfig
 __all__ = [
     "CreateProjectRequest",
     "CreateRunRequest",
+    "PatchSchemaRequest",
     "PreviewRequest",
     "ProviderTestResponse",
+    "SchemaOperation",
+    "WriteSchemaRequest",
 ]
 
 
@@ -107,3 +110,27 @@ class ProviderTestResponse(BaseModel):
     message: str
     latency_ms: float | None = None
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+class SchemaOperation(BaseModel):
+    """One targeted edit to a schema document (design document section 48)."""
+
+    op: str
+    entity: str | None = None
+    field: str | None = None
+    key: str | None = None
+    value: Any = None
+    name: str | None = None
+    index: int | None = None
+
+
+class PatchSchemaRequest(BaseModel):
+    """``PATCH /api/projects/{id}/schema`` - applied as a single transaction."""
+
+    operations: list[SchemaOperation] = Field(min_length=1)
+
+
+class WriteSchemaRequest(BaseModel):
+    """``PUT /api/projects/{id}/schema`` - replace the document wholesale."""
+
+    source: str = Field(min_length=1)

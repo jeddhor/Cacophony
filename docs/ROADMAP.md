@@ -116,13 +116,48 @@ what the store actually needs, and a verbatim revision satisfies it exactly.
 
 ---
 
-## Phase 4 — Studio
+## Phase 4 — Studio ✅
 
-*Design document sections 45–56.*
+**Delivered.** Design document sections 40, 45–56, 74.
 
-The React/TypeScript front end: project dashboard, schema studio, field editor,
-distribution preview, relationship graph, generate screen, live run
-visualisation. The API and the WebSocket feed it needs are already in place.
+Cacophony Studio: React, TypeScript, Vite, TanStack Query, Zustand and React
+Flow — section 40's stack, for section 45's "controlled chaos".
+
+- **Visual identity** (section 45): dark graphite, luminous violet, electric
+  cyan, magenta, translucent panels, a converging-waveform motif. Colour is
+  never the only signal — every state carries a word as well as a hue
+- **Navigation** (section 46): Projects, Studio, Generate, Runs, Providers,
+  Assets, Plugins, Settings. The two later-phase destinations are shown
+  disabled rather than hidden, because the shape of the product is part of what
+  the interface communicates
+- **Project dashboard** (section 47): entities, output, relationships, media,
+  the workload estimate and the linter's findings, then the two doors
+- **Schema Studio** (section 48): entities on the left, fields in the centre,
+  generation properties on the right, plus preview, graph and source tabs
+- **Field editor** (section 49): name, type, meaning, generation, context,
+  constraints, tone, null probability, and a button that samples records
+- **Data preview** (section 51): a generation-source row under the header, and
+  full provenance on any cell
+- **Distribution preview** (section 52): weighted choices drawn as bars
+- **Relationship graph** (section 53): React Flow, laid out in the dependency
+  layers the compiler already computed. Cyan edges are derived dependencies —
+  the reason entities generate in the order they do — and violet ones are
+  declared relationships
+- **Generate screen** (section 54): scale, workload, providers, disk estimate,
+  the plan and the warnings, then START CACOPHONY. The estimate rescales live
+  as the record count and entity selection change
+- **Live run view** (section 55): per-entity counters, records per second,
+  tokens per second, ETA, all fed by the WebSocket, with pause, resume and
+  cancel
+- **Run inspector** (section 56) and quality metrics (section 58)
+
+**Schema editing that does not destroy the schema.** Section 48 wants a GUI;
+section 74 wants YAML a team reviews in Git. A form that saved by
+re-serialising its own model would satisfy the first and ruin the second. So
+edits are sent as *targeted operations* and applied to the document with
+ruamel's round-trip parser: changing a count changes one scalar, and the
+comment above it survives. The whole patch is verified before anything is
+written, so a rejected edit leaves the file byte-for-byte as it was.
 
 ## Phase 5 — Relational
 
@@ -239,6 +274,27 @@ the store says so rather than failing obscurely.
 explicit that Redis and Celery should be avoided until distributed execution is
 actually required (section 95), and generation yields to the event loop between
 batches, so the API stays responsive during a run.
+
+**The Studio is served by the backend.** `npm run build` emits into
+`backend/cacophony/api/static/`, and `cacophony serve` mounts it — one process,
+one origin, no CORS. The mount is added after every API route and serves
+`index.html` as a fallback, so the client router owns its own URLs and a
+reloaded `/runs/abc123` still gets the application.
+
+**A form cannot edit everything.** The field editor handles scalar options;
+choices, histogram bins and lists are shown read-only there and edited in the
+source tab, which replaces the document wholesale. Pretending a form could
+round-trip arbitrary YAML would mean either a far larger editor or a lossy one.
+
+**No component library.** The interface is hand-written CSS over custom
+properties. Section 45 asks for a specific visual identity rather than a
+generic admin panel, and adopting a design system would have meant fighting its
+defaults to get there.
+
+**No drag-and-drop field reordering yet.** Section 48 mentions dragging fields.
+The `move_field` operation exists and is tested; wiring a drag interaction to
+it is a small addition that did not earn its place ahead of the editing,
+preview and run views.
 
 **Field `context` (section 49).** The field editor's Context list mixes related
 entities and sibling fields, so each name is resolved against both, and a name

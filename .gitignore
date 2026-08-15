@@ -29,6 +29,10 @@ frontend/dist/
 frontend/.vite/
 *.tsbuildinfo
 
+# The Studio is built into the package so `cacophony serve` can serve it.
+# It is an artifact of `npm run build`, not source.
+backend/cacophony/api/static/
+
 # ---- Cacophony runtime state ----
 # Generated datasets and assets must never be committed.
 out/

@@ -113,6 +113,69 @@ class RunService:
         project = self._parse_source(latest["source_text"])
         return compile_project(project), latest["id"], record["name"]
 
+    # -- schema editing (section 48) ---------------------------------------- #
+
+    def schema_source(self, project_id: int) -> tuple[str, str]:
+        """The schema text exactly as it stands, and its format."""
+        record = self.repository.get_project(project_id)
+        if record is None:
+            raise SchemaError(f"No project with id {project_id}.")
+
+        path = record.get("path")
+        if path and Path(path).exists():
+            fmt = "json" if Path(path).suffix.lower() == ".json" else "yaml"
+            return Path(path).read_text(encoding="utf-8"), fmt
+
+        revisions = record.get("revisions") or []
+        if not revisions:
+            raise SchemaError(f"Project {project_id} has no stored schema.")
+        latest = self.repository.get_revision(revisions[-1]["id"], include_source=True)
+        assert latest is not None
+        return latest["source_text"], latest["source_format"]
+
+    def schema_is_editable(self, project_id: int) -> bool:
+        """Whether edits can be written back.
+
+        A project registered from inline source has nowhere to save to, so the
+        Studio shows it read-only rather than accepting edits it will lose.
+        """
+        record = self.repository.get_project(project_id)
+        path = str((record or {}).get("path") or "")
+        return bool(path) and Path(path).exists()
+
+    def patch_schema(self, project_id: int, operations: list[dict[str, Any]]) -> dict[str, Any]:
+        from ..schema.editor import apply_patch
+
+        source, _fmt = self.schema_source(project_id)
+        result = apply_patch(source, operations)
+        return {
+            **self._save_schema(project_id, result.source),
+            "applied": result.applied,
+            "changed": result.changed,
+        }
+
+    def write_schema(self, project_id: int, source: str) -> dict[str, Any]:
+        """Replace a schema outright, refusing anything that will not compile."""
+        project = self._parse_source(source)
+        compile_project(project)
+        return self._save_schema(project_id, source)
+
+    def _save_schema(self, project_id: int, source: str) -> dict[str, Any]:
+        record = self.repository.get_project(project_id)
+        if record is None:
+            raise SchemaError(f"No project with id {project_id}.")
+        path = str(record.get("path") or "")
+        if not path:
+            raise SchemaError(
+                "This project was registered from inline source and has no file to "
+                "write to. Register it from a path to make it editable."
+            )
+
+        project = self._parse_source(source)
+        Path(path).write_text(source, encoding="utf-8")
+        _, revision_id = self.repository.upsert_project(project, path=path, source_text=source)
+        return {"project_id": project_id, "revision_id": revision_id, "source": source}
+
     # -- runs --------------------------------------------------------------- #
 
     async def start_run(self, project_id: int, config: RunConfig) -> dict[str, Any]:
