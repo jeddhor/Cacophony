@@ -1,18 +1,20 @@
 # Security Operations
 # Design document section 71: the sophisticated starter project.
 #
-# Section 71 names twelve entities and eight scenarios. This template ships the
-# entities that phase one can generate honestly - the ones whose fields are
-# deterministic or independently distributed - and declares the scenarios so
-# they are recorded in the schema and survive into the phase that executes
-# them.
+# Section 71 names twelve entities and eight scenarios. The scenarios are now
+# executed rather than merely declared, which is what makes this dataset worth
+# generating: authentication is a *history* - each identity's sign-ins belong
+# to that identity, arrive in order, and follow the working week - and a small
+# fraction of those identities are having a bad month.
 #
-# The entities section 71 lists that are deliberately absent here (Incident,
-# Analyst, and the correlated Alert-to-Incident chain) are the ones whose value
-# comes entirely from cross-record coherence. Generating them as independent
-# rows would produce data that looks right and means nothing, which is exactly
-# what section 15 warns against. They arrive with the relational and scenario
-# phases.
+#     cacophony generate templates/security-operations.yaml -n 20000 -d out/
+#
+#     jq -r 'select(.scenario != null) | [.scenario, .phase, .result] | @tsv' \
+#         out/authentication.jsonl | sort | uniq -c
+#
+# The compromised accounts are a fraction of a per cent of the population, they
+# are the same accounts on every run, and their sign-ins fail far more often
+# than everyone else's - which is what a detection rule is supposed to notice.
 
 project:
   name: Security Operations
@@ -23,6 +25,23 @@ project:
   seed: 31337
   locale: en_US
   profile: balanced
+
+# When all of this happened (design document section 25). Activity follows the
+# working week and the working day, so a plot of sign-ins per hour looks like an
+# office rather than like a random number generator.
+timeline:
+  start: "2026-01-01"
+  end: "2026-04-01"
+  shape: business_hours
+  holidays: ["2026-01-01", "2026-02-16"]
+  holiday_weight: 0.05
+
+# Real data is ugly (section 24). `realistic` is a light touch - two per cent of
+# records lose a field, a handful get mangled text - and every defect is
+# recorded in provenance so a pipeline test can tell deliberate damage from its
+# own bugs. Raise it to `messy` or `hostile_qa` to find out what breaks.
+chaos:
+  preset: realistic
 
 entities:
 
@@ -156,27 +175,42 @@ entities:
 
   # ------------------------------------------------------------------ #
   authentication:
-    count: 2000000
+    # Enough to see the shape of a quarter's activity in about half a minute.
+    # Raise it: the simulation costs the same per record at any scale.
+    count: 120000
     description: >
-      A sign-in event. Weighted towards office hours on weekdays, which is what
-      makes anomaly detection over this dataset a meaningful exercise.
+      A sign-in event. Every one belongs to a user, arrives in chronological
+      order within that user's own history, and follows the project timeline -
+      which is what makes anomaly detection over this dataset a meaningful
+      exercise rather than a test of the random number generator.
+
+    # Section 25 and 26: these are not independent rows, they are each
+    # identity's history. `skewed` because a few accounts sign in constantly
+    # and most barely at all.
+    simulation:
+      subject: user
+      distribution: skewed
+      skew: 1.9
+      minimum: 3
 
     fields:
       event_id:
         type: uuid
 
+      # The k-th of this user's n sign-ins, placed where the k-th sign-in
+      # would fall. No sorting, and the same answer on a resumed run.
       timestamp:
         type: datetime
-        generator: datetime
-        start: "2026-01-01T00:00:00"
-        end: "2026-02-01T00:00:00"
-        business_hours: true
-        weekdays_only: true
+        generator: event_time
+
+      user:
+        generator: subject
+        expose: true
 
       upn:
         type: email
-        generator: faker
-        provider: company_email
+        generator: template
+        template: "{user.upn}"
 
       source_ip:
         type: ip_address
@@ -240,6 +274,21 @@ entities:
         beta: 12
         min: 0
         max: 100
+
+      # What makes the incident findable. Without these the dataset contains a
+      # compromise nobody can point at, which is fine for a detection exercise
+      # and useless for checking the generator did what it was asked.
+      scenario:
+        type: string
+        nullable: true
+        generator: scenario
+        report: name
+
+      phase:
+        type: string
+        nullable: true
+        generator: scenario
+        report: phase
 
   # ------------------------------------------------------------------ #
   security_finding:
@@ -338,57 +387,135 @@ entities:
           resolved_false_positive: 34
           suppressed: 3
 
-# Declared now so they are recorded in the schema and version-controlled with
-# it. The scenario engine that executes them is design document section 17.
+# Section 17's scenarios, executed rather than declared.
+#
+# A scenario selects *subjects* - identities, not records - deterministically
+# from the project seed, so the same accounts are compromised on every run and
+# every entity that references them agrees about who was involved. `window`
+# places the incident inside each subject's own history; `phases` order what
+# happens within it; `effects` are applied after normal generation, so a
+# scenario composes with every generator rather than having to be understood by
+# each one.
+#
+# A mapping effect is a weighted choice: an incident that flipped every record
+# to the same value would be detectable by accident rather than by analysis.
+#
+# `window` is a fraction of the subject's own history, which - because events
+# are laid out by timeline quantile - is the same calendar moment for every
+# affected identity, however many sign-ins each of them has. So an incident
+# declared at 0.62 lands in the same week for a user with sixty sign-ins and a
+# user with fifteen hundred, which is what makes it an *incident* rather than a
+# per-user coincidence.
 scenarios:
+
+  # Baseline. Every identity, all period, no effects - it exists to say that
+  # the office-hours weighting is a deliberate choice and not an accident.
   normal_workday:
     description: Baseline weekday activity with office-hours weighting.
     applies_to: [authentication]
     enabled: true
 
+  # Section 17's timeline, compressed into one identity's history: access,
+  # then execution, then movement, then encryption.
+  ransomware:
+    description: >
+      The section 17 timeline - sign-in, payload execution, credential access,
+      lateral movement, then encryption - concentrated in a short window.
+    applies_to: [authentication]
+    affects_fraction: 0.004
+    enabled: true
+    parameters:
+      subject: user
+      # Sixty-two per cent of the way through the period, lasting twelve - long
+      # enough for all four phases to appear in a busy account's history.
+      window: {at: 0.62, duration: 0.12}
+      rate_multiplier: 4.0
+      effects:
+        risk_score: 88
+      phases:
+        - name: initial_access
+          effects:
+            application: VPN Gateway
+            result: {success: 70, failure_bad_password: 30}
+            auth_method: password_only
+        - name: credential_access
+          effects:
+            result: {success: 40, failure_bad_password: 55, failure_mfa_denied: 5}
+            risk_score: 94
+        - name: lateral_movement
+          effects:
+            application: {Admin Console: 60, Internal Wiki: 25, GitHub Enterprise: 15}
+            result: success
+            risk_score: 97
+        - name: encryption
+          effects:
+            application: Admin Console
+            result: success
+            risk_score: 99
+
+  # Many accounts, few passwords, one source: the failures are the signal.
   password_spray:
     description: One source address attempting many accounts with few passwords.
-    applies_to: [authentication, security_finding]
-    affects_fraction: 0.002
-    enabled: false
+    applies_to: [authentication]
+    affects_fraction: 0.02
+    enabled: true
+    parameters:
+      subject: user
+      window: {at: 0.30, duration: 0.05}
+      rate_multiplier: 2.0
+      effects:
+        result: {failure_bad_password: 88, success: 6, failure_account_locked: 6}
+        failure_reason: InvalidUserNameOrPassword
+        auth_method: password_only
+        risk_score: 72
 
+  # A successful sign-in that should not have been possible.
   impossible_travel:
     description: Successful sign-ins from geographically incompatible locations.
-    applies_to: [authentication, security_finding]
-    affects_fraction: 0.001
-    enabled: false
+    applies_to: [authentication]
+    affects_fraction: 0.01
+    enabled: true
+    parameters:
+      subject: user
+      window: {at: 0.45, duration: 0.02}
+      effects:
+        result: success
+        auth_method: {password_only: 70, password_plus_mfa: 30}
+        risk_score: 81
 
-  malware_infection:
-    description: Payload execution followed by persistence and defence evasion.
-    applies_to: [device, security_finding]
-    affects_fraction: 0.004
-    enabled: false
-
+  # Credentials harvested, then used: the sign-in itself looks ordinary, which
+  # is the point.
   phishing:
     description: Credential harvesting from a delivered message.
-    applies_to: [user, authentication, security_finding]
-    affects_fraction: 0.02
+    applies_to: [authentication]
+    affects_fraction: 0.03
+    enabled: true
+    parameters:
+      subject: user
+      window: {at: 0.20, duration: 0.06}
+      effects:
+        result: {success: 82, failure_mfa_denied: 18}
+        risk_score: 64
+
+  # Declared, and off. These need entities this template does not yet ship -
+  # process telemetry, network egress volumes - and a scenario that cannot
+  # express itself in the fields available would be a scenario in name only.
+  malware_infection:
+    description: Payload execution followed by persistence and defence evasion.
+    applies_to: [security_finding]
+    affects_fraction: 0.004
     enabled: false
 
   lateral_movement:
     description: Authenticated movement between endpoints after initial access.
-    applies_to: [authentication, device, security_finding]
+    applies_to: [authentication, security_finding]
     affects_fraction: 0.001
     enabled: false
 
   insider_exfiltration:
     description: Sustained abnormal data egress by a legitimate identity.
-    applies_to: [user, security_finding]
+    applies_to: [security_finding]
     affects_fraction: 0.0005
-    enabled: false
-
-  ransomware:
-    description: >
-      The section 17 timeline: sign-in, phishing email opened, payload
-      execution, suspicious PowerShell, credential access, lateral movement,
-      then encryption.
-    applies_to: [user, device, authentication, security_finding]
-    affects_fraction: 0.0002
     enabled: false
 
 outputs:

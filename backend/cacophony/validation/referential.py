@@ -77,7 +77,9 @@ class ReferentialValidator:
     def is_noop(self) -> bool:
         return not self.references
 
-    def validate(self, record: GeneratedRecord) -> ValidationResult:
+    def validate(
+        self, record: GeneratedRecord, *, skip: dict[str, str] | None = None
+    ) -> ValidationResult:
         result = ValidationResult()
         if self.is_noop:
             return result
@@ -87,6 +89,10 @@ class ReferentialValidator:
             return result
 
         for field_name, target, target_field in self.references:
+            # A reference chaos deliberately made stale is not a broken
+            # generator (section 24).
+            if skip and field_name in skip:
+                continue
             value = record.values.get(field_name)
             if value is None:
                 continue

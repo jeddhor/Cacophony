@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ..core.context import GenerationContext
-from ..core.errors import CacophonyError, GenerationError
+from ..core.errors import CacophonyError, GenerationError, SchemaError
 from ..core.provenance import FieldProvenance, ProvenanceMode, RecordProvenance
 from ..core.record import GeneratedRecord
 from ..core.seeds import SeedChain
@@ -102,6 +102,8 @@ class GenerationEngine:
         reference_sample_every: int = 1,
         counts: dict[str, int] | None = None,
         assets: Any | None = None,
+        simulate: bool = True,
+        chaos: bool = True,
     ) -> None:
         if failure_policy not in FailurePolicy.ALL:
             raise ValueError(
@@ -149,6 +151,25 @@ class GenerationEngine:
         #: one at a time costs more than generating them did, so a large run
         #: checks a sample and says how large a sample it was.
         self.reference_sample_every = max(1, reference_sample_every)
+
+        # Synthetic worlds (sections 17, 24, 25, 26). Built once per run and
+        # shared by every record; an entity that declares nothing costs nothing.
+        self.counts = dict(counts or {})
+        self.timeline = _build_timeline(compiled) if simulate else None
+        self.scenarios = _build_scenarios(compiled, self.timeline) if simulate else None
+        self.simulations: dict[str, Any] = {}
+        if simulate:
+            from .simulation import build_simulations, evaluator
+
+            self.simulations = build_simulations(
+                compiled,
+                timeline=self.timeline,
+                scenarios=self.scenarios,
+                evaluate=evaluator(),
+                counts=self.counts,
+            )
+        self._injectors: dict[str, Any] = {}
+        self.inject_chaos = chaos and compiled.spec.chaos.is_enabled()
 
     # -- provider services -------------------------------------------------- #
 
@@ -276,6 +297,19 @@ class GenerationEngine:
             records.append(record)
             record_seeds.append(seeds)
 
+        # What the simulation knows before any field exists: whose event this
+        # is, where it falls, and whether a scenario has it (sections 17, 25).
+        simulation = self.simulations.get(entity.name)
+        if simulation is not None:
+            from .generators.simulated import SIMULATION_KEY
+
+            replay = self._replay_for(simulation, entity) if simulation.has_state else None
+            for record, context, index in zip(records, contexts, indices, strict=True):
+                frame = simulation.frame_for(index)
+                if simulation.has_state:
+                    frame.fold = _folder(simulation, frame, record, replay)
+                context.extras[SIMULATION_KEY] = frame
+
         for layer in entity.layers():
             enrichable = [compiled for compiled in layer if self._is_enrichable(compiled)]
             direct = [compiled for compiled in layer if compiled not in enrichable]
@@ -304,6 +338,9 @@ class GenerationEngine:
 
             if enrichable:
                 await self._enrich_layer(entity, enrichable, records, contexts, stats)
+
+        if simulation is not None and self.scenarios is not None:
+            self._apply_scenarios(entity, records, contexts)
 
         for record, index in zip(records, indices, strict=True):
             record.id = self._record_id(entity, record, index)
@@ -334,6 +371,17 @@ class GenerationEngine:
             resolver=self.resolver,
             assets=self.assets,
         )
+
+        # A partially-derived record still needs to know whose event it is:
+        # replaying an earlier event to rebuild a subject's state (section 26)
+        # goes through here, and that event's own `subject` and `event_time`
+        # fields are part of what has to be regenerated. No fold is attached -
+        # the state machine is the caller, and a fold here would recurse.
+        simulation = self.simulations.get(entity_name)
+        if simulation is not None:
+            from .generators.simulated import SIMULATION_KEY
+
+            context.extras[SIMULATION_KEY] = simulation.frame_for(index)
 
         for compiled_field in entity.fields:
             if compiled_field.name not in wanted:
@@ -389,6 +437,82 @@ class GenerationEngine:
             record = context.related_records.get(target)
             if record is not None:
                 context.related_records[alias] = record
+
+    # -- simulation ---------------------------------------------------------- #
+
+    def _replay_for(self, simulation: Any, entity: CompiledEntity) -> Any:
+        """Regenerate an earlier event of the same subject, for a resumed fold.
+
+        Only called when the state machine is asked for an ordinal it has not
+        reached - a run resumed mid-block, or a preview starting in the middle.
+        The cost is bounded by one subject's block, not by the dataset.
+        """
+        needed = [
+            compiled.name
+            for compiled in entity.fields
+            if compiled.generator.name not in ("state",)
+            and type(compiled.generator).requires_provider is None
+        ]
+
+        def replay(subject: int, ordinal: int) -> dict[str, Any]:
+            index = simulation.allocation.start_of(subject) + ordinal
+            return self.generate_partial(entity.name, index, needed)
+
+        return replay
+
+    def _apply_scenarios(
+        self,
+        entity: CompiledEntity,
+        records: list[GeneratedRecord],
+        contexts: list[GenerationContext],
+    ) -> None:
+        """Overwrite fields for records a scenario has hold of (section 17).
+
+        Applied after generation rather than during it, so a scenario composes
+        with every generator instead of having to be understood by each one,
+        and so the 98% of records it does not touch cost nothing.
+        """
+        from .generators.simulated import SIMULATION_KEY
+
+        assert self.scenarios is not None
+        for record, context in zip(records, contexts, strict=True):
+            frame = context.extras.get(SIMULATION_KEY)
+            if frame is None or not frame.effects:
+                continue
+
+            for name, effect in frame.effects.items():
+                if name not in record.values:
+                    continue
+                record.values[name] = _resolve_effect(effect, record.values, context)
+
+            self.scenarios.record_applied(frame.involvement.scenario)
+            if record.provenance is not None and frame.involvement is not None:
+                record.provenance.extra["scenario"] = frame.involvement.to_dict()
+
+    def _injector_for(self, entity: CompiledEntity) -> Any:
+        """The chaos injector for an entity, built on first use (section 78)."""
+        injector = self._injectors.get(entity.name)
+        if injector is None:
+            from ..simulation.chaos import ChaosInjector
+
+            primary = entity.spec.resolved_primary_key()
+            # A scenario label is Cacophony's own annotation, not generated
+            # data: damaging it would corrupt the record of what the generator
+            # did, which is the one thing a chaotic dataset still has to be
+            # able to tell you.
+            protected = [primary] if primary else []
+            protected += [
+                compiled.name for compiled in entity.fields if compiled.generator.name == "scenario"
+            ]
+            injector = ChaosInjector(
+                self.compiled.spec.chaos,
+                seed=self.compiled.seed,
+                entity=entity.name,
+                fields=entity.spec.field_names(),
+                protected=protected,
+            )
+            self._injectors[entity.name] = injector
+        return injector
 
     def _is_enrichable(self, compiled_field: CompiledField) -> bool:
         """Whether this field should be produced by a grouped model call."""
@@ -509,6 +633,11 @@ class GenerationEngine:
             indices = range(chunk_start, min(chunk_start + batch_size, offset + total))
             records = await self.generate_chunk(entity, list(indices), entity_seeds=entity_seeds)
 
+            # Deliberate damage, before validation so the validator can be told
+            # which defects were asked for (sections 24, 78).
+            if self.inject_chaos:
+                records = self._damage(entity, records, list(indices))
+
             batch: list[GeneratedRecord] = []
             for record in records:
                 if validator is not None:
@@ -524,6 +653,29 @@ class GenerationEngine:
             # Give the event loop a turn so a long CPU-bound run stays
             # cancellable and, later, so writers can drain concurrently.
             await asyncio.sleep(0)
+
+    def _damage(
+        self,
+        entity: CompiledEntity,
+        records: list[GeneratedRecord],
+        indices: list[int],
+    ) -> list[GeneratedRecord]:
+        """Apply entropy injection to a batch (sections 24, 78).
+
+        A duplicate is emitted immediately after its original, which is what a
+        retried insert looks like in a real system.
+        """
+        injector = self._injector_for(entity)
+        if injector.is_noop:
+            return records
+
+        damaged: list[GeneratedRecord] = []
+        for record, index in zip(records, indices, strict=True):
+            duplicate = injector.apply(record, index)
+            damaged.append(record)
+            if duplicate is not None:
+                damaged.append(duplicate)
+        return damaged
 
     async def generate_batch(
         self, entity_name: str, count: int, *, offset: int = 0
@@ -596,3 +748,89 @@ class GenerationEngine:
 
     def entity_order(self) -> Sequence[str]:
         return self.compiled.entity_order
+
+
+# --------------------------------------------------------------------------- #
+# Simulation setup (sections 17, 25)
+# --------------------------------------------------------------------------- #
+
+
+def _build_timeline(compiled: CompiledProject) -> Any:
+    """The project's period, if it declares one."""
+    spec = getattr(compiled.spec, "timeline", None)
+    if spec is None or not spec.is_enabled():
+        return None
+
+    from ..simulation.timeline import SHAPES, ShapeOverrides, Timeline, parse_moment
+
+    start = parse_moment(spec.start, what="the timeline's start")
+    end = parse_moment(spec.end, what="the timeline's end") if spec.end else None
+    if end is None:
+        import datetime as _dt
+
+        end = start + _dt.timedelta(days=365)
+
+    base = SHAPES.get(str(spec.shape).lower())
+    if base is None:
+        raise SchemaError(
+            f"unknown timeline shape '{spec.shape}'. Available: {', '.join(sorted(SHAPES))}"
+        )
+    shape = ShapeOverrides(
+        holidays=list(spec.holidays),
+        holiday_weight=spec.holiday_weight,
+        months=dict(spec.months),
+        spikes=list(spec.spikes),
+        growth=spec.growth,
+    ).apply(base)
+    return Timeline(start, end, shape)
+
+
+def _build_scenarios(compiled: CompiledProject, timeline: Any) -> Any:
+    """The scenario engine, if the project declares any (section 17)."""
+    declared = list(compiled.spec.scenarios.values())
+    if not declared:
+        return None
+
+    from ..simulation.scenarios import ScenarioEngine, compile_scenarios
+
+    return ScenarioEngine(
+        compile_scenarios(declared, entities=list(compiled.entity_order)),
+        seed=compiled.seed,
+        timeline=timeline,
+    )
+
+
+def _resolve_effect(effect: Any, values: dict[str, Any], context: GenerationContext) -> Any:
+    """What a scenario effect evaluates to for one record.
+
+    A constant is used as written. A mapping is a weighted choice, so an
+    incident can say "mostly failures, sometimes a success" rather than
+    flipping every record to the same value and making the scenario trivially
+    detectable. A string beginning with ``=`` is an expression over the record.
+    """
+    if isinstance(effect, dict):
+        rng = context.rng()
+        total = sum(float(weight) for weight in effect.values()) or 1.0
+        draw = rng.random() * total
+        running = 0.0
+        for value, weight in effect.items():
+            running += float(weight)
+            if draw <= running:
+                return value
+        return next(iter(effect))
+    if isinstance(effect, list) and effect:
+        return context.rng().choice(effect)
+    if isinstance(effect, str) and effect.startswith("="):
+        from .simulation import evaluator
+
+        return evaluator()(effect[1:], values)
+    return effect
+
+
+def _folder(simulation: Any, frame: Any, record: GeneratedRecord, replay: Any) -> Any:
+    """Bind one record's fold, for the frame to run when it is first needed."""
+
+    def fold() -> None:
+        simulation.fold_state(frame, record.values, replay=replay)
+
+    return fold

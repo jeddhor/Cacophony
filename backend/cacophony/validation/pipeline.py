@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..simulation.chaos import DUPLICATE_MARK
 from .referential import ReferentialValidator, StatisticalValidator
 from .results import Severity, ValidationResult, ValidationStats
 from .validators import ConstraintValidator, StructuralValidator
@@ -75,10 +76,21 @@ class RecordValidator:
         self._seen: dict[str, set[Any]] = {name: set() for name in self._unique_fields}
 
     def validate(self, record: GeneratedRecord, *, repair: bool = True) -> ValidationResult:
-        """Validate one record, optionally applying repairs in place."""
+        """Validate one record, optionally applying repairs in place.
+
+        Fields that entropy injection damaged on purpose (section 24) are
+        skipped. Validation exists to catch a *generator* producing an invalid
+        value; chaos produces invalid values because it was asked to, and
+        reporting those would drown the real findings - and, with
+        ``--drop-invalid``, would silently discard exactly the records the user
+        wanted. The rest of a damaged record is still checked.
+        """
         result = ValidationResult()
+        damaged = record.damage
 
         for name, validator in self._structural:
+            if name in damaged:
+                continue
             field_result = validator.validate_sync(record.values.get(name))
             if field_result.was_repaired and repair:
                 record.values[name] = field_result.repaired_value
@@ -87,15 +99,22 @@ class RecordValidator:
                 result.was_repaired = True
 
         for name, constraint_validator in self._constraint:
+            if name in damaged:
+                continue
             result.issues.extend(constraint_validator.validate_sync(record.values.get(name)).issues)
 
         if self.referential is not None and not self.referential.is_noop:
-            result.issues.extend(self.referential.validate(record).issues)
+            result.issues.extend(self.referential.validate(record, skip=damaged).issues)
 
         if not self.statistical.is_noop:
             self.statistical.observe(record)
 
+        # A record chaos duplicated on purpose carries a duplicate key by
+        # construction; reporting it would be reporting the feature.
+        deliberate_duplicate = DUPLICATE_MARK in damaged
         for name in self._unique_fields:
+            if name in damaged or deliberate_duplicate:
+                continue
             value = record.values.get(name)
             if value is None:
                 continue

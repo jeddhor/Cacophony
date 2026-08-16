@@ -350,6 +350,52 @@ def _human_size(count: int) -> str:
     return f"{size:,.1f} GB"
 
 
+def _report_world(summary: dict[str, Any]) -> None:
+    """What the simulation and the chaos controls did (sections 17, 24, 25)."""
+    scenarios = summary.get("scenarios")
+    if scenarios and scenarios.get("records_affected"):
+        counts = scenarios.get("by_scenario") or {}
+        listed = ", ".join(
+            f"{name} {count:,}" for name, count in sorted(counts.items(), key=lambda p: -p[1])
+        )
+        console.print(f"  scenarios       {scenarios['records_affected']:,} records affected")
+        if listed:
+            console.print(f"  [cacophony.muted]                {listed}[/]")
+
+    simulation = summary.get("simulation") or {}
+    for name, detail in simulation.items():
+        allocation = detail.get("allocation") or {}
+        line = (
+            f"  simulation      {name}: {allocation.get('events', 0):,} events over "
+            f"{allocation.get('subjects', 0):,} {detail.get('subject', 'subjects')}"
+        )
+        console.print(line)
+        state = detail.get("state")
+        if state and state.get("events_folded"):
+            console.print(
+                f"  [cacophony.muted]                state {', '.join(state['variables'])}; "
+                f"{state['events_folded']:,} folded, {state['replayed']:,} replayed[/]"
+            )
+
+    chaos = summary.get("chaos") or {}
+    damaged = sum(entry.get("records_damaged", 0) for entry in chaos.values())
+    duplicates = sum(entry.get("duplicates_emitted", 0) for entry in chaos.values())
+    if damaged or duplicates:
+        kinds: dict[str, int] = {}
+        for entry in chaos.values():
+            for kind, count in (entry.get("by_kind") or {}).items():
+                kinds[kind] = kinds.get(kind, 0) + count
+        console.print(
+            f"  [cacophony.warn]chaos           {damaged:,} records damaged, "
+            f"{duplicates:,} duplicated[/]"
+        )
+        console.print(
+            "  [cacophony.muted]                "
+            + ", ".join(f"{kind} {count:,}" for kind, count in sorted(kinds.items()))
+            + "[/]"
+        )
+
+
 def report_outcome(outcome: RunOutcome, *, on_provider_activity: Any = None) -> None:
     """Print what happened, and exit non-zero if it was not what was asked."""
     console.rule(style="cacophony.rule")
@@ -379,6 +425,7 @@ def report_outcome(outcome: RunOutcome, *, on_provider_activity: Any = None) -> 
 
     _report_relations(summary)
     _report_assets(summary)
+    _report_world(summary)
 
     if on_provider_activity is not None:
         on_provider_activity()

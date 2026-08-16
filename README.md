@@ -13,11 +13,12 @@ built and how to run it.
 
 ---
 
-## Status: Phase 6 — Multimodal
+## Status: Phase 7 — Worlds
 
-Phases 1–5 built the engine, the providers, the run system, the Studio and the
-relational layer. Phase 6 makes one record produce several artifacts: portraits,
-recordings and documents, each derived from the record it belongs to.
+Phases 1–6 built the engine, the providers, the run system, the Studio, the
+relational layer and multimodal generation. Phase 7 makes a dataset something
+that *happened*: events in time, balances that carry forward, incidents that
+span records, and deliberate mess.
 
 **Working now**
 
@@ -28,10 +29,11 @@ recordings and documents, each derived from the record it belongs to.
 - Schema linter with the checks from design document section 102
 - Generator recommendation engine — a field with only a semantic description
   still gets a sensible generator instead of an expensive language-model call
-- 26 registered generators: constant, sequence, uuid, random, boolean,
+- 30 registered generators: constant, sequence, uuid, random, boolean,
   distribution, weighted, lookup, pattern, template, expression, datetime, ip,
   mac, phone, government_id, faker, composite, transform, null, reference, llm,
-  image, tts and document, plus the pending script declaration
+  image, tts, document, event_time, subject, state and scenario, plus the
+  pending script declaration
 - Hierarchical deterministic seeds — record *n* is identical whether generated
   first, last, in parallel, or after a resume
 - Structural and constraint validation with repair
@@ -49,6 +51,17 @@ recordings and documents, each derived from the record it belongs to.
   `/v1/audio/speech` server, plus procedural providers that need no GPU
 - An asset store that derives every path, stores identical bytes once, and
   records what each file belongs to and how it was made
+- Temporal simulation — a period and a shape, so activity follows the working
+  week, the working day, the season and the holidays
+- Stateful simulation — running balances and counters, folded per subject and
+  replayed rather than persisted, so a resumed run agrees with an uninterrupted
+  one
+- A scenario engine — a fraction of subjects caught up in an incident, in
+  ordered phases, correlated across every entity that references them
+- Entropy injection — five presets of deliberate damage, recorded in provenance
+  and exempt from validation
+- Named worlds — `--world acme` generates the same five thousand people into
+  every dataset you make from it
 - Language-model generation against Ollama, llama.cpp and any
   OpenAI-compatible server, addressed by URI
 - The Prompt Compiler — you write what a field *means*, it writes the
@@ -223,6 +236,73 @@ The same twelve employees then have diffusion portraits and the same twenty
 calls have spoken recordings. Both adapters are tested against real servers —
 InvokeAI 6.13.8 and piper1-gpl — by the live contract tests in
 `tests/test_provider_contracts.py`.
+
+### A dataset something happened in
+
+`templates/security-operations.yaml` is four entities and eight scenarios.
+Every sign-in belongs to an identity, arrives in order within that identity's
+own history, and follows the working week — and a fraction of a per cent of
+those identities are having a bad month:
+
+```bash
+cacophony generate templates/security-operations.yaml -d out/
+
+# one compromised identity's month
+jq -r 'select(.scenario=="ransomware" and .user=="USR-001482")
+       | [.timestamp[:16], .phase, .application, .result] | @tsv' \
+    out/authentication.jsonl | sort
+```
+
+```
+2026-02-27T11:13  initial_access     VPN Gateway      success
+2026-03-02T05:16  credential_access  VPN Gateway      failure_bad_password
+2026-03-03T13:32  credential_access  Microsoft 365    success
+2026-03-04T12:24  lateral_movement   Internal Wiki    success
+2026-03-05T14:11  lateral_movement   Internal Wiki    success
+2026-03-06T10:58  encryption         Admin Console    success
+```
+
+That is section 17's timeline, for one identity, over eight days. The same
+identities are compromised on every run — subject selection is a hash of the
+seed and the scenario's name, not a sample — and every entity that references
+them agrees about who was involved.
+
+The run says what it built:
+
+```
+complete  136,414 records in 45.56s
+  referential     100.00%  (119,854 references checked)
+  scenarios       337 records affected
+                  phishing 185, password_spray 107, ransomware 27, impossible_travel 18
+  simulation      authentication: 120,000 events over 4,800 user
+  chaos           3,461 records damaged, 150 duplicated
+```
+
+**Events are ordered without being sorted.** The timeline compiles its shape
+into a cumulative distribution, and the *k*-th of a subject's *n* events is
+drawn at quantile *k/n* — so a subject's timestamps come out chronological with
+no sort, no memory, and the same answer whichever record is generated first.
+
+**Balances survive a resume.** A running total is a fold over one subject's
+events, and subjects get contiguous blocks, so restarting at event 4,823,913
+replays that account's block — a few dozen records — rather than the dataset.
+
+**Damage is deliberate and labelled.** `chaos: {preset: realistic}` nulls
+fields, mangles text, injects zero-width spaces and duplicates records. Each
+defect is recorded in `_chaos`, and the validator skips what was damaged on
+purpose — otherwise a chaotic run is just a wall of validation failures.
+
+### The same people, twice
+
+```bash
+cacophony worlds project.yaml --create acme
+cacophony generate project.yaml --world acme -e authentication -d logs/
+cacophony generate project.yaml --world acme -e ticket -d tickets/
+```
+
+Employee `USR-000001` is the same person in both, because a schema plus a seed
+already *is* a world — a world just gives it a name, warns when the schema has
+moved on, and refuses `--seed` alongside it.
 
 ### Describing a schema instead of writing one
 

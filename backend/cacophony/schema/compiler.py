@@ -115,17 +115,60 @@ def compile_project(project: ProjectSpec) -> CompiledProject:
 # --------------------------------------------------------------------------- #
 
 
+#: Generators that produce a foreign key. Both must adopt the type of the key
+#: they point at: an integer key referenced by a string column joins to
+#: nothing, whether the reference was chosen (``reference``) or laid out by the
+#: simulation (``subject``).
+_REFERENCE_GENERATORS = frozenset({"reference", "subject"})
+
+
 def _is_reference(generator: Any) -> bool:
-    """Whether a generator spec names the reference generator.
+    """Whether a generator spec produces a foreign key.
 
     Resolved through the registry rather than compared against a literal, so
-    ``fk:`` and ``belongs_to:`` are recognised as readily as ``reference:``.
+    ``fk:``, ``belongs_to:`` and ``actor:`` are recognised as readily as
+    ``reference:`` and ``subject:``.
     """
     if generator is None:
         return False
     from ..generation.registry import REGISTRY
 
-    return REGISTRY.resolve(str(generator.type)) == "reference"
+    return REGISTRY.resolve(str(generator.type)) in _REFERENCE_GENERATORS
+
+
+def _check_simulation(project: ProjectSpec, entity: EntitySpec) -> None:
+    """Validate an entity's ``simulation:`` block (sections 25, 26, 100).
+
+    Checked here rather than when the engine builds the simulation, because
+    section 100 puts schema validation before generation: a subject entity that
+    does not exist should fail ``cacophony validate``, not appear four million
+    records into a run.
+    """
+    simulation = getattr(entity, "simulation", None)
+    if simulation is None or not simulation.is_enabled():
+        return
+
+    if simulation.subject not in project.entities:
+        known = ", ".join(project.entities)
+        raise SchemaError(
+            f"entity '{entity.name}' simulates events of '{simulation.subject}', which is "
+            f"not an entity. Known entities: {known}"
+        )
+    if simulation.subject == entity.name:
+        raise SchemaError(
+            f"entity '{entity.name}' simulates its own events; a subject must be a different entity"
+        )
+    if project.entities[simulation.subject].count <= 0:
+        raise SchemaError(
+            f"entity '{entity.name}' simulates events of '{simulation.subject}', which "
+            "generates no records"
+        )
+
+    for name in simulation.state:
+        if not str(name).isidentifier():
+            raise SchemaError(
+                f"entity '{entity.name}': '{name}' is not a usable state variable name"
+            )
 
 
 def _adopt_reference_types(project: ProjectSpec, entity: EntitySpec) -> None:
@@ -145,7 +188,14 @@ def _adopt_reference_types(project: ProjectSpec, entity: EntitySpec) -> None:
             continue
 
         options = field_spec.generator.options if field_spec.generator else {}
-        target_name = options.get("entity") or options.get("references") or options.get("to")
+        # A `subject` field names no entity: the entity's simulation block says
+        # whose events these are.
+        target_name = (
+            options.get("entity")
+            or options.get("references")
+            or options.get("to")
+            or (entity.simulation.subject if entity.simulation.is_enabled() else None)
+        )
         target = project.entities.get(str(target_name)) if target_name else None
         if target is None:
             # An unknown target is the reference generator's error to report,
@@ -168,6 +218,7 @@ def _compile_entity(
     if not entity.fields:
         raise SchemaError(f"Entity '{entity.name}' defines no fields.")
 
+    _check_simulation(project, entity)
     _adopt_reference_types(project, entity)
 
     field_graph = DependencyGraph(kind="field")

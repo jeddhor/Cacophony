@@ -20,16 +20,27 @@ TEMPLATES = REPO_ROOT / "templates"
 EXAMPLES = REPO_ROOT / "examples"
 
 
+#: Blocks that sit beside ``project:`` rather than inside it.
+_TOP_LEVEL = ("providers", "scenarios", "timeline", "chaos", "outputs", "relationships")
+
+
 def make_project(
     entities: dict[str, Any],
     *,
     providers: dict[str, Any] | None = None,
-    **project_keys: Any,
+    **keys: Any,
 ) -> ProjectSpec:
-    """Build a project from a plain mapping, the way a YAML file would."""
+    """Build a project from a plain mapping, the way a YAML file would.
+
+    Keys naming a top-level block go beside ``project:``; anything else goes
+    inside it, so ``seed=1`` and ``timeline={...}`` both land where a YAML
+    author would have put them.
+    """
+    top = {name: keys.pop(name) for name in list(keys) if name in _TOP_LEVEL}
     payload: dict[str, Any] = {
-        "project": {"name": "Test Project", "seed": 1234, **project_keys},
+        "project": {"name": "Test Project", "seed": 1234, **keys},
         "entities": entities,
+        **top,
     }
     if providers:
         payload["providers"] = providers

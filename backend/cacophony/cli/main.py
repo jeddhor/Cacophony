@@ -449,6 +449,10 @@ def generate(
     ] = False,
     cache: CacheOpt = "disabled",
     cache_path: CachePathOpt = None,
+    world: Annotated[
+        str | None,
+        typer.Option("--world", "-w", help="Generate against a named world (section 16)."),
+    ] = None,
     assets_dir: Annotated[
         Path | None,
         typer.Option("--assets-dir", help="Where generated media goes. Default: <out-dir>/assets."),
@@ -508,9 +512,27 @@ def generate(
         overwrite_assets=regenerate_assets,
     )
 
+    if world and seed is not None:
+        # Two contradictory instructions. Resolving this quietly would break a
+        # world's only promise - that it contains the same people - and the
+        # user would find out in a join that returns nothing.
+        error_console.print(
+            f"[cacophony.error]error[/] --world {world} fixes the seed, and --seed {seed} "
+            "contradicts it. Drop one: the point of a world is that its people do not change."
+        )
+        raise typer.Exit(code=2)
+
+    chosen_world = _apply_world(project, compiled, world) if world else None
+    if chosen_world is not None:
+        # The world's seed has to survive the run config, which is applied by
+        # the Conductor after this point.
+        config.seed = chosen_world.seed
+
     repository, project_id, revision_id = register_project(project, compiled, store, config)
 
     _banner("generate", compiled.name)
+    if chosen_world is not None:
+        console.print(f"[cacophony.muted]world[/] {chosen_world.name}")
     console.print(f"[cacophony.muted]seed[/] {compiled.seed}   [cacophony.muted]format[/] {output}")
     console.print(f"[cacophony.muted]output[/] {out_dir.resolve()}\n")
 
@@ -1189,6 +1211,117 @@ def propose(
     console.print()
     console.print(f"[cacophony.ok]written[/] {out}")
     console.print(f"[cacophony.muted]next[/] cacophony preview {out}")
+
+
+# --------------------------------------------------------------------------- #
+# worlds
+# --------------------------------------------------------------------------- #
+
+
+def _apply_world(project: Path, compiled: CompiledProject, name: str) -> Any:
+    """Generate against a named world, warning if the schema has moved on.
+
+    A conflict is reported rather than refused: the user may genuinely have
+    changed the schema. What must never happen silently is a run producing
+    *different* people under a world's name (section 16).
+    """
+    from ..simulation.world import WorldStore
+
+    store = WorldStore(Path(project).parent / ".cacophony")
+    world = store.get(name)
+    if world is None:
+        known = ", ".join(store.names()) or "<none>"
+        error_console.print(
+            f"[cacophony.error]error[/] no world named '{name}'. Known: {known}. "
+            f"Create one with: cacophony worlds {project} --create {name}"
+        )
+        raise typer.Exit(code=2)
+
+    for problem in world.conflicts_with(compiled):
+        error_console.print(f"[cacophony.warn]warning[/] {problem}")
+    world.apply_to(compiled)
+    return world
+
+
+@app.command(name="worlds")
+def list_worlds(
+    project: ProjectArg,
+    create: Annotated[
+        str | None, typer.Option("--create", "-c", help="Record this project as a named world.")
+    ] = None,
+    delete: Annotated[str | None, typer.Option("--delete", help="Forget a world.")] = None,
+    describe: Annotated[
+        str | None, typer.Option("--show", help="Show one world and check it still matches.")
+    ] = None,
+) -> None:
+    """Named, reproducible populations (design document section 16).
+
+    A world is a name for a seed and the schema that goes with it. Generating
+    against one produces the same people every time, so a dataset of logins made
+    today and a dataset of tickets made next week describe the same company.
+    """
+    from ..simulation.world import World, WorldStore
+
+    compiled = _load(project)
+    store = WorldStore(Path(project).parent / ".cacophony")
+    _banner("worlds", compiled.name)
+
+    if delete:
+        console.print(
+            f"[cacophony.ok]forgotten[/] {delete}"
+            if store.delete(delete)
+            else f"[cacophony.muted]no world named {delete}[/]"
+        )
+        return
+
+    if create:
+        world = store.save(World.of(create, compiled))
+        console.print(f"[cacophony.ok]created[/] {world.name}")
+        console.print(f"  seed          {world.seed}")
+        console.print(f"  schema        {world.schema_hash[:16]}")
+        for name, size in world.populations.items():
+            console.print(f"  {name:<13} {size:,}")
+        console.print(
+            f"\n[cacophony.muted]generate against it:[/] "
+            f"cacophony generate {project} --world {create}"
+        )
+        return
+
+    worlds = list(store)
+    if describe:
+        found = store.get(describe)
+        if found is None:
+            error_console.print(f"[cacophony.error]error[/] no world named '{describe}'")
+            raise typer.Exit(code=2)
+        console.print(f"[cacophony.highlight]{found.name}[/]  seed {found.seed}")
+        if found.description:
+            console.print(f"  {found.description}")
+        console.print(f"  created       {found.created_at}")
+        for name, size in found.populations.items():
+            console.print(f"  {name:<13} {size:,}")
+        if found.runs:
+            console.print(f"  drawn from by {len(found.runs)} run(s)")
+
+        problems = found.conflicts_with(compiled)
+        console.print()
+        if problems:
+            for problem in problems:
+                console.print(f"  [cacophony.warn]changed[/] {problem}")
+        else:
+            console.print("  [cacophony.ok]this project still produces this world's people[/]")
+        return
+
+    if not worlds:
+        console.print("[cacophony.muted]no worlds recorded[/]")
+        console.print(f"[cacophony.muted]create one:[/] cacophony worlds {project} --create acme")
+        return
+
+    for world in worlds:
+        total = sum(world.populations.values())
+        console.print(
+            f"[cacophony.highlight]{world.name:<18}[/] seed {world.seed:<12} "
+            f"{total:,} records  {len(world.runs)} run(s)"
+        )
 
 
 @app.command()

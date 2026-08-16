@@ -286,13 +286,63 @@ providers produce deterministic, obviously-synthetic media and label every
 result `synthetic: true`. Point the same schema at InvokeAI or Piper by
 changing one adapter line.
 
-## Phase 7 — Worlds
+## Phase 7 — Worlds ✅
 
-*Design document section 93.*
+**Delivered.** Design document sections 16, 17, 24, 25, 26, 71, 78, 93.
 
-Persistent world state, the scenario engine, temporal simulation, stateful
-simulation, correlated event streams, entity histories, organisation
-generators.
+Records stop being independent rows and become a *history*: each identity's
+events belong to it, arrive in order, follow the working week, carry a running
+balance, and a fraction of those identities are having a bad month.
+
+- **Temporal simulation** (section 25): a project declares a period and a
+  shape — weekday and hour curves, seasonality, holidays, promotional spikes,
+  growth — compiled into a cumulative distribution. `business_hours`, `retail`,
+  `evening` and `flat` ship as named shapes
+- **Event allocation**: events are laid out in contiguous blocks per subject
+  rather than each choosing a parent at random, so "the fortieth login of this
+  employee" is a question a record can answer in O(log P)
+- **Stateful simulation** (section 26): balances, counters and statuses folded
+  over a subject's own events, with `min`, `max` and `precision`
+- **The scenario engine** (section 17): a scenario selects *subjects*
+  deterministically, occupies a window, runs in ordered phases, and applies
+  effects — constants, weighted choices or expressions — after normal
+  generation
+- **Entropy injection** (sections 24, 78): the `chaos:` block, which has parsed
+  and done nothing since Phase 1, now damages records. Five presets from
+  `pristine` to `absolute`; seven defect kinds; every defect recorded
+- **Persistent worlds** (section 16): `cacophony worlds project.yaml --create
+  acme`, then `--world acme` on any later run
+- **`templates/security-operations.yaml`** rewritten: section 71's scenarios
+  execute rather than merely being declared
+
+**The architectural tension, and how it was resolved.** Everything before this
+phase rests on record *n* being a pure function of *n* — which is what makes
+runs parallel, resumable and order-free. A running balance is the opposite: it
+depends on what came before.
+
+The resolution is that **state is a fold over a partition, not over the
+dataset**. A balance belongs to an account; the allocation lays each subject's
+events out contiguously, so event *k*'s state depends only on events *0..k of
+that subject*. Parallelism is preserved across subjects, which is where it
+actually lives — there are thousands of accounts and only one dataset.
+
+Resume needs no serialised state. To restart at event 4,823,913 the machine
+replays that subject's block, which is bounded by how many events one account
+has, and continues. Verified: resuming mid-block replays 2–61 earlier events,
+not 1,777, and produces balances identical to an uninterrupted run.
+
+**Timestamps are ordered without being sorted.** The timeline compiles its
+shape into a cumulative distribution and produces moments by inverse transform
+at a quantile. Drawing at quantile *k/n* for the *k*-th of a subject's *n*
+events therefore yields a run of timestamps already in chronological order — no
+sort, no memory, and the same answer whichever record is generated first.
+
+A second property falls out of that, and the scenario engine depends on it: a
+fraction of a subject's *history* is the same calendar moment as that fraction
+of the *timeline*. So an incident declared at `window: {at: 0.62}` lands in the
+same week for an identity with sixty sign-ins and one with fifteen hundred,
+which is what makes it a correlated incident rather than a per-user
+coincidence.
 
 ## Phase 8 — Live and distributed
 
@@ -475,3 +525,28 @@ reviewed in Git like code. A template language with expressions in it would
 make opening a shared project equivalent to running a stranger's code, which
 is the same reason `script:` remains unimplemented. `{field}` and
 `{related.field}` substitution covers invoices, badges and transcripts.
+
+**Chaos and validation had to be told about each other (section 24).** The
+first chaotic run reported 21,250 validation failures out of 80,066 records —
+validation catching, faithfully, exactly the damage that had been asked for.
+With `--drop-invalid` it would have discarded precisely the records the user
+wanted. So an injector marks the fields it damaged, the validator skips those
+and checks the rest, and a record that *is* a deliberate duplicate is exempt
+from the uniqueness check it would otherwise fail by construction. Damage lives
+in `GeneratedRecord.damage` rather than in `values`, so it never appears as a
+column.
+
+One thing is protected from chaos besides the primary key: a `scenario` field.
+Those are Cacophony's own annotation of what it did, and a dataset that has
+been deliberately corrupted still has to be able to tell you which records were
+corrupted and why.
+
+**A world is deliberately thin (section 16).** Because a record is derived by
+hashing its position, a schema plus a seed already *is* a world — run it twice
+and the same five thousand people come out. So a world stores a name, the seed,
+a content hash of the fields, and the population sizes; nothing that could be
+recomputed is kept, which is what section 42 asks. What it buys is a name, a
+warning when the schema has moved on, and a record of which runs drew from it.
+`--world` and `--seed` together are refused rather than resolved, because the
+one thing that must never happen quietly is a run producing *different* people
+under a world's name.

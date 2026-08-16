@@ -51,6 +51,8 @@ __all__ = [
     "ProviderSpec",
     "RelationshipSpec",
     "ScenarioSpec",
+    "SimulationSpec",
+    "TimelineSpec",
 ]
 
 #: Keys that belong to the field itself; every other key becomes a generator option.
@@ -287,6 +289,65 @@ class RelationshipSpec(_Base):
     description: str | None = None
 
 
+class SimulationSpec(_Base):
+    """How an entity's records behave as a *history* (sections 25, 26).
+
+    An entity that declares this stops being a bag of independent rows and
+    becomes a stream of events belonging to somebody: each subject gets a
+    contiguous block of events, ordered in time, optionally carrying state
+    forward.
+
+    ```yaml
+    transaction:
+      count: 500000
+      simulation:
+        subject: account          # whose events these are
+        distribution: skewed      # how many each gets
+        state:
+          balance:
+            initial: "500 + subject * 7 % 4000"
+            update: "balance + amount"
+            min: 0
+            precision: 2
+    ```
+    """
+
+    #: The entity whose members own these events.
+    subject: str = ""
+    #: How events are shared out: uniform, skewed or zipf.
+    distribution: Literal["uniform", "skewed", "zipf"] = "uniform"
+    skew: float = Field(default=1.6, gt=0.0)
+    #: Events every subject gets before the rest is shared out.
+    minimum: int = Field(default=0, ge=0)
+    #: State variables folded over each subject's events.
+    state: dict[str, Any] = Field(default_factory=dict)
+    #: Order events within a subject by the project timeline.
+    ordered: bool = True
+
+    def is_enabled(self) -> bool:
+        return bool(self.subject)
+
+
+class TimelineSpec(_Base):
+    """The period a project's events happen in (section 25)."""
+
+    start: str | None = None
+    end: str | None = None
+    #: A named activity curve: flat, business_hours, retail, evening.
+    shape: str = "flat"
+    holidays: list[str] = Field(default_factory=list)
+    holiday_weight: float = Field(default=0.0, ge=0.0, le=1.0)
+    #: Relative weight per month, by name or number.
+    months: dict[str, float] = Field(default_factory=dict)
+    #: ``{start, end, multiplier}`` windows - promotions, incidents.
+    spikes: list[dict[str, Any]] = Field(default_factory=list)
+    #: Activity at the end of the period relative to the start.
+    growth: float = Field(default=1.0, gt=0.0)
+
+    def is_enabled(self) -> bool:
+        return bool(self.start or self.end)
+
+
 class EntitySpec(_Base):
     """A logical record type (section 6)."""
 
@@ -297,6 +358,7 @@ class EntitySpec(_Base):
     primary_key: str | None = None
     seed: int | None = None
     tags: list[str] = Field(default_factory=list)
+    simulation: SimulationSpec = Field(default_factory=SimulationSpec)
 
     @model_validator(mode="after")
     def _stamp_field_names(self) -> EntitySpec:
@@ -372,9 +434,9 @@ class ScenarioSpec(_Base):
 class ChaosSpec(_Base):
     """Entropy injection, a.k.a. Discord (sections 24 and 78).
 
-    Values are fractions of records affected. Declared now so the knobs are
-    part of the schema contract from the start; the injectors themselves land
-    with the validation and quality work.
+    Values are fractions of records affected. A ``preset`` sets them all at
+    once; anything stated explicitly overrides the preset. See
+    :mod:`cacophony.simulation.chaos` for what each one does to a record.
     """
 
     preset: Literal["pristine", "realistic", "messy", "hostile_qa", "absolute"] | None = None
@@ -432,6 +494,7 @@ class ProjectSpec(_Base):
     relationships: list[RelationshipSpec] = Field(default_factory=list)
     providers: dict[str, ProviderSpec] = Field(default_factory=dict)
     scenarios: dict[str, ScenarioSpec] = Field(default_factory=dict)
+    timeline: TimelineSpec = Field(default_factory=TimelineSpec)
     chaos: ChaosSpec = Field(default_factory=ChaosSpec)
     outputs: dict[str, OutputProfileSpec] = Field(default_factory=dict)
 

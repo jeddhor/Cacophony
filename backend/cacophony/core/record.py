@@ -64,6 +64,11 @@ class GeneratedRecord:
     values: dict[str, Any] = dataclass_field(default_factory=dict)
     assets: list[GeneratedAsset] = dataclass_field(default_factory=list)
     provenance: RecordProvenance | None = None
+    #: Fields deliberately corrupted by entropy injection, and how (section 24).
+    #: First-class rather than a key in ``values`` because the validator has to
+    #: read it - reporting damage that was asked for is worse than not
+    #: injecting it - and because it must not appear as a column.
+    damage: dict[str, str] = dataclass_field(default_factory=dict)
 
     def get(self, name: str, default: Any = None) -> Any:
         return self.values.get(name, default)
@@ -94,6 +99,8 @@ class GeneratedRecord:
             data = {key: to_jsonable(value) for key, value in data.items()}
         if include_assets and self.assets:
             data["_assets"] = [asset.to_dict() for asset in self.assets]
+        if self.damage:
+            data["_chaos"] = dict(self.damage)
         if self.provenance is not None and provenance_mode.tracks_records:
             block = self.provenance.to_dict(provenance_mode)
             if block:

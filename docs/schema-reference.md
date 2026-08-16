@@ -434,10 +434,143 @@ Needs no provider: a document is rendered from the record it describes.
 Templates take `{field}` and `{related.field}` and nothing else — deliberately
 not a template *language*, since a project file is something people share.
 
+### `event_time` — aliases `occurred_at`, `timeline`
+
+When an event happened (section 25). `jitter`, `offset`, `offset_field`,
+`spread` (`ordered` or `random`). Needs the project `timeline:` and the
+entity's `simulation:`.
+
+`ordered` places the *k*-th of a subject's *n* events where the *k*-th event
+would fall, so a subject's events come out chronological without being sorted.
+
+### `subject` — aliases `actor`, `belongs_to_subject`
+
+The subject an event belongs to (section 25). `field` chooses which column of
+the subject to point at; it defaults to the primary key and adopts its type.
+
+Unlike `reference`, this does not *choose* a parent — the allocation already
+decided whose event this is, which is what makes a subject's events consecutive
+and countable.
+
+### `state` — aliases `running`, `accumulated`
+
+A value folded over this subject's earlier events (section 26). `variable`
+names which one; it defaults to the field's own name.
+
+### `scenario` — aliases `incident`, `affected_by`
+
+What a scenario is doing to this record (section 17). `report`: `name`
+(default), `phase`, `involved` or `position`. `normal` is the value for a
+record no scenario touches.
+
 ### Declared, not yet implemented
 
 `script` — see [ROADMAP.md](ROADMAP.md). Accepts `on_unavailable`: `error`
 (default), `placeholder`, `null`.
+
+---
+
+## `timeline`
+
+When a project's events happen (section 25).
+
+```yaml
+timeline:
+  start: "2026-01-01"
+  end: "2026-04-01"
+  shape: business_hours     # flat, business_hours, office, retail, evening
+  holidays: ["2026-01-01", "2026-02-16"]
+  holiday_weight: 0.05      # 0.0 silences a holiday entirely
+  months: {december: 2.5}   # seasonality, by name or number
+  spikes:
+    - {start: "2026-03-01", end: "2026-03-07", multiplier: 8}
+  growth: 1.4               # activity at the end relative to the start
+```
+
+## `simulation`
+
+Declared on an entity, it turns its records into a history (sections 25, 26).
+
+```yaml
+transaction:
+  count: 500000
+  simulation:
+    subject: account        # whose events these are
+    distribution: skewed    # uniform, skewed, zipf
+    skew: 1.9               # as for a reference: top 10% take 0.1 ** (1/skew)
+    minimum: 4              # events every subject gets before the rest
+    state:
+      balance:
+        initial: "500"
+        update: "balance + amount"
+        min: 0
+        precision: 2
+```
+
+Events are laid out in contiguous blocks per subject, so a state fold is linear
+and a resumed run replays one subject's block rather than the dataset. State
+expressions use the same restricted evaluator as `expression`: no imports, no
+attribute access, no way to run code from a shared project file.
+
+## `scenarios`
+
+A reusable behavioural pattern applied to a fraction of subjects (section 17).
+
+```yaml
+scenarios:
+  ransomware:
+    description: Access, then execution, then encryption.
+    applies_to: [authentication]
+    affects_fraction: 0.004
+    parameters:
+      subject: user
+      window: {at: 0.62, duration: 0.12}   # or [start, end]
+      rate_multiplier: 4.0
+      effects:
+        risk_score: 88
+      phases:
+        - name: initial_access
+          effects:
+            result: {success: 70, failure_bad_password: 30}
+        - name: encryption
+          effects:
+            application: Admin Console
+            risk_score: 99
+```
+
+Subjects are selected by hashing the project seed and the scenario's name, so
+the same identities are affected on every run, in any order, at any scale, and
+no list is ever held. A mapping effect is a weighted choice; a string beginning
+`=` is an expression over the record.
+
+`window` is a fraction of the subject's own history — which, because events are
+laid out by timeline quantile, is the same calendar moment for every affected
+subject however many events each has.
+
+## `chaos`
+
+Deliberate damage (sections 24, 78).
+
+```yaml
+chaos:
+  preset: realistic     # pristine, realistic, messy, hostile_qa, absolute
+  missing_data: 0.05    # anything stated explicitly overrides the preset
+```
+
+| Kind | What it does |
+|---|---|
+| `missing_data` | Nulls a field that had a value |
+| `malformed_text` | Whitespace, case, transpositions, truncation, tabs |
+| `unexpected_unicode` | Zero-width spaces, RTL marks, combining accents, emoji |
+| `outliers` | Numbers orders of magnitude out, sometimes negative |
+| `temporal_anomalies` | Dates in the far future or past, or in another format |
+| `referential_anomalies` | A well-formed key that points at nothing |
+| `duplicates` | Emits the record twice |
+
+Damage is recorded in `_chaos` on the record and in provenance, and the
+validator skips damaged fields — otherwise a chaotic run is a wall of
+validation failures, and `--drop-invalid` discards exactly what was asked for.
+Primary keys and `scenario` fields are never damaged.
 
 ---
 
@@ -574,36 +707,6 @@ run time from the environment variable `CACOPHONY_SECRET_<ID>`, from a variable
 named after the id itself, or from the OS keychain under service `cacophony`.
 The loader rejects anything that looks like a literal key.
 
-## `scenarios`
-
-```yaml
-scenarios:
-  ransomware:
-    description: Sign-in, phishing, execution, lateral movement, encryption.
-    applies_to: [user, device, authentication]
-    affects_fraction: 0.0002
-    enabled: false
-```
-
-Recorded in the schema and version-controlled with it. Executed from Phase 7.
-
-## `chaos`
-
-```yaml
-chaos:
-  preset: realistic     # pristine, realistic, messy, hostile_qa, absolute
-  outliers: 0.05
-  missing_data: 0.02
-  duplicates: 0.01
-  malformed_text: 0.01
-  unexpected_unicode: 0.005
-  temporal_anomalies: 0.001
-  referential_anomalies: 0.0
-```
-
-Values are fractions of records affected. The knobs are part of the schema
-contract now; the injectors arrive with Phase 3.
-
 ## `outputs`
 
 ```yaml
@@ -642,10 +745,12 @@ cacophony generate  project.yaml [-n N] [--seed N] [-o FORMAT] [-d DIR] [-e ENTI
                                  [--batch-size N] [--provenance MODE]
                                  [--on-failure POLICY] [--drop-invalid] [--no-validate]
                                  [--assets-dir DIR] [--regenerate-assets]
+                                 [--world NAME]
 cacophony generators [--json]
 cacophony providers  [project.yaml] [--test]
 cacophony models     project.yaml [-p PROVIDER]
 cacophony prompt     project.yaml [-e ENTITY] [--batch-size N] [--schema]
+cacophony worlds     project.yaml [--create NAME] [--show NAME] [--delete NAME]
 cacophony propose    "a description" [--out FILE] [--providers project.yaml]
                                      [--adapter NAME] [--url URL] [-m MODEL]
                                      [--scale N] [--seed N] [--force]

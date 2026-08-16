@@ -91,6 +91,11 @@ class RecordProvenance:
     run_id: str | None = None
     schema_version: int | None = None
     fields: dict[str, FieldProvenance] = field(default_factory=dict)
+    #: Whole-record facts that are not about one field: the scenario this
+    #: record was caught up in, the damage entropy injection did to it. Both
+    #: are things a reader has to be able to ask about afterwards, and neither
+    #: belongs to a single value.
+    extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self, mode: ProvenanceMode = ProvenanceMode.RECORD) -> dict[str, Any]:
         if mode in (ProvenanceMode.NONE, ProvenanceMode.RUN):
@@ -100,6 +105,8 @@ class RecordProvenance:
             value = getattr(self, key)
             if value is not None:
                 data[key] = value
+        if self.extra:
+            data.update(self.extra)
         if mode.tracks_fields and self.fields:
             data["fields"] = {
                 name: prov.to_dict(include_payloads=mode.tracks_payloads)
