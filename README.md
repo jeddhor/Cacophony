@@ -13,12 +13,12 @@ built and how to run it.
 
 ---
 
-## Status: Phase 7 — Worlds
+## Status: Phase 8 — Live
 
-Phases 1–6 built the engine, the providers, the run system, the Studio, the
-relational layer and multimodal generation. Phase 7 makes a dataset something
-that *happened*: events in time, balances that carry forward, incidents that
-span records, and deliberate mess.
+Phases 1–7 built the engine, the providers, the run system, the Studio, the
+relational layer, multimodal generation and synthetic worlds. Phase 8 stops
+writing files and starts producing traffic: a rate per entity, a destination,
+and a stream that runs until you stop it.
 
 **Working now**
 
@@ -62,6 +62,8 @@ span records, and deliberate mess.
   and exempt from validation
 - Named worlds — `--world acme` generates the same five thousand people into
   every dataset you make from it
+- Continuous streaming to stdout, a rotating file, syslog, HTTP or Kafka, at a
+  rate you set and can change while it runs
 - Language-model generation against Ollama, llama.cpp and any
   OpenAI-compatible server, addressed by URI
 - The Prompt Compiler — you write what a field *means*, it writes the
@@ -291,6 +293,44 @@ replays that account's block — a few dozen records — rather than the dataset
 fields, mangles text, injects zero-width spaces and duplicates records. Each
 defect is recorded in `_chaos`, and the validator skips what was damaged on
 purpose — otherwise a chaotic run is just a wall of validation failures.
+
+### A workload generator
+
+```bash
+cacophony stream templates/security-operations.yaml \
+    --rate authentication=250/s --rate security_finding=8/minute \
+    --to syslog://siem.internal:514
+```
+
+```
+CACOPHONY streaming running                   251/s of 250/s  (100%)
+18,204 generated · 18,204 delivered · 73s
+
+  authentication 250/s                                18,024
+  security_finding 8 per minute                          180
+  → syslog                                            18,204
+```
+
+Rates are written the way people say them — `250/s`, `8 per minute`,
+`1200/hour` — and destinations are URIs: `stdout`, `file://logs.jsonl`,
+`syslog://host:514`, `https://host/ingest`, `kafka://broker:9092/topic`.
+Several `--to` flags feed the same records to every one.
+
+Because a record's seed comes from its index, a stream is still reproducible
+and still resumable: `--from N` continues the sequence rather than replaying
+it, and the summary tells you the number.
+
+Piping works, because the dashboard goes to stderr:
+
+```bash
+cacophony stream project.yaml -r authentication=200/s -t stdout \
+  | jq -r 'select(.risk_score > 80) | [.timestamp[11:19], .application, .result] | @tsv'
+```
+
+**Attainment is the number that matters.** The dashboard shows achieved against
+requested, and warns below 95%. A workload generator that reports "18,204
+delivered" while quietly running at sixty per cent of the rate you asked for is
+measuring the wrong thing.
 
 ### The same people, twice
 

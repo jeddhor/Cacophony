@@ -65,6 +65,7 @@ markers = [
     # A suite that needs a GPU is a suite nobody runs; an adapter that has
     # never met its server is one nobody should trust either.
     "live: provider contract tests that need a real backend",
+    "slow: timing-sensitive tests that measure a stream over seconds",
 ]
 
 [tool.ruff]

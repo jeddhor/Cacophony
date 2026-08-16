@@ -219,6 +219,23 @@ class Allocation:
     def counts(self) -> list[int]:
         return list(self._counts)
 
+    def sample_subject(self, index: int) -> int:
+        """A subject drawn from the same distribution, for one event.
+
+        The block layout answers "whose is event *n* of a known total". A
+        stream has no total, so this answers the same question by inverse
+        transform over the cumulative shares, seeded by the index - the same
+        distribution, the same busy subjects, and still reproducible, but
+        interleaved the way a stream's events actually arrive.
+        """
+        if self.subjects == 1 or not self._starts:
+            return 0
+        total = self._starts[-1]
+        if total <= 0:
+            return index % self.subjects
+        draw = (mix_seed(self.seed, _SALT, index) & 0xFFFFFFFF) / 0x100000000
+        return min(bisect.bisect_right(self._starts, int(draw * total)), self.subjects - 1)
+
     # -- description ----------------------------------------------------------- #
 
     def describe(self) -> dict[str, Any]:

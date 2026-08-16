@@ -751,6 +751,11 @@ cacophony providers  [project.yaml] [--test]
 cacophony models     project.yaml [-p PROVIDER]
 cacophony prompt     project.yaml [-e ENTITY] [--batch-size N] [--schema]
 cacophony worlds     project.yaml [--create NAME] [--show NAME] [--delete NAME]
+cacophony stream     project.yaml [-r ENTITY=RATE]... [-t DESTINATION]...
+                                  [-s SECONDS] [-n RECORDS] [--from N]
+                                  [--batch-size N] [--flush SECONDS]
+                                  [--follow-shape] [--historical]
+                                  [--scenario-cycle SECONDS] [--on-error POLICY]
 cacophony propose    "a description" [--out FILE] [--providers project.yaml]
                                      [--adapter NAME] [--url URL] [-m MODEL]
                                      [--scale N] [--seed N] [--force]
@@ -770,6 +775,49 @@ concurrently), `--checkpoint-every N`, `--store FILE`, `--no-history`,
 `--log-level LEVEL` and `--log-format text|json`.
 
 Exit code `4` means a run was cancelled rather than failed.
+
+---
+
+## Streaming
+
+`cacophony stream` turns a project into a workload generator (section 35): a
+rate per entity, one or more destinations, and no end.
+
+```bash
+cacophony stream templates/security-operations.yaml \
+    --rate authentication=250/s --rate security_finding=8/minute \
+    --to syslog://siem.internal:514
+```
+
+Rates are written the way people say them: `250/s`, `8 per minute`,
+`1200/hour`, or a bare number meaning per second.
+
+| Destination | `--to` | Notes |
+|---|---|---|
+| Standard output | `stdout` | One JSON object per line. The dashboard moves to stderr, so piping to `jq` works |
+| File | `file://path.jsonl` | Rotates by size; `rotate_bytes` and `keep` are options |
+| Syslog | `syslog://host:514`, `syslog+tcp://host:601` | RFC 5424 by default, `rfc: 3164` available. TCP uses octet-counted framing |
+| HTTP | `https://host/ingest` | POSTs an ndjson batch per delivery; `array` and `single` bodies available |
+| Kafka | `kafka://broker:9092/topic` | Needs `pip install 'cacophony[kafka]'`. `key_field` partitions by a field |
+
+Several `--to` flags send the same records to every destination.
+
+**What differs from a batch run.** Indices keep going rather than stopping at a
+count, so `--from N` continues a previous stream instead of replaying it — the
+summary prints the number to use. Timestamps come from the wall clock;
+`--historical` keeps the generated ones, and `--follow-shape` reuses the
+timeline's shape as a rate multiplier so the stream is quiet at night. Subjects
+interleave, because that is what a stream is, so per-subject state is held in
+memory rather than folded over a contiguous block.
+
+Scenario windows recur over `--scenario-cycle` seconds (default one hour): an
+incident declared at `window: {at: 0.62}` has no meaning in an endless stream,
+so it happens again each cycle.
+
+**Attainment.** The dashboard shows the achieved rate against the requested one.
+Below 95% means generation or a destination could not keep up, which is
+reported rather than hidden — a workload generator that quietly under-delivers
+is measuring the wrong thing.
 
 ---
 

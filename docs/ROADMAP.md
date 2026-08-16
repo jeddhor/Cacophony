@@ -344,12 +344,93 @@ same week for an identity with sixty sign-ins and one with fifteen hundred,
 which is what makes it a correlated incident rather than a per-user
 coincidence.
 
-## Phase 8 — Live and distributed
+## Phase 8 — Live ✅
 
-*Design document sections 94, 95.*
+**Delivered.** Design document sections 35, 94.
 
-Continuous generation to syslog, HTTP and Kafka; the streaming dashboard;
-remote workers, capability discovery, job leasing, shared artifact storage.
+Cacophony becomes a workload generator: a rate per entity, one or more
+destinations, and a stream that runs until you stop it.
+
+```bash
+cacophony stream templates/security-operations.yaml \
+    --rate authentication=250/s --rate security_finding=8/minute \
+    --to syslog://siem.internal:514
+```
+
+- **Rates as people write them**: `250/s`, `8 per minute`, `1200/hour`
+- **Destinations** (section 35): `stdout`, a rotating `file`, `syslog` over UDP
+  or TCP in RFC 5424 or 3164, `http` posting ndjson batches, and `kafka` behind
+  an optional dependency
+- **A streaming dashboard**: achieved rate against requested, per entity, per
+  destination, with failures
+- **Adjustable rates**: `retarget` changes an entity's rate mid-flight, and the
+  accrued backlog is trimmed so slowing down takes effect at once
+- **Long-running**: `--seconds`, `--records`, or until interrupted; Ctrl-C
+  finishes the current batch, closes the destinations and reports the totals
+- **Resumable**: `--from N` continues the index sequence rather than replaying
+  it, and the summary prints the number to use
+
+**What a stream changes, and what it does not.** Three things genuinely differ
+from a batch run, and being clear about them is most of the design.
+
+*There is no total.* Indices simply keep going, which costs nothing because a
+record's seed is derived from its index (section 75) — event 4,823,913 of a
+stream is the same record it would have been in a batch run of the same schema.
+
+*Time is now.* A batch dataset covers a period that has happened; a stream
+produces events that are happening, so timestamps come from the wall clock.
+`--historical` keeps the generated ones. `--follow-shape` reuses the timeline's
+*shape* as a rate multiplier instead, so the stream is quiet at three in the
+morning.
+
+*Subjects interleave.* A batch run lays each subject's events out in a
+contiguous block, which is what makes ordered histories and folded state cheap.
+A stream cannot — its events arrive mixed together, because that is what a
+stream is — so the subject is drawn per event from the same weighted
+distribution and the per-subject counter is kept in memory. The first version
+of this shipped the batch layout by mistake and every record in the stream
+belonged to subject zero.
+
+Scenario windows are reinterpreted for the same reason: an incident declared at
+`window: {at: 0.62}` has no meaning in an endless stream, so it *recurs* over
+`--scenario-cycle` seconds, which is what a detection exercise wants anyway.
+
+**Attainment is the number that matters.** A workload generator that reports
+"12,000 records delivered" while quietly running at sixty per cent of the rate
+it was given is measuring the wrong thing, so achieved-over-requested is
+computed, displayed and warned about. Getting it to 99% took three fixes, each
+of which had been costing several per cent silently: the tick slept a fixed
+interval *plus* however long generation took; the per-entity batch ceiling
+capped throughput once work time was significant; and the loop slept past its
+own deadline, leaving the last partial batch unclaimed in the buckets.
+
+Measured on the security-operations template: 99.1% at 50/s, 99.2% at 280/s
+across two entities, 99.5% at 1,000/s. At 5,000/s attainment drops to 75% —
+generation, not delivery, is the limit — and the dashboard says so rather than
+reporting a number the operator did not ask for.
+
+**A memory bound is not a throughput bound.** The first version took whatever
+the token bucket owed and generated it in one chunk. Asked for five million
+events a second it built a five-million-record list, and the machine ran out of
+memory — the exact failure the module docstring claimed to prevent ("a sink
+that cannot keep up slows the stream rather than filling memory"). One tick now
+materialises at most `max_in_flight` records per entity whatever the rate says;
+the surplus stays in the bucket, the stream runs at what it can actually do,
+and attainment reports the gap. The same case now peaks at 127 MB and reports
+0.4%.
+
+**Not in this phase:** REST routes to start and steer a stream, and a Studio
+streaming page. `retarget` exists and is tested; nothing yet calls it over
+HTTP.
+
+---
+
+## Phase 9 — Distributed
+
+*Design document section 95.*
+
+Remote workers, capability discovery, job leasing, distributed generation,
+worker health, shared artifact storage.
 
 ---
 

@@ -93,11 +93,56 @@ class EntitySimulation:
         self.machine = machine
         self.scenarios = scenarios
 
+        #: Set by a live stream. A batch run lays each subject's events out in
+        #: a contiguous block, which is what makes ordered histories and folded
+        #: state cheap. A stream cannot: its events arrive mixed together,
+        #: because that is what a stream *is*. So in stream mode the subject is
+        #: drawn per event and the ordinal is counted in memory.
+        self.streaming = False
+        #: Live scenario windows repeat over this many seconds, so an incident
+        #: recurs instead of happening once at the start of an endless stream.
+        self.cycle_seconds = 3600.0
+        self._counters: dict[int, int] = {}
+        self._started = 0.0
+
     # -- per record ----------------------------------------------------------- #
+
+    def stream_mode(self, *, cycle_seconds: float = 3600.0) -> None:
+        """Switch to the layout a continuous stream needs (sections 35, 94)."""
+        import time
+
+        self.streaming = True
+        self.cycle_seconds = max(1.0, cycle_seconds)
+        self._counters = {}
+        self._started = time.monotonic()
+
+    def _stream_placement(self, index: int) -> Placement:
+        """Whose event this is, when events interleave.
+
+        The subject is drawn from the same weighted distribution the batch
+        allocation would have used, seeded by the event's index - so a stream
+        is still reproducible, and still concentrates on the busy subjects,
+        without needing to know how many events there will ever be.
+        """
+        subject = self.allocation.sample_subject(index)
+        ordinal = self._counters.get(subject, 0)
+        self._counters[subject] = ordinal + 1
+        # A stream has no total, so the subject's own count so far stands in.
+        # Nothing that matters in stream mode divides by it: timestamps come
+        # from the wall clock and scenario windows from the cycle.
+        return Placement(subject=subject, ordinal=ordinal, total=ordinal + 1)
+
+    def _stream_position(self) -> float:
+        """Where the stream is within a scenario cycle."""
+        import time
+
+        return ((time.monotonic() - self._started) % self.cycle_seconds) / self.cycle_seconds
 
     def frame_for(self, index: int) -> SimulationFrame:
         """What is known before the record's fields exist."""
-        placement = self.allocation.locate(index)
+        placement = (
+            self._stream_placement(index) if self.streaming else self.allocation.locate(index)
+        )
         frame = SimulationFrame(
             placement=placement,
             subject_entity=self.subject_entity,
@@ -105,8 +150,9 @@ class EntitySimulation:
         )
 
         if self.scenarios is not None and not self.scenarios.is_noop:
+            position = self._stream_position() if self.streaming else placement.quantile
             found = self.scenarios.involvement(
-                self.entity.name, placement.subject, position=placement.quantile
+                self.entity.name, placement.subject, position=position
             )
             if found is not None:
                 scenario, involvement = found

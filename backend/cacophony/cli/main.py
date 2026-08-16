@@ -1339,6 +1339,11 @@ def _human_bytes(count: int) -> str:
     return f"{size:,.1f} TB"
 
 
+from .stream import register as _register_stream  # noqa: E402
+
+_register_stream(app)
+
+
 def run() -> None:
     """Console-script entry point."""
     app()
