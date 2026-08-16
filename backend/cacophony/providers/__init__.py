@@ -3,7 +3,9 @@
 Importing this package registers every built-in adapter.
 """
 
+from . import image as image
 from . import llm as llm
+from . import speech as speech
 from .base import (
     AudioResult,
     GenerationRequest,

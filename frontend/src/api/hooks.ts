@@ -42,6 +42,7 @@ export const keys = {
   run: (id: string) => ["run", id] as const,
   runEvents: (id: string) => ["run-events", id] as const,
   runQuality: (id: string) => ["run-quality", id] as const,
+  runAssets: (id: string, params: Record<string, unknown>) => ["run-assets", id, params] as const,
   providers: (id?: number) => ["providers", id ?? null] as const,
 };
 
@@ -182,6 +183,17 @@ export const useRunQuality = (id: string | null, live = false) =>
     queryFn: () => api.runQuality(id as string),
     enabled: Boolean(id),
     refetchInterval: live ? 5_000 : false,
+  });
+
+/** The files a run produced (design document section 81). */
+export const useRunAssets = (
+  id: string | null,
+  params: { kind?: string | null; entity?: string | null } = {},
+) =>
+  useQuery({
+    queryKey: keys.runAssets(id ?? "", params),
+    queryFn: () => api.runAssets(id as string, params),
+    enabled: Boolean(id),
   });
 
 export function useStartRun(projectId: number) {

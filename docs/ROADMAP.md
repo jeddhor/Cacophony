@@ -212,13 +212,53 @@ better than a model can. Every proposal is compiled and linted before it is
 shown; one that does not compile is handed back to the model with the error
 attached, and if the second attempt fails too, nothing is returned.
 
-## Phase 6 — Multimodal
+## Phase 6 — Multimodal ✅
 
-*Design document section 92.*
+**Delivered.** Design document sections 18–23, 81, 82, 92.
 
-Makes `generator: image` and `generator: tts` real: InvokeAI integration, TTS
-integration, document templates and PDF generation, the asset manager, artifact
-pipelines, media metadata.
+`generator: image`, `generator: tts` and `generator: document` are real. One
+record produces several artifacts, each derived from that record's own values,
+and every file is accounted for.
+
+- **The asset store** (sections 19, 81): paths derived from entity, record
+  index and field, so the same record always writes the same file and a
+  resumed run skips what it already produced. Identical bytes are stored once,
+  hard-linked where the filesystem allows. A `manifest.jsonl` sidecar answers
+  "what belongs to E48291?" without scanning the dataset
+- **Image providers** (section 18): `invokeai`, which submits a workflow graph
+  — a default text-to-image graph, or one the project supplies — and polls the
+  queue with a deadline; and `procedural_image`, which draws deterministic
+  identicons, portraits, product cards and document thumbnails in-process
+- **Speech providers** (section 20): `piper` and `openai_speech`, covering the
+  two shapes local TTS servers expose; and `procedural_speech`, which
+  synthesises voice-shaped audio with a per-voice pitch
+- **Document rendering** (section 23): placeholder-filled templates to PDF,
+  HTML or text. The PDF writer is part of Cacophony rather than a dependency
+- **Media metadata** (section 19): provider, workflow, seed and prompt hash on
+  every image; voice, duration and an aligned transcript on every audio clip
+- **`templates/multimodal-support.yaml`** (section 82): employees with
+  portraits and ID badges, calls with recordings and transcripts. It runs with
+  no GPU and no model server
+- **The asset browser**: section 46's Assets destination, enabled. Images
+  shown, audio playable, documents linked, provenance on every card
+- **API**: `GET /api/runs/{id}/assets` and a file route that refuses any path
+  outside the run's own directory
+- CLI: `--assets-dir`, `--regenerate-assets`, and an asset line in the summary
+
+**Real formats, written here.** PNG, WAV and PDF are all produced from the
+standard library. Taking Pillow and a PDF library as dependencies to avoid a
+few hundred lines would put wheels with native code in front of every user who
+generates CSV and never touches an image. The outputs are verified against
+`file`, `pdftotext` and `qpdf --check` rather than against Cacophony's own
+readers.
+
+**Procedural providers are not a stand-in for a stand-in.** An image field
+changes the shape of a project — records grow assets, paths appear in the
+output, the summary reports files and bytes — and all of that deserves to be
+exercisable by someone with no GPU, in CI, in a test suite. The procedural
+providers produce deterministic, obviously-synthetic media and label every
+result `synthetic: true`. Point the same schema at InvokeAI or Piper by
+changing one adapter line.
 
 ## Phase 7 — Worlds
 
@@ -386,3 +426,26 @@ default `skew` of 1.6 is deliberately moderate: over-skewing by default would
 put most of a dataset on a handful of parents and leave the rest barely
 exercised, and too-concentrated data looks real until someone queries the tail,
 while too-even data is obvious immediately.
+
+**Media paths are derived, not allocated (sections 32, 65).** An asset's path
+comes from its entity, record index and field, which means it can be computed
+*before* the expensive part. A resumed run therefore asks "is this portrait
+already on disk?" and skips a thirty-second diffusion call — the second run of
+a portrait-heavy project is hundreds of times faster than the first. That
+saving is reported explicitly (`64 already on disk`) rather than showing up as
+a suspiciously quick run, because an optimisation nobody can see is one nobody
+trusts.
+
+**Why Cacophony writes its own PDFs.** Usually the wrong instinct. What is
+needed here is a page of text in one of the fourteen fonts every reader has
+built in: no images, no embedded fonts, no colour management. That is a few
+hundred lines of a well-documented format, against a dependency most users
+would never touch. The moment a project needs real typesetting, an output
+plugin is the right seam — not a heavier default for everyone.
+
+**Document templates are not Jinja2 (section 23).** A document template ships
+inside a project file that people share, and section 74 wants those files
+reviewed in Git like code. A template language with expressions in it would
+make opening a shared project equivalent to running a stranger's code, which
+is the same reason `script:` remains unimplemented. `{field}` and
+`{related.field}` substitution covers invoices, badges and transcripts.

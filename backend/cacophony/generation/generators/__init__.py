@@ -8,16 +8,11 @@ a group of strategies from design document section 8.
 from .base import OptionsMixin
 from .categorical import LookupGenerator, WeightedGenerator
 from .composite import CompositeGenerator, TransformGenerator
-from .deferred import (
-    ImageGenerator,
-    PendingGenerator,
-    PlaceholderMixin,
-    ScriptGenerator,
-    SpeechGenerator,
-)
+from .deferred import PendingGenerator, PlaceholderMixin, ScriptGenerator
 from .faker_gen import FakerGenerator
 from .identifiers import GovernmentIdGenerator, PhoneNumberGenerator
 from .llm import LanguageModelGenerator
+from .media import DocumentGenerator, ImageGenerator, SpeechGenerator
 from .network import IpAddressGenerator, MacAddressGenerator
 from .numeric import BooleanGenerator, DistributionGenerator, RandomGenerator
 from .reference import ReferenceGenerator
@@ -30,6 +25,7 @@ __all__ = [
     "CompositeGenerator",
     "ConstantGenerator",
     "DistributionGenerator",
+    "DocumentGenerator",
     "ExpressionGenerator",
     "FakerGenerator",
     "GovernmentIdGenerator",

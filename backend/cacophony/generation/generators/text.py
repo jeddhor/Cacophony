@@ -30,7 +30,13 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
     from ...core.context import GenerationContext
 
-__all__ = ["ExpressionGenerator", "PatternGenerator", "TemplateGenerator"]
+__all__ = [
+    "ExpressionGenerator",
+    "PatternGenerator",
+    "TemplateGenerator",
+    "fill_placeholders",
+    "placeholders_in",
+]
 
 
 # --------------------------------------------------------------------------- #
@@ -156,6 +162,32 @@ _FILTERS: dict[str, Any] = {
     "pad": lambda value, arg: str(value).rjust(int(arg or 2), "0"),
     "nospace": lambda value, _arg: re.sub(r"\s+", "", str(value)),
 }
+
+
+def placeholders_in(template: str) -> tuple[str, ...]:
+    """Every field a ``{field}`` template reads, in order.
+
+    Shared with the media generators, whose prompts and document bodies use
+    the same placeholder syntax and therefore need the same dependencies
+    declared - a portrait prompt naming ``{full_name}`` has to be produced
+    after the name, and the compiler can only know that if it is told.
+    """
+    return tuple(dict.fromkeys(match.group(1) for match in _PLACEHOLDER.finditer(template)))
+
+
+def fill_placeholders(template: str, context: Any, *, on_missing: str = "empty") -> str:
+    """Fill a ``{field}`` template from a generation context."""
+
+    def substitute(match: re.Match[str]) -> str:
+        name, filters = match.group(1), match.group(2)
+        value = context.value(name, None)
+        if value is None:
+            if on_missing == "keep":
+                return match.group(0)
+            return ""
+        return _apply_filters(str(value), filters)
+
+    return _PLACEHOLDER.sub(substitute, template)
 
 
 @register_generator("template", aliases=("interpolate", "format"))

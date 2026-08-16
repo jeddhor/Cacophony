@@ -337,6 +337,32 @@ export interface QualityReport {
   providers: Record<string, unknown> | null;
 }
 
+/** One generated file, as the manifest records it (section 81). */
+export interface AssetRow {
+  entity: string;
+  record_index: number;
+  field: string;
+  kind: string;
+  path: string;
+  media_type: string;
+  size_bytes: number;
+  digest: string;
+  record_id?: string;
+  metadata?: Record<string, unknown>;
+  /** Where the API serves this file from. */
+  url: string;
+}
+
+export interface AssetsView {
+  run_id: string;
+  root: string | null;
+  total: number;
+  offset?: number;
+  kinds: string[];
+  entities: string[];
+  assets: AssetRow[];
+}
+
 export interface RunEvent {
   kind: string;
   run_id: string;

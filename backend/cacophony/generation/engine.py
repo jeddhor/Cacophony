@@ -101,6 +101,7 @@ class GenerationEngine:
         resolver: EntityResolver | None = None,
         reference_sample_every: int = 1,
         counts: dict[str, int] | None = None,
+        assets: Any | None = None,
     ) -> None:
         if failure_policy not in FailurePolicy.ALL:
             raise ValueError(
@@ -125,6 +126,12 @@ class GenerationEngine:
             from .runtime import GenerationRuntime
 
             self.runtime = GenerationRuntime.for_project(compiled.spec)
+
+        #: Where media generators write their files (sections 19, 81). An
+        #: :class:`cacophony.assets.store.AssetStore`, or None for a run that
+        #: generates no media - in which case a media field degrades under its
+        #: own failure policy rather than the engine growing a special case.
+        self.assets = assets
 
         self.stats: dict[str, EntityStats] = {}
         self._validators: dict[str, RecordValidator] = {}
@@ -263,6 +270,7 @@ class GenerationEngine:
                     run_id=self.run_id,
                     runtime=self.runtime,
                     resolver=self.resolver,
+                    assets=self.assets,
                 )
             )
             records.append(record)
@@ -283,10 +291,14 @@ class GenerationEngine:
                     context.attempt = 1
                     if compiled_field.related_entities:
                         self._attach_related(compiled_field, context)
-                    value, field_provenance = await self._generate_field(
+                    value, field_provenance, assets = await self._generate_field(
                         compiled_field, context, stats
                     )
                     record.values[compiled_field.name] = value
+                    # A media generator produces a file as well as a value, and
+                    # the record owns it (section 81).
+                    if assets:
+                        record.assets.extend(assets)
                     if track_fields and record.provenance is not None:
                         record.provenance.fields[compiled_field.name] = field_provenance
 
@@ -320,6 +332,7 @@ class GenerationEngine:
             run_id=self.run_id,
             runtime=self.runtime,
             resolver=self.resolver,
+            assets=self.assets,
         )
 
         for compiled_field in entity.fields:
@@ -370,6 +383,13 @@ class GenerationEngine:
                 # that wanted it fails, with that field's name attached.
                 continue
 
+        # A field that reads `{agent.first_name}` named the reference field
+        # rather than the entity, so the record has to answer to both.
+        for alias, target in compiled_field.related_aliases.items():
+            record = context.related_records.get(target)
+            if record is not None:
+                context.related_records[alias] = record
+
     def _is_enrichable(self, compiled_field: CompiledField) -> bool:
         """Whether this field should be produced by a grouped model call."""
         return (
@@ -408,27 +428,30 @@ class GenerationEngine:
         compiled_field: CompiledField,
         context: GenerationContext,
         stats: EntityStats,
-    ) -> tuple[Any, FieldProvenance]:
+    ) -> tuple[Any, FieldProvenance, list[Any]]:
+        """Produce one value, its provenance, and any files it wrote."""
         provenance = FieldProvenance(generator=compiled_field.generator_name, seed=context.seed)
 
         null_probability = compiled_field.null_probability
         if null_probability > 0.0 and context.seeds.sub("null").rng().random() < null_probability:
             provenance.extra["nulled"] = True
-            return None, provenance
+            return None, provenance, []
 
         last_error: Exception | None = None
         for attempt in range(1, self.max_attempts + 1):
             context.attempt = attempt
             provenance.attempts = attempt
+            assets: list[Any] = []
             try:
                 if compiled_field.is_sync:
                     value = compiled_field.generator.generate_sync(context)  # type: ignore[attr-defined]
                 else:
                     produced = await compiled_field.generator.generate(context)
                     value = produced.value
+                    assets = list(produced.assets)
                     if produced.provenance is not None:
                         provenance = produced.provenance
-                return coerce_value(value, compiled_field.spec.type), provenance
+                return coerce_value(value, compiled_field.spec.type), provenance, assets
             except Exception as exc:
                 last_error = exc
                 if self.failure_policy != FailurePolicy.RETRY or attempt == self.max_attempts:
@@ -444,9 +467,9 @@ class GenerationEngine:
             raise GenerationError(message) from last_error
         if self.failure_policy == FailurePolicy.PLACEHOLDER:
             provenance.extra["placeholder"] = True
-            return f"[FAILED:{compiled_field.name}]", provenance
+            return f"[FAILED:{compiled_field.name}]", provenance, []
         provenance.extra["failed"] = True
-        return None, provenance
+        return None, provenance, []
 
     def _record_id(self, entity: CompiledEntity, record: GeneratedRecord, index: int) -> str:
         primary_key = entity.spec.resolved_primary_key()

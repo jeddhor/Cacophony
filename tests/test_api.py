@@ -732,3 +732,85 @@ class TestDatabaseRuns:
         response = client.post(f"/api/projects/{project_id}/runs", json={"output_format": "parqet"})
         assert response.status_code == 422
         assert "parquet" in response.text
+
+
+# --------------------------------------------------------------------------- #
+# Assets (design document sections 19, 81)
+# --------------------------------------------------------------------------- #
+
+
+MULTIMODAL = str(TEMPLATES / "multimodal-support.yaml")
+
+
+class TestAssetRoutes:
+    @pytest.fixture
+    def media_run(self, client, tmp_path) -> tuple[str, dict[str, Any]]:
+        project_id = client.post("/api/projects", json={"path": MULTIMODAL}).json()["id"]
+        response = client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"output_dir": str(tmp_path / "out"), "records": 3},
+        )
+        assert response.status_code == 202, response.text
+        run_id = response.json()["id"]
+        await_run(client, run_id)
+        return run_id, client.get(f"/api/runs/{run_id}/assets").json()
+
+    def test_it_lists_what_the_run_produced(self, media_run) -> None:
+        _run_id, listing = media_run
+        assert listing["total"] == 12
+        assert set(listing["kinds"]) == {"image", "audio", "document"}
+        assert set(listing["entities"]) == {"employee", "support_call"}
+
+    def test_every_asset_names_the_record_it_belongs_to(self, media_run) -> None:
+        """Section 81: assets reference their parent."""
+        _run_id, listing = media_run
+        for asset in listing["assets"]:
+            assert asset["record_id"]
+            assert asset["field"]
+
+    def test_filtering_by_kind(self, client, media_run) -> None:
+        run_id, _listing = media_run
+        audio = client.get(f"/api/runs/{run_id}/assets?kind=audio").json()
+        assert audio["total"] == 3
+        assert all(asset["kind"] == "audio" for asset in audio["assets"])
+
+    def test_filtering_by_entity(self, client, media_run) -> None:
+        run_id, _listing = media_run
+        employees = client.get(f"/api/runs/{run_id}/assets?entity=employee").json()
+        assert all(asset["entity"] == "employee" for asset in employees["assets"])
+
+    def test_a_file_can_be_fetched(self, client, media_run) -> None:
+        listing = media_run[1]
+        image = next(asset for asset in listing["assets"] if asset["kind"] == "image")
+        response = client.get(image["url"])
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/png"
+        assert response.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_a_path_outside_the_run_is_refused(self, client, media_run) -> None:
+        """A path parameter naming a file is a traversal waiting to happen."""
+        run_id = media_run[0]
+        assert client.get(f"/api/runs/{run_id}/assets/file?path=/etc/passwd").status_code == 403
+        assert (
+            client.get(f"/api/runs/{run_id}/assets/file?path=../../../etc/passwd").status_code
+            == 403
+        )
+
+    def test_a_run_with_no_assets_reports_none(self, client, project_id, tmp_path) -> None:
+        response = client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"output_dir": str(tmp_path / "plain"), "records": 5},
+        )
+        run_id = response.json()["id"]
+        await_run(client, run_id)
+        listing = client.get(f"/api/runs/{run_id}/assets").json()
+        assert listing["total"] == 0
+
+    def test_an_unknown_run_is_a_404(self, client) -> None:
+        assert client.get("/api/runs/nope/assets").status_code == 404
+
+    def test_the_summary_counts_the_assets(self, client, media_run) -> None:
+        run_id, _listing = media_run
+        summary = client.get(f"/api/runs/{run_id}").json()["summary"]
+        assert summary["assets"]["assets"] == 12
+        assert summary["assets"]["bytes_written"] > 0

@@ -454,6 +454,8 @@ function InspectorPanel({
 }): ReactNode {
   const quality = run.statistics?.filter((stat) => stat.scope === "quality") ?? [];
   const files = (run.summary as { files?: string[] })?.files ?? [];
+  const assetCount =
+    (run.summary as { assets?: { assets?: number } })?.assets?.assets ?? 0;
 
   return (
     <Panel title="Inspector">
@@ -507,6 +509,13 @@ function InspectorPanel({
           <div className="panel-title" style={{ marginTop: 16 }}>
             Output
           </div>
+          {assetCount > 0 && (
+            <div style={{ fontSize: "0.78rem", marginBottom: 6 }}>
+              <Link to={`/assets?run=${run.id}`}>
+                {assetCount.toLocaleString()} generated files
+              </Link>
+            </div>
+          )}
           {files.map((file) => (
             <div key={file} className="faint mono" style={{ fontSize: "0.74rem" }}>
               {file}

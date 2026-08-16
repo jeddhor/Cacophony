@@ -13,11 +13,11 @@ built and how to run it.
 
 ---
 
-## Status: Phase 5 — Relational
+## Status: Phase 6 — Multimodal
 
-Phases 1–4 built the engine, the providers, the run system and the Studio.
-Phase 5 makes entities point at one another: real foreign keys, resolved
-without a key pool, and databases to write them into.
+Phases 1–5 built the engine, the providers, the run system, the Studio and the
+relational layer. Phase 6 makes one record produce several artifacts: portraits,
+recordings and documents, each derived from the record it belongs to.
 
 **Working now**
 
@@ -28,10 +28,10 @@ without a key pool, and databases to write them into.
 - Schema linter with the checks from design document section 102
 - Generator recommendation engine — a field with only a semantic description
   still gets a sensible generator instead of an expensive language-model call
-- 25 registered generators: constant, sequence, uuid, random, boolean,
+- 26 registered generators: constant, sequence, uuid, random, boolean,
   distribution, weighted, lookup, pattern, template, expression, datetime, ip,
-  mac, phone, government_id, faker, composite, transform, null, reference and
-  llm, plus the pending image/tts/script declarations
+  mac, phone, government_id, faker, composite, transform, null, reference, llm,
+  image, tts and document, plus the pending script declaration
 - Hierarchical deterministic seeds — record *n* is identical whether generated
   first, last, in parallel, or after a resume
 - Structural and constraint validation with repair
@@ -45,6 +45,10 @@ without a key pool, and databases to write them into.
   behaves like nothing
 - Referential and statistical validation: sampled foreign-key checks, and
   generated distributions compared against declared ones
+- Image, audio and document fields — InvokeAI, Piper and any
+  `/v1/audio/speech` server, plus procedural providers that need no GPU
+- An asset store that derives every path, stores identical bytes once, and
+  records what each file belongs to and how it was made
 - Language-model generation against Ollama, llama.cpp and any
   OpenAI-compatible server, addressed by URI
 - The Prompt Compiler — you write what a field *means*, it writes the
@@ -64,7 +68,8 @@ without a key pool, and databases to write them into.
   `resume`, `runs`, `run`, `serve`, `generators`, `providers --test`, `models`
 - **Cacophony Studio**: project dashboard, schema editor with live preview,
   distribution and relationship views, a generate screen with cost estimates,
-  and a live run view fed by the WebSocket
+  a live run view fed by the WebSocket, and an asset browser that shows the
+  images, plays the audio and opens the documents
 - Schema edits are applied as targeted patches, so a documented YAML file keeps
   its comments, its ordering and its formatting
 - `cacophony propose "…"` — a description of a domain becomes a compiled,
@@ -75,7 +80,6 @@ without a key pool, and databases to write them into.
 extend the platform rather than rewrite it, as design document section 111
 requires. Fields using these compile, lint, plan and estimate correctly:
 
-- `image`, `tts` — need the multimodal phase
 - `script` — needs sandboxed execution
 
 Set `on_unavailable: placeholder` on any of them to run the whole pipeline
@@ -161,6 +165,51 @@ complete  173,400 records in 25.00s
   referential     100.00%  (285,000 references checked)
   distributions   99.04% match
   references      570,000 resolved, 91% from cache
+```
+
+### One record, several artifacts
+
+`templates/multimodal-support.yaml` gives every employee a portrait and an ID
+badge, and every support call a recording and a transcript:
+
+```bash
+cacophony generate templates/multimodal-support.yaml -d out/
+
+ls out/assets/employee/00000000/
+#   employee_00000000_id_badge.pdf   employee_00000000_portrait.png
+pdftotext out/assets/employee/00000000/employee_00000000_id_badge.pdf -
+#   MULTIMODAL SUPPORT CENTRE
+#   Denise Garcia
+#   SUP-0001
+```
+
+Each file is derived from the record it hangs off — the badge carries that
+employee's own name and number, the recording speaks that call's own
+transcript. The run says what it produced:
+
+```
+complete  32 records in 5.24s
+  referential     100.00%  (20 references checked)
+  assets          64 files, 5.1 MB
+                  11 deduplicated, 0 already on disk
+```
+
+Run it again and the second line reads `64 already on disk`: asset paths are
+derived from the record's position, so nothing is generated twice.
+
+It needs no GPU and no model server. The `procedural_image` and
+`procedural_speech` adapters draw and synthesise in-process — deliberately
+obvious stand-ins, labelled `synthetic: true`, so nothing is mistaken for a
+photograph or for speech. Point the same schema at InvokeAI and Piper by
+changing two adapter lines:
+
+```yaml
+providers:
+  pictures:
+    type: image
+    adapter: invokeai            # was: procedural_image
+    base_url: http://diffusion-box:9090
+    model: sdxl-base
 ```
 
 ### Describing a schema instead of writing one

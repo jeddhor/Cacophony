@@ -197,6 +197,40 @@ class GenerationRuntime:
             "must name one with 'provider:'."
         )
 
+    def media_provider(self, kind: str, provider_id: str | None) -> Any:
+        """Resolve an image or speech provider, or explain what is missing.
+
+        The same rule the language-model lookup uses: a field that names no
+        provider gets the project's only one of that kind, because making every
+        portrait field repeat ``provider: invoke_main`` would be noise. Several
+        of a kind means the field has to choose.
+        """
+        if provider_id:
+            provider = self.providers.get(provider_id)
+            if provider.kind != kind:
+                raise ProviderNotFoundError(
+                    f"provider '{provider_id}' is a {provider.kind} provider, but this "
+                    f"field needs {'an' if kind[0] in 'aeiou' else 'a'} {kind} provider."
+                )
+            return provider
+
+        candidates = [p for p in self.providers.instances() if p.kind == kind]
+        if len(candidates) == 1:
+            return candidates[0]
+        if not candidates:
+            article = "an" if kind[0] in "aeiou" else "a"
+            raise ProviderNotFoundError(
+                f"No {kind} provider is configured. Add one under 'providers:' with "
+                f"type: {kind}, or set 'on_unavailable: placeholder' on the field. "
+                f"For a run that needs no GPU, {article} 'procedural_{kind}' adapter "
+                "draws deterministic stand-ins."
+            )
+        names = ", ".join(sorted(p.id for p in candidates))
+        raise ProviderNotFoundError(
+            f"This project configures several {kind} providers ({names}), so the field "
+            "must name one with 'provider:'."
+        )
+
     @property
     def prompt_compiler(self) -> PromptCompiler:
         if self.prompts is None:

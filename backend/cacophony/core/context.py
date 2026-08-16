@@ -54,6 +54,10 @@ class GenerationContext:
     #: :class:`cacophony.generation.relations.EntityResolver`, typed loosely for
     #: the same reason.
     resolver: Any | None = None
+    #: Where generated media is written (sections 19, 81). A
+    #: :class:`cacophony.assets.store.AssetStore`, typed loosely so that
+    #: ``core`` does not depend on the asset layer.
+    assets: Any | None = None
     attempt: int = 1
     extras: dict[str, Any] = dataclass_field(default_factory=dict)
 

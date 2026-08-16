@@ -2,8 +2,8 @@
  * The application shell (design document sections 45, 46).
  *
  * Section 46's navigation, verbatim: Projects, Studio, Generate, Runs,
- * Providers, Assets, Plugins, Settings. Assets and Plugins belong to later
- * phases and are shown disabled rather than hidden - the shape of the product
+ * Providers, Assets, Plugins, Settings. Plugins belongs to a later phase and is
+ * shown disabled rather than hidden - the shape of the product
  * is part of what the interface communicates, and a destination that appears
  * later without warning is more disorienting than one that was always visible.
  */
@@ -30,7 +30,7 @@ const DESTINATIONS: Destination[] = [
   { to: "/generate", label: "Generate", glyph: "▶", needsProject: true },
   { to: "/runs", label: "Runs", glyph: "◉" },
   { to: "/providers", label: "Providers", glyph: "⌁" },
-  { to: "/assets", label: "Assets", glyph: "▣", later: "multimodal phase" },
+  { to: "/assets", label: "Assets", glyph: "▣" },
   { to: "/plugins", label: "Plugins", glyph: "⬡", later: "plugin phase" },
   { to: "/settings", label: "Settings", glyph: "⚙" },
 ];

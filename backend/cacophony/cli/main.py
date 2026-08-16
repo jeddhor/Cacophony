@@ -449,6 +449,14 @@ def generate(
     ] = False,
     cache: CacheOpt = "disabled",
     cache_path: CachePathOpt = None,
+    assets_dir: Annotated[
+        Path | None,
+        typer.Option("--assets-dir", help="Where generated media goes. Default: <out-dir>/assets."),
+    ] = None,
+    regenerate_assets: Annotated[
+        bool,
+        typer.Option("--regenerate-assets", help="Redraw media that is already on disk."),
+    ] = False,
     llm_batch_size: Annotated[
         int,
         typer.Option("--llm-batch-size", help="Records per language-model call in batch mode."),
@@ -496,6 +504,8 @@ def generate(
         llm_batch_size=llm_batch_size,
         checkpoint_every=checkpoint_every,
         record_history=not no_history,
+        assets_dir=assets_dir,
+        overwrite_assets=regenerate_assets,
     )
 
     repository, project_id, revision_id = register_project(project, compiled, store, config)

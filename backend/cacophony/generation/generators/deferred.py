@@ -9,10 +9,12 @@ These generators are therefore real, registered and compilable today. A schema
 that uses ``generator: image`` validates, lints, plans and estimates correctly -
 it simply cannot produce a value until the multimodal phase lands.
 
-``llm`` and ``reference`` used to live here. Both now have working
-implementations - in :mod:`cacophony.generation.generators.llm` and
-:mod:`cacophony.generation.generators.reference` - leaving only the media and
-script generators waiting on their backends.
+``llm``, ``reference``, ``image``, ``tts`` and ``document`` used to live here.
+All now have working implementations - in
+:mod:`cacophony.generation.generators.llm`,
+:mod:`~cacophony.generation.generators.reference` and
+:mod:`~cacophony.generation.generators.media` - leaving only ``script``, which
+waits on isolation rather than on a backend.
 
 What happens at generation time follows section 65's failure-policy list:
 
@@ -39,13 +41,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
     from ...core.context import GenerationContext
 
-__all__ = [
-    "ImageGenerator",
-    "PendingGenerator",
-    "PlaceholderMixin",
-    "ScriptGenerator",
-    "SpeechGenerator",
-]
+__all__ = ["PendingGenerator", "PlaceholderMixin", "ScriptGenerator"]
 
 
 class PlaceholderMixin:
@@ -115,48 +111,6 @@ class PendingGenerator(OptionsMixin, PlaceholderMixin, SyncGenerator):
     def describe(self) -> str:
         suffix = "" if self.on_unavailable == "error" else f", {self.on_unavailable}"
         return f"{self.name}(pending{suffix})"
-
-
-@register_generator("image", aliases=("invokeai", "text_to_image"))
-class ImageGenerator(PendingGenerator):
-    """Send a constructed prompt to an image provider (section 18)."""
-
-    requires_provider = "image"
-    cost_class = "gpu"
-    phase = "the multimodal phase"
-    kind = "image"
-
-    def prepare(self) -> None:
-        super().prepare()
-        self.width = self.opt_int("width", 512)
-        self.height = self.opt_int("height", 512)
-        self.workflow = self.opt_str("workflow", None)
-        self.steps = self.opt_int("steps", 30)
-
-    def placeholder(self, context: GenerationContext) -> Any:
-        return f"assets/{context.entity.name}/placeholder_{context.record_index:08d}.png"
-
-
-@register_generator("tts", aliases=("speech", "voice"))
-class SpeechGenerator(PendingGenerator):
-    """Generate audio from generated text (section 20)."""
-
-    requires_provider = "speech"
-    cost_class = "gpu"
-    phase = "the multimodal phase"
-    kind = "audio"
-
-    def prepare(self) -> None:
-        super().prepare()
-        self.voice = self.opt_str("voice", None)
-        self.source = self.opt_str("source", None, "text", "from")
-
-    def dependencies(self) -> Sequence[str]:
-        base = tuple(super().dependencies())
-        return (*base, self.source) if self.source else base
-
-    def placeholder(self, context: GenerationContext) -> Any:
-        return f"assets/{context.entity.name}/placeholder_{context.record_index:08d}.wav"
 
 
 @register_generator("script", aliases=("python", "custom"))

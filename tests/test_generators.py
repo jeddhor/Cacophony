@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import ipaddress
 import re
@@ -560,16 +561,24 @@ class TestTransformAndComposite:
 
 
 class TestPendingGenerators:
-    """Generators still waiting on a backend (image, tts, reference, script)."""
+    """Failure policies for generators that need something a run may lack.
 
-    def test_image_errors_by_default(self) -> None:
+    ``image`` and ``tts`` are implemented (see test_media.py); what is checked
+    here is section 65's policy list when the backend is absent. ``script``
+    remains unimplemented, waiting on isolation rather than on a backend.
+    """
+
+    def test_image_errors_by_default_without_a_store(self) -> None:
         generator, field_spec = build("image", {}, type=DataType.IMAGE)
-        with pytest.raises(GenerationError, match="multimodal phase"):
-            generator.generate_sync(make_context(field_spec))
+        with pytest.raises(GenerationError, match="asset store"):
+            asyncio.run(generator.generate(make_context(field_spec)))
 
     def test_placeholder_policy_produces_a_marked_value(self) -> None:
-        value = draw("image", {"on_unavailable": "placeholder"}, type=DataType.IMAGE)
-        assert "placeholder" in value
+        generator, field_spec = build(
+            "image", {"on_unavailable": "placeholder"}, type=DataType.IMAGE
+        )
+        produced = asyncio.run(generator.generate(make_context(field_spec)))
+        assert "placeholder" in produced.value
 
     def test_placeholder_respects_length_constraints(self) -> None:
         value = draw(
@@ -580,7 +589,13 @@ class TestPendingGenerators:
         assert 8 <= len(value) <= 12
 
     def test_null_policy(self) -> None:
-        assert draw("image", {"on_unavailable": "null"}, type=DataType.IMAGE) is None
+        generator, field_spec = build("image", {"on_unavailable": "null"}, type=DataType.IMAGE)
+        assert asyncio.run(generator.generate(make_context(field_spec))).value is None
+
+    def test_script_is_still_pending(self) -> None:
+        generator, field_spec = build("script", {"code": "return 1"})
+        with pytest.raises(GenerationError, match="plugin phase"):
+            generator.generate_sync(make_context(field_spec))
 
     def test_reference_requires_a_target_entity(self) -> None:
         with pytest.raises(GeneratorConfigError, match="entity"):

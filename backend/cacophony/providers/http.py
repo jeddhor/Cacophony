@@ -161,6 +161,58 @@ class HttpProvider(Provider):
                 f"provider '{self.id}' at {self.base_url}{path} is unreachable: {last_error}"
             )
 
+    async def request_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: Any | None = None,
+        params: Mapping[str, Any] | None = None,
+        limit_concurrency: bool = True,
+    ) -> tuple[bytes, str, float]:
+        """Issue a request and return ``(body, content_type, elapsed_ms)``.
+
+        The media path needs this: an image or an audio clip arrives as bytes
+        with a content type, and decoding it as JSON to discover it is a PNG
+        would be an odd way to find out. Failure modes are translated exactly
+        as :meth:`request_json` translates them.
+        """
+        client = self._ensure_client()
+        semaphore = self._ensure_semaphore() if limit_concurrency else _NullSemaphore()
+
+        async with semaphore:
+            started = time.perf_counter()
+            last_error: Exception | None = None
+
+            for attempt in range(self.transport_retries + 1):
+                try:
+                    response = await client.request(method, path, json=json_body, params=params)
+                except _RETRYABLE as exc:
+                    last_error = exc
+                    if attempt < self.transport_retries:
+                        await asyncio.sleep(0.25 * (attempt + 1))
+                        continue
+                    raise ProviderUnavailableError(
+                        f"provider '{self.id}' at {self.base_url}{path} is unreachable: {exc}"
+                    ) from exc
+                except httpx.HTTPError as exc:
+                    raise ProviderError(
+                        f"provider '{self.id}' request to {self.base_url}{path} failed: {exc}"
+                    ) from exc
+
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                if response.status_code >= 400:
+                    raise ProviderError(
+                        f"provider '{self.id}' returned HTTP {response.status_code} for "
+                        f"{path}: {_snippet(response.text)}"
+                    )
+                content_type = response.headers.get("content-type", "application/octet-stream")
+                return response.content, content_type.split(";")[0].strip(), elapsed_ms
+
+            raise ProviderUnavailableError(
+                f"provider '{self.id}' at {self.base_url}{path} is unreachable: {last_error}"
+            )
+
     # -- health ------------------------------------------------------------- #
 
     #: Path probed by the default health check.

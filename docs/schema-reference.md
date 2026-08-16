@@ -375,10 +375,99 @@ The compiler orders `email` after `employer` on its own. Where a field and the
 entity it points at share a name — `customer:` holding a reference to
 `customer` — a dotted read means the related record, not the key.
 
+### `image` — aliases `invokeai`, `text_to_image`
+
+Send a constructed prompt to an image provider. `prompt`, `style`, `width`,
+`height`, `steps`, `guidance`, `negative_prompt`, `workflow`, `provider`,
+`reuse`, `on_unavailable`.
+
+```yaml
+portrait:
+  type: image
+  generator: image
+  prompt: "corporate headshot of {first_name} {last_name}, {team} agent"
+  width: 256
+  height: 256
+  style: portrait          # procedural styles: identicon, portrait, card, document
+```
+
+The prompt is a `{field}` template over this record, so the compiler orders the
+image after the fields it names. Without a prompt, the field's `semantic` plus
+the record's values stand in.
+
+### `tts` — aliases `speech`, `voice`
+
+Generate audio from generated text. `source` (required), `voice`,
+`voice_field`, `speed`, `language`, `sample_rate`, `provider`, `reuse`,
+`on_unavailable`.
+
+```yaml
+recording:
+  type: audio
+  generator: tts
+  source: transcript       # the field holding the words
+  voice: agent
+```
+
+The clip's duration and an aligned transcript are recorded in the asset
+manifest, which is what makes a generated speech set usable.
+
+### `document` — aliases `pdf`, `invoice`, `report`
+
+Render a record as a document. `template` or `template_path` (one required),
+`format` (`pdf`, `html`, `txt`), `title`, `page_size`, `font`, `font_size`.
+
+```yaml
+id_badge:
+  type: file
+  generator: document
+  format: pdf
+  page_size: a5
+  title: "{first_name} {last_name} - {employee_id}"
+  template: |
+    {first_name} {last_name}
+    {employee_id}
+    Team: {team}
+```
+
+Needs no provider: a document is rendered from the record it describes.
+Templates take `{field}` and `{related.field}` and nothing else — deliberately
+not a template *language*, since a project file is something people share.
+
 ### Declared, not yet implemented
 
-`image` `tts` `script` — see [ROADMAP.md](ROADMAP.md). All accept
-`on_unavailable`: `error` (default), `placeholder`, `null`.
+`script` — see [ROADMAP.md](ROADMAP.md). Accepts `on_unavailable`: `error`
+(default), `placeholder`, `null`.
+
+---
+
+## Assets
+
+A field that writes a file puts the path in the record and the bytes under
+`<out-dir>/assets/`:
+
+```text
+out/
+├── employee.jsonl
+└── assets/
+    ├── manifest.jsonl
+    └── employee/00000000/employee_00000000_portrait.png
+```
+
+Paths are derived from entity, record index and field, so a resumed run reuses
+what it already produced rather than paying for it again. Identical bytes are
+stored once. `manifest.jsonl` records one line per asset — the record it
+belongs to, its media type, its size, and the provenance of section 19:
+
+```json
+{"entity": "employee", "record_index": 0, "field": "portrait", "kind": "image",
+ "media_type": "image/png", "size_bytes": 2588, "record_id": "SUP-0001",
+ "metadata": {"provider": "pictures", "workflow": "procedural:portrait",
+              "seed": 1585453150, "prompt_hash": "514e7bbc1af5d2bb"}}
+```
+
+`--assets-dir` puts them elsewhere; `--regenerate-assets` redraws what is
+already there.
 
 ---
 
@@ -427,6 +516,21 @@ supports on the first call and remembers the answer.
 `mock` accepts `failure_rate`, `malformed_rate`, `latency_ms`, `responses` and
 `healthy` — useful for rehearsing a run's shape, and for exercising the retry
 ladder deliberately.
+
+### Image and speech adapters
+
+| Adapter | Aliases | Type | Notes |
+|---|---|---|---|
+| `invokeai` | `invoke` | image | Submits a workflow graph and polls the queue. `queue_id`, `scheduler`, `steps`, `guidance`, `negative_prompt`, `poll_timeout_seconds` |
+| `procedural_image` | `procedural`, `placeholder_image` | image | Draws in-process. `style`: identicon, portrait, card, document |
+| `piper` | `piper_http` | speech | POST text, receive WAV |
+| `openai_speech` | `openai_tts`, `speech_api` | speech | `POST /v1/audio/speech` — openedai-speech, LocalAI, Kokoro-FastAPI |
+| `procedural_speech` | `tone`, `placeholder_speech` | speech | Synthesises in-process. `sample_rate`, `voice` |
+
+The two procedural adapters need no GPU and no server. They produce
+deterministic, obviously-synthetic media so a multimodal schema can be
+designed, previewed and tested anywhere; every result is labelled
+`synthetic: true`. Swapping in `invokeai` or `piper` changes one line.
 
 Credentials never appear in a project file. `secret` names an entry resolved at
 run time from the environment variable `CACOPHONY_SECRET_<ID>`, from a variable
@@ -500,6 +604,7 @@ cacophony preview   project.yaml [-e ENTITY] [-n N] [-c a,b,c] [--offset N] [--j
 cacophony generate  project.yaml [-n N] [--seed N] [-o FORMAT] [-d DIR] [-e ENTITY]
                                  [--batch-size N] [--provenance MODE]
                                  [--on-failure POLICY] [--drop-invalid] [--no-validate]
+                                 [--assets-dir DIR] [--regenerate-assets]
 cacophony generators [--json]
 cacophony providers  [project.yaml] [--test]
 cacophony models     project.yaml [-p PROVIDER]
@@ -578,6 +683,8 @@ cacophony serve --port 8765
 | `POST` | `/api/runs/{id}/resume` | Unpause, or restart from checkpoints |
 | `POST` | `/api/runs/{id}/cancel` | Cancel, checkpointing on the way out |
 | `GET` | `/api/runs/{id}/quality` | Referential and distribution scores |
+| `GET` | `/api/runs/{id}/assets` | Generated files, filterable by kind and entity |
+| `GET` | `/api/runs/{id}/assets/file` | One file, refusing paths outside the run |
 | `DELETE` | `/api/runs/{id}` | Delete a finished run |
 | `WS` | `/api/runs/{id}/stream` | Live progress |
 | `GET` | `/api/providers` | Adapters, and a project's configured providers |

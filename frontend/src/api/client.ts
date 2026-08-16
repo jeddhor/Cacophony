@@ -19,6 +19,7 @@ import type {
   ProjectDetail,
   ProjectSummary,
   ProviderHealth,
+  AssetsView,
   ProvidersView,
   QualityReport,
   RunView,
@@ -149,6 +150,13 @@ export const api = {
   run: (id: string) => request<RunView>(`/runs/${id}`),
   runJobs: (id: string) => request<JobView[]>(`/runs/${id}/jobs`),
   runQuality: (id: string) => request<QualityReport>(`/runs/${id}/quality`),
+  runAssets: (id: string, params: { kind?: string | null; entity?: string | null } = {}) => {
+    const query = new URLSearchParams();
+    if (params.kind) query.set("kind", params.kind);
+    if (params.entity) query.set("entity", params.entity);
+    const suffix = query.toString();
+    return request<AssetsView>(`/runs/${id}/assets${suffix ? `?${suffix}` : ""}`);
+  },
   runEvents: (id: string, after = 0, limit = 200) =>
     request<StoredEvent[]>(`/runs/${id}/events?after=${after}&limit=${limit}`),
 

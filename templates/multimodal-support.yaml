@@ -1,0 +1,192 @@
+# Multimodal Support Centre
+# Design document sections 18-23, 81, 82: one record, several artifacts.
+#
+#     employee ──┬── portrait.png     (image provider)
+#                └── id_badge.pdf     (document renderer)
+#
+#     support_call ──┬── recording.wav   (speech provider)
+#                    └── transcript.txt  (document renderer)
+#
+# This is section 82's artifact pipeline written as a schema: a record is
+# generated, and its fields become the inputs to the files that hang off it.
+# The badge reads the employee's own name and number; the recording speaks the
+# conversation that was generated for that call; the transcript is the same
+# text as a file beside the audio.
+#
+# It runs with no GPU and no model server. The `procedural_image` and
+# `procedural_speech` adapters draw and synthesise in-process - deliberately
+# obvious stand-ins, so nobody mistakes the output for photographs or speech.
+# Point the same schema at InvokeAI and Piper by changing the two adapter
+# lines, and nothing else moves:
+#
+#     cacophony generate templates/multimodal-support.yaml -d out/
+#     ls out/assets/employee/00000000/
+
+project:
+  name: Multimodal Support Centre
+  description: >
+    A fictional support organisation whose people have portraits and badges,
+    and whose calls have recordings and transcripts.
+  seed: 5150
+  locale: en_US
+
+providers:
+  # Swap `procedural_image` for `invokeai` (and add base_url and model) to
+  # generate real portraits through exactly the same schema.
+  pictures:
+    type: image
+    adapter: procedural_image
+    options:
+      style: portrait
+
+  # Swap `procedural_speech` for `piper` or `openai_speech` the same way.
+  voices:
+    type: speech
+    adapter: procedural_speech
+    options:
+      sample_rate: 22050
+
+entities:
+
+  # ------------------------------------------------------------------ #
+  employee:
+    count: 12
+    description: Someone who answers the phone.
+    primary_key: employee_id
+
+    fields:
+      employee_id:
+        type: string
+        generator: sequence
+        format: "SUP-{0000}"
+        unique: true
+
+      first_name:
+        type: string
+        semantic: "Person's given name"
+
+      last_name:
+        type: string
+        semantic: "Person's family name"
+
+      team:
+        type: enum
+        generator: weighted
+        choices:
+          Tier 1: 55
+          Tier 2: 30
+          Escalations: 15
+
+      started_on:
+        type: date
+        generator: datetime
+        start: "2019-01-01"
+        end: "2025-11-30"
+
+      # Section 18. The prompt is a template over this record's own fields, so
+      # the compiler knows the portrait comes after the name.
+      portrait:
+        type: image
+        generator: image
+        prompt: "corporate headshot of {first_name} {last_name}, {team} support agent"
+        width: 256
+        height: 256
+        style: portrait
+
+      # Section 23. No provider needed: a document is rendered from the record
+      # it describes.
+      id_badge:
+        type: file
+        generator: document
+        format: pdf
+        page_size: a5
+        title: "{first_name} {last_name} - {employee_id}"
+        template: |
+          MULTIMODAL SUPPORT CENTRE
+
+          {first_name} {last_name}
+          {employee_id}
+
+          Team: {team}
+          Joined: {started_on}
+
+          This badge is synthetic. It identifies no one.
+
+  # ------------------------------------------------------------------ #
+  support_call:
+    count: 20
+    description: One recorded call, with the agent who took it.
+    primary_key: call_id
+
+    fields:
+      call_id:
+        type: string
+        generator: sequence
+        format: "CALL-{000000}"
+        unique: true
+
+      agent:
+        generator: reference
+        entity: employee
+        distribution: skewed
+
+      opened_at:
+        type: datetime
+        generator: datetime
+        start: "2026-01-01"
+        end: "2026-06-30"
+        business_hours: true
+
+      topic:
+        type: enum
+        generator: weighted
+        choices:
+          Password reset: 32
+          VPN: 24
+          Printer: 18
+          Laptop hardware: 14
+          Software install: 12
+
+      outcome:
+        type: enum
+        generator: weighted
+        choices:
+          resolved: 74
+          escalated: 16
+          callback_scheduled: 10
+
+      # What was said. Deterministic here so the template runs anywhere; make
+      # it `generator: llm` with a `semantic:` and a language-model provider
+      # for real dialogue.
+      transcript:
+        type: text
+        generator: template
+        template: >-
+          Agent: Support centre, this is {agent.first_name}, how can I help?
+          Caller: I am having trouble with {topic|lower}.
+          Agent: Let me take a look at that for you.
+          Agent: That should be sorted now - the call was {outcome}.
+
+      # Section 20: audio generated from generated text. `source` names the
+      # field to speak, which is also what makes the ordering unambiguous.
+      recording:
+        type: audio
+        generator: tts
+        source: transcript
+        voice: agent
+
+      # Section 21's aligned transcript, beside the audio it belongs to.
+      transcript_file:
+        type: file
+        generator: document
+        format: txt
+        template: |
+          {call_id}  {opened_at}
+          Agent {agent} - {topic}
+
+          {transcript}
+
+outputs:
+  fixtures:
+    format: jsonl
+    path: out/multimodal

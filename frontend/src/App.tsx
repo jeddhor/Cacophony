@@ -12,6 +12,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { Empty } from "./components/ui";
 import { GeneratePage } from "./pages/GeneratePage";
+import { AssetsPage } from "./pages/AssetsPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { ProvidersPage } from "./pages/ProvidersPage";
 import { RunPage } from "./pages/RunPage";
@@ -41,10 +42,7 @@ export function App(): ReactNode {
         <Route path="/runs" element={<RunsPage />} />
         <Route path="/runs/:runId" element={<RunPage />} />
         <Route path="/providers" element={<ProvidersPage />} />
-        <Route
-          path="/assets"
-          element={<Later what="Assets" phase="multimodal phase" />}
-        />
+        <Route path="/assets" element={<AssetsPage />} />
         <Route path="/plugins" element={<Later what="Plugins" phase="plugin phase" />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route

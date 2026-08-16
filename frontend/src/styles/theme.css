@@ -771,3 +771,86 @@ label {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* --------------------------------------------------------------------------
+   Assets (design document sections 19, 81)
+
+   A gallery rather than a table: the point of generating a portrait is being
+   able to look at it.
+   -------------------------------------------------------------------------- */
+
+.chip {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 0.76rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 120ms, color 120ms;
+}
+.chip:hover {
+  border-color: var(--violet-dim);
+  color: var(--text);
+}
+.chip-active {
+  border-color: var(--cyan);
+  color: var(--text);
+  background: var(--surface-3, var(--surface-2));
+}
+
+.asset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.asset-card {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.asset-card figcaption {
+  padding: 9px 11px 11px;
+  font-size: 0.8rem;
+}
+
+.asset-preview {
+  background: var(--surface-3, #16161f);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 132px;
+  padding: 8px;
+}
+.asset-preview img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 4px;
+}
+
+.asset-doc {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+}
+.asset-doc:hover {
+  color: var(--cyan);
+}
+.asset-doc-glyph {
+  font-size: 2.4rem;
+  line-height: 1;
+  color: var(--violet);
+}

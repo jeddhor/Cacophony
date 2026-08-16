@@ -78,6 +78,8 @@ def build_run_config(
     llm_batch_size: int,
     checkpoint_every: int,
     record_history: bool,
+    assets_dir: Path | None = None,
+    overwrite_assets: bool = False,
 ) -> RunConfig:
     """Turn command-line options into a run configuration, or exit clearly."""
     try:
@@ -100,6 +102,8 @@ def build_run_config(
     return RunConfig(
         output_dir=out_dir,
         output_format=output,
+        assets_dir=assets_dir,
+        overwrite_assets=overwrite_assets,
         entities=[entity] if entity else [],
         records=records,
         seed=seed,
@@ -319,6 +323,33 @@ def _report_relations(summary: dict[str, Any]) -> None:
         )
 
 
+def _report_assets(summary: dict[str, Any]) -> None:
+    """What a multimodal run produced (design document sections 19, 81)."""
+    assets = summary.get("assets")
+    if not assets or not assets.get("assets"):
+        return
+
+    console.print(
+        f"  assets          {assets['assets']:,} files, {_human_size(assets['bytes_written'])}"
+    )
+    saved = assets.get("deduplicated", 0) + assets.get("reused_from_disk", 0)
+    if saved:
+        console.print(
+            f"  [cacophony.muted]                {assets.get('deduplicated', 0):,} deduplicated, "
+            f"{assets.get('reused_from_disk', 0):,} already on disk[/]"
+        )
+    console.print(f"  [cacophony.muted]                {assets['root']}[/]")
+
+
+def _human_size(count: int) -> str:
+    size = float(count)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:,.1f} {unit}"
+        size /= 1024
+    return f"{size:,.1f} GB"
+
+
 def report_outcome(outcome: RunOutcome, *, on_provider_activity: Any = None) -> None:
     """Print what happened, and exit non-zero if it was not what was asked."""
     console.rule(style="cacophony.rule")
@@ -347,6 +378,7 @@ def report_outcome(outcome: RunOutcome, *, on_provider_activity: Any = None) -> 
         console.print(f"  [cacophony.warn]validation failures  {failures:,}[/]")
 
     _report_relations(summary)
+    _report_assets(summary)
 
     if on_provider_activity is not None:
         on_provider_activity()

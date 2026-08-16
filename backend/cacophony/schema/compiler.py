@@ -192,19 +192,33 @@ def _compile_entity(
                 raise UnknownFieldReferenceError(entity.name, field_name, dependency)
             field_graph.add_dependency(field_name, dependency)
 
-        for other in compiled.related_entities:
-            _require_entity(project, other, f"{entity.name}.{field_name}")
-            if other != entity.name:
-                related_entities.add(other)
-
-    # Which field of this entity points at each other entity. A reference
-    # generator declares its target, so this is read off the compiled fields
-    # rather than guessed from names.
+    # Which field of this entity points at each other entity, and vice versa. A
+    # reference generator declares its target, so this is read off the compiled
+    # fields rather than guessed from names.
     reference_fields: dict[str, str] = {}
+    field_targets: dict[str, str] = {}
     for name, compiled in compiled_fields.items():
         target = getattr(compiled.generator, "target", None)
-        if isinstance(target, str) and target not in reference_fields:
-            reference_fields[target] = name
+        if isinstance(target, str):
+            field_targets[name] = target
+            reference_fields.setdefault(target, name)
+
+    # ``{agent.first_name}`` where `agent` is a reference field rather than an
+    # entity. That is what a person writes - the field name is the one they
+    # chose, and the entity it happens to point at is incidental - so it
+    # resolves to the entity, and the alias is remembered for generation time.
+    for field_name, compiled in compiled_fields.items():
+        resolved: list[str] = []
+        for other in compiled.related_entities:
+            target = field_targets.get(other)
+            if target is not None and other not in project.entities:
+                compiled.related_aliases[other] = target
+                other = target
+            _require_entity(project, other, f"{entity.name}.{field_name}")
+            resolved.append(other)
+            if other != entity.name:
+                related_entities.add(other)
+        compiled.related_entities = tuple(dict.fromkeys(resolved))
 
     # A field that reads ``company.domain`` must be produced *after* whichever
     # field chose the company, or it would be handed a different one. The user

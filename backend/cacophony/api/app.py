@@ -117,6 +117,19 @@ def _reference_edges(compiled: Any) -> list[dict[str, Any]]:
     return edges
 
 
+def _asset_root(stored: dict[str, Any]) -> Path | None:
+    """Where a stored run put its media.
+
+    Read back from the run's own configuration rather than recomputed, so a run
+    that used ``--assets-dir`` is still findable afterwards.
+    """
+    config = stored.get("config") or {}
+    if config.get("assets_dir"):
+        return Path(str(config["assets_dir"]))
+    output_dir = config.get("output_dir") or stored.get("output_dir")
+    return Path(str(output_dir)) / "assets" if output_dir else None
+
+
 def create_app(
     *,
     store_path: str | Path | None = None,
@@ -421,6 +434,72 @@ def create_app(
             "relations": summary.get("relations"),
             "providers": summary.get("providers"),
         }
+
+    @app.get("/api/runs/{run_id}/assets", tags=["assets"])
+    async def run_assets(
+        run_id: str,
+        entity: str | None = Query(default=None),
+        kind: str | None = Query(default=None),
+        limit: int = Query(default=100, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict[str, Any]:
+        """What this run produced besides records (design document section 81).
+
+        Read from the manifest beside the assets rather than from the metadata
+        store, because that is where the truth is: section 42 keeps generated
+        data out of the database, and an asset is generated data.
+        """
+        from ..assets.store import AssetStore
+
+        stored = _found(runs.repository.get_run(run_id), "run")
+        root = _asset_root(stored)
+        if root is None or not root.exists():
+            return {"run_id": run_id, "root": None, "total": 0, "assets": []}
+
+        rows = [
+            row
+            for row in AssetStore(root).manifest()
+            if (entity is None or row["entity"] == entity) and (kind is None or row["kind"] == kind)
+        ]
+        window = rows[offset : offset + limit]
+        return {
+            "run_id": run_id,
+            "root": str(root),
+            "total": len(rows),
+            "offset": offset,
+            "kinds": sorted({row["kind"] for row in rows}),
+            "entities": sorted({row["entity"] for row in rows}),
+            "assets": [
+                {**row, "url": f"/api/runs/{run_id}/assets/file?path={row['path']}"}
+                for row in window
+            ],
+        }
+
+    @app.get("/api/runs/{run_id}/assets/file", tags=["assets"])
+    async def run_asset_file(run_id: str, path: str = Query(...)) -> Any:
+        """Serve one generated file, so the Studio can show it.
+
+        The path is checked to be inside this run's asset directory before
+        anything is opened. A parameter that names a file is a directory
+        traversal waiting to happen, and "it is only a local tool" is how local
+        tools become the way in.
+        """
+        from fastapi.responses import FileResponse
+
+        stored = _found(runs.repository.get_run(run_id), "run")
+        root = _asset_root(stored)
+        if root is None:
+            raise HTTPException(status_code=404, detail="this run produced no assets")
+
+        try:
+            resolved = Path(path).resolve()
+            resolved.relative_to(root.resolve())
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=403, detail="that path is outside the run") from exc
+
+        if not resolved.is_file():
+            raise HTTPException(status_code=404, detail="no such asset")
+        return FileResponse(resolved)
 
     @app.post("/api/runs/{run_id}/pause", tags=["runs"])
     async def pause_run(run_id: str) -> dict[str, Any]:

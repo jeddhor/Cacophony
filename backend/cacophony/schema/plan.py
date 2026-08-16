@@ -39,6 +39,12 @@ class CompiledField:
     dependencies: tuple[str, ...] = ()
     related_entities: tuple[str, ...] = ()
     inferred_generator: bool = False
+    #: Extra names this field may read a related record under, mapped to the
+    #: entity they mean. A reference field called ``agent`` pointing at
+    #: ``employee`` earns ``{"agent": "employee"}``, so a template can say
+    #: ``{agent.first_name}`` - which is what a person writes, the field name
+    #: being the thing they chose and the entity name being incidental.
+    related_aliases: dict[str, str] = field(default_factory=dict)
 
     @property
     def is_sync(self) -> bool:
