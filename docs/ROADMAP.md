@@ -252,6 +252,32 @@ generates CSV and never touches an image. The outputs are verified against
 `file`, `pdftotext` and `qpdf --check` rather than against Cacophony's own
 readers.
 
+**Verified against real servers.** The image and speech adapters were first
+written from the published APIs and then run against InvokeAI 6.13.8 and
+piper1-gpl. Both had defects that only a real server could show, and both were
+of the same kind — the documentation described the shape, and the shape was not
+the whole contract:
+
+- **InvokeAI takes a model *identifier*, not a name.** A node wants
+  `{key, hash, name, base, type}`, which only the server can supply. The
+  adapter now reads the model list once and resolves whatever the schema
+  called the model into that structure.
+- **Architectures wire differently.** SDXL has two text encoders; FLUX and
+  Qwen-Image have entirely different topologies. There are now two built-in
+  graphs and a clear refusal for the rest.
+- **Piper serves WAV under `text/html`.** Flask's default for a bare byte
+  response. Believing the header would have filed every recording as `.bin`,
+  so the payload is sniffed and the header trusted only when plausible.
+- **InvokeAI's seed field is 32-bit.** A Cacophony seed is 64-bit and was
+  rejected outright.
+
+The lesson is recorded in `tests/test_provider_contracts.py`: offline tests run
+against responses *captured* from the real servers rather than invented, since
+an invented fixture agrees with whatever the adapter already believes. Live
+tests run when `CACOPHONY_TEST_INVOKEAI`, `CACOPHONY_TEST_PIPER` or
+`CACOPHONY_TEST_OLLAMA` name a server, and are skipped otherwise — a suite that
+needs a GPU is a suite nobody runs.
+
 **Procedural providers are not a stand-in for a stand-in.** An image field
 changes the shape of a project — records grow assets, paths appear in the
 output, the summary reports files and bytes — and all of that deserves to be

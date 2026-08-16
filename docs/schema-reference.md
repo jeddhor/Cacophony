@@ -521,11 +521,48 @@ ladder deliberately.
 
 | Adapter | Aliases | Type | Notes |
 |---|---|---|---|
-| `invokeai` | `invoke` | image | Submits a workflow graph and polls the queue. `queue_id`, `scheduler`, `steps`, `guidance`, `negative_prompt`, `poll_timeout_seconds` |
+| `invokeai` | `invoke` | image | Submits a graph and polls the queue. `queue_id`, `scheduler`, `steps`, `guidance`, `negative_prompt`, `poll_timeout_seconds` |
 | `procedural_image` | `procedural`, `placeholder_image` | image | Draws in-process. `style`: identicon, portrait, card, document |
-| `piper` | `piper_http` | speech | POST text, receive WAV |
+| `piper` | `piper_http` | speech | `POST /synthesize` — piper1-gpl's web server |
 | `openai_speech` | `openai_tts`, `speech_api` | speech | `POST /v1/audio/speech` — openedai-speech, LocalAI, Kokoro-FastAPI |
 | `procedural_speech` | `tone`, `placeholder_speech` | speech | Synthesises in-process. `sample_rate`, `voice` |
+
+```yaml
+providers:
+  pictures:
+    type: image
+    adapter: invokeai
+    base_url: http://diffusion-box:9090
+    model: Dreamshaper 8       # a name from the server's model list, or a key
+    concurrency: 1             # one GPU, one request
+    options:
+      steps: 24
+      guidance: 7.5
+      poll_timeout_seconds: 300
+
+  voices:
+    type: speech
+    adapter: piper
+    base_url: http://tts-box:5000
+```
+
+`invokeai` builds a text-to-image graph for the named model's architecture:
+SD-1, SD-2 and SDXL are covered. FLUX, Qwen-Image and Z-Image each have their
+own node topology, so those need a `workflow` exported from InvokeAI — the
+adapter says so by name rather than submitting a graph that will fail. Naming
+no model picks an installed one the built-in graph can wire.
+
+A Piper server hosts one voice, chosen when it starts, so a schema that wants
+several voices points each at its own provider.
+
+Both adapters are verified against real servers by the live contract tests:
+
+```bash
+CACOPHONY_TEST_INVOKEAI=http://diffusion-box:9090 \
+CACOPHONY_TEST_PIPER=http://tts-box:5000 \
+CACOPHONY_TEST_OLLAMA=http://gpu-box:11434 \
+    pytest tests/test_provider_contracts.py -m live
+```
 
 The two procedural adapters need no GPU and no server. They produce
 deterministic, obviously-synthetic media so a multimodal schema can be

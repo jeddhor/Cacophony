@@ -457,9 +457,14 @@ class DocumentGenerator(MediaGenerator):
     async def _produce(self, context: GenerationContext) -> tuple[bytes, str, dict[str, Any]]:
         from ...assets.documents import Document, render_template
 
-        values = _render_values(context)
-        text = render_template(self._body(), values)
-        title = render_template(self.title_template, values) if self.title_template else ""
+        values = dict(context.current_record)
+        related = {name: dict(record.values) for name, record in context.related_records.items()}
+        text = render_template(self._body(), values, related=related)
+        title = (
+            render_template(self.title_template, values, related=related)
+            if self.title_template
+            else ""
+        )
 
         if self.format == "txt":
             data = text.encode("utf-8")
@@ -486,14 +491,6 @@ class DocumentGenerator(MediaGenerator):
 
     def describe(self) -> str:
         return f"document({self.format})"
-
-
-def _render_values(context: GenerationContext) -> dict[str, Any]:
-    """The record, plus its related records, as a template sees it."""
-    values: dict[str, Any] = dict(context.current_record)
-    for name, record in context.related_records.items():
-        values[name] = dict(record.values)
-    return values
 
 
 def _as_html(title: str, text: str) -> str:

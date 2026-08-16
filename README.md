@@ -200,8 +200,10 @@ derived from the record's position, so nothing is generated twice.
 It needs no GPU and no model server. The `procedural_image` and
 `procedural_speech` adapters draw and synthesise in-process — deliberately
 obvious stand-ins, labelled `synthetic: true`, so nothing is mistaken for a
-photograph or for speech. Point the same schema at InvokeAI and Piper by
-changing two adapter lines:
+photograph or for speech.
+
+Point the same schema at real hardware by changing the two adapter blocks.
+Nothing below `providers:` moves:
 
 ```yaml
 providers:
@@ -209,8 +211,18 @@ providers:
     type: image
     adapter: invokeai            # was: procedural_image
     base_url: http://diffusion-box:9090
-    model: sdxl-base
+    model: Dreamshaper 8
+
+  voices:
+    type: speech
+    adapter: piper               # was: procedural_speech
+    base_url: http://tts-box:5000
 ```
+
+The same twelve employees then have diffusion portraits and the same twenty
+calls have spoken recordings. Both adapters are tested against real servers —
+InvokeAI 6.13.8 and piper1-gpl — by the live contract tests in
+`tests/test_provider_contracts.py`.
 
 ### Describing a schema instead of writing one
 

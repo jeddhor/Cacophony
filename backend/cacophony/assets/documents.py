@@ -60,33 +60,62 @@ _FONTS = {
 _PLACEHOLDER = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_.]*)\}")
 
 
-def render_template(template: str, values: dict[str, Any], *, on_missing: str = "empty") -> str:
+def render_template(
+    template: str,
+    values: dict[str, Any],
+    *,
+    related: dict[str, Any] | None = None,
+    on_missing: str = "empty",
+) -> str:
     """Fill ``{field}`` placeholders from ``values``.
 
-    Dotted names read a nested mapping, so ``{customer.name}`` works on a
-    record that carries a related record. Deliberately not Jinja2: a document
-    template ships inside a project file that people share, and a template
-    language with expressions in it is a code-execution surface.
+    Dotted names read ``related`` - the records this row referenced - so
+    ``{customer.name}`` works. The two are kept apart on purpose: a field
+    holding a foreign key is routinely named after the entity it points at, so
+    ``{agent}`` must stay the key it holds while ``{agent.first_name}`` reaches
+    the record. Merging them would make a bare ``{agent}`` render a whole
+    Python dict into the document, which is exactly what it did.
+
+    Deliberately not Jinja2: a document template ships inside a project file
+    that people share, and a template language with expressions in it is a
+    code-execution surface.
     """
+    lookups = related or {}
 
     def substitute(match: re.Match[str]) -> str:
         name = match.group(1)
-        value: Any = values
-        for part in name.split("."):
-            if isinstance(value, dict) and part in value:
-                value = value[part]
-            else:
-                value = None
-                break
+        head, _, tail = name.partition(".")
+
+        if tail:
+            source = lookups.get(head)
+            if source is None and isinstance(values.get(head), dict):
+                source = values[head]
+            value = source.get(tail) if isinstance(source, dict) else None
+        else:
+            value = values.get(head)
+
         if value is None:
             if on_missing == "keep":
                 return match.group(0)
             if on_missing == "error":
                 raise KeyError(f"the template refers to '{name}', which the record does not have")
             return ""
-        return str(value)
+        return _text(value)
 
     return _PLACEHOLDER.sub(substitute, template)
+
+
+def _text(value: Any) -> str:
+    """Render one value for a document.
+
+    Dates and times get their ISO form rather than Python's ``repr``: a badge
+    reading ``datetime.date(2024, 12, 5)`` is a bug the reader sees.
+    """
+    from datetime import date, datetime, time
+
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat(sep=" ") if isinstance(value, datetime) else value.isoformat()
+    return str(value)
 
 
 @dataclass(slots=True)

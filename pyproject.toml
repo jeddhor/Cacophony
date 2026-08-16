@@ -61,6 +61,10 @@ pythonpath = ["backend"]
 addopts = "-q --strict-markers"
 markers = [
     "scale: slow tests that generate large record counts",
+    # Skipped unless CACOPHONY_TEST_INVOKEAI / _PIPER / _OLLAMA name a server.
+    # A suite that needs a GPU is a suite nobody runs; an adapter that has
+    # never met its server is one nobody should trust either.
+    "live: provider contract tests that need a real backend",
 ]
 
 [tool.ruff]

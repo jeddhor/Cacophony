@@ -138,6 +138,27 @@ class TestDocuments:
         with pytest.raises(KeyError, match="nope"):
             render_template("{nope}", {}, on_missing="error")
 
+    def test_a_field_named_after_its_entity_keeps_its_own_value(self) -> None:
+        """`{agent}` is the key it holds; `{agent.first_name}` is the record.
+
+        Merging the two rendered a whole Python dict into the document, which
+        is what a real run put on a transcript.
+        """
+        values = {"agent": "SUP-0001"}
+        related = {"agent": {"first_name": "Denise", "employee_id": "SUP-0001"}}
+        assert render_template("{agent}", values, related=related) == "SUP-0001"
+        assert render_template("{agent.first_name}", values, related=related) == "Denise"
+
+    def test_dates_are_rendered_iso_not_repr(self) -> None:
+        """A badge reading `datetime.date(2024, 12, 5)` is a bug the reader sees."""
+        import datetime as dt
+
+        rendered = render_template(
+            "{joined} {at}",
+            {"joined": dt.date(2024, 12, 5), "at": dt.datetime(2026, 5, 23, 8, 38)},
+        )
+        assert rendered == "2024-12-05 2026-05-23 08:38:00"
+
     def test_a_pdf_is_a_pdf(self) -> None:
         pdf = Document(title="T").layout("hello").to_pdf()
         assert pdf.startswith(b"%PDF-1.4")
@@ -553,6 +574,29 @@ class TestMultimodalTemplate:
         store = AssetStore(config.asset_root)
         first = store.assets_of("employee", 0)
         assert {row["field"] for row in first} == {"portrait", "id_badge"}
+
+    def test_a_document_reads_the_reference_by_name_without_dumping_it(
+        self, tmp_path: Path
+    ) -> None:
+        """The transcript names the agent's key, not a serialised record."""
+        from cacophony.runs.config import RunConfig
+        from cacophony.runs.coordinator import Conductor
+        from cacophony.schema.compiler import compile_project
+        from cacophony.schema.loader import load_project
+
+        compiled = compile_project(load_project(MULTIMODAL))
+        config = RunConfig(output_dir=tmp_path, records=2, record_history=False)
+        conductor = Conductor(compiled, config)
+        asyncio.run(conductor.execute())
+        asyncio.run(conductor.aclose())
+
+        store = AssetStore(config.asset_root)
+        transcripts = [row for row in store.manifest() if row["path"].endswith(".txt")]
+        assert transcripts
+        for row in transcripts:
+            text = Path(row["path"]).read_text()
+            assert "{" not in text and "employee_id" not in text
+            assert "SUP-" in text
 
     def test_the_audio_carries_its_transcript(self, tmp_path: Path) -> None:
         """Section 21: an aligned transcript is what makes a speech set usable."""
