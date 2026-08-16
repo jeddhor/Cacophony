@@ -24,6 +24,11 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = ["LintIssue", "LintReport", "Severity", "lint_project"]
 
+#: Children per parent beyond which an evenly spread reference is worth
+#: mentioning. Ten events per user could plausibly be uniform; a thousand
+#: could not, and data that says otherwise looks synthetic at a glance.
+_FLAT_REFERENCE_RATIO = 50
+
 
 class Severity(StrEnum):
     INFO = "info"
@@ -92,6 +97,7 @@ def lint_project(compiled: CompiledProject) -> LintReport:
     for entity in compiled.ordered_entities():
         issues.extend(_lint_entity(entity))
 
+    issues.extend(_lint_references(compiled))
     issues.extend(_lint_providers(compiled))
     issues.extend(_lint_chaos(compiled))
 
@@ -286,6 +292,119 @@ def _domain_too_small(compiled_field: CompiledField, count: int) -> bool:
         if isinstance(low, int) and isinstance(high, int):
             return (high - low + 1) < count
     return False
+
+
+def _lint_references(compiled: CompiledProject) -> list[LintIssue]:
+    """Check the relationships a project declares (design document section 15).
+
+    References are the part of a schema most likely to be quietly wrong: every
+    check here describes a project that compiles, generates without raising,
+    and produces data that does not mean what its author intended.
+    """
+    issues: list[LintIssue] = []
+
+    for entity in compiled.ordered_entities():
+        for compiled_field in entity.fields:
+            generator = compiled_field.generator
+            target_name = getattr(generator, "target", None)
+            if not isinstance(target_name, str):
+                continue
+
+            location = f"{entity.name}.{compiled_field.name}"
+            target = compiled.entities.get(target_name)
+            if target is None:
+                continue  # the compiler reports an unknown entity itself
+
+            if target_name == entity.name:
+                issues.append(
+                    LintIssue(
+                        code="self-reference",
+                        severity=Severity.WARNING,
+                        location=location,
+                        message=f"{compiled_field.name} references its own entity.",
+                        hint=(
+                            "A record that points at another record of the same entity is "
+                            "fine - a manager, a parent comment - but the referenced key "
+                            "must not itself depend on this field, or resolving it will "
+                            "not terminate."
+                        ),
+                    )
+                )
+
+            if target.count <= 0:
+                issues.append(
+                    LintIssue(
+                        code="reference-to-empty-entity",
+                        severity=Severity.ERROR,
+                        location=location,
+                        message=f"References '{target_name}', which generates no records.",
+                        hint=(
+                            f"Give '{target_name}' a count, or set "
+                            "'on_unavailable: null' on this field."
+                        ),
+                    )
+                )
+                continue
+
+            if getattr(generator, "unique", False) and entity.count > target.count:
+                issues.append(
+                    LintIssue(
+                        code="unique-reference-overflow",
+                        severity=Severity.ERROR,
+                        location=location,
+                        message=(
+                            f"{entity.count:,} records each need a distinct "
+                            f"'{target_name}', but only {target.count:,} exist."
+                        ),
+                        hint=(
+                            f"Raise the count of '{target_name}' to at least "
+                            f"{entity.count:,}, or drop 'unique'."
+                        ),
+                    )
+                )
+
+            key = getattr(generator, "target_field", None)
+            if key:
+                key_spec = target.spec.fields.get(key)
+                primary = target.spec.resolved_primary_key()
+                if key_spec is not None and key != primary and not key_spec.unique:
+                    issues.append(
+                        LintIssue(
+                            code="reference-to-nonunique-key",
+                            severity=Severity.WARNING,
+                            location=location,
+                            message=(
+                                f"Points at '{target_name}.{key}', which is neither the "
+                                "primary key nor unique."
+                            ),
+                            hint=(
+                                "Several records may share that value, so the reference "
+                                "identifies a set rather than a record. Mark the field "
+                                "'unique: true' or point at the primary key."
+                            ),
+                        )
+                    )
+
+            ratio = entity.count / target.count
+            if (
+                getattr(generator, "distribution", None) == "uniform"
+                and ratio >= _FLAT_REFERENCE_RATIO
+            ):
+                issues.append(
+                    LintIssue(
+                        code="uniform-reference",
+                        severity=Severity.INFO,
+                        location=location,
+                        message=(f"{ratio:,.0f} records per '{target_name}', spread evenly."),
+                        hint=(
+                            "Real activity concentrates: a few parents attract most of "
+                            "the children. Try 'distribution: skewed' if this data is "
+                            "meant to look like something that happened."
+                        ),
+                    )
+                )
+
+    return issues
 
 
 def _lint_providers(compiled: CompiledProject) -> list[LintIssue]:

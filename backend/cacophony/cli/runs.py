@@ -284,6 +284,41 @@ async def _execute(conductor: Conductor, *, resume: bool) -> RunOutcome:
         await conductor.aclose()
 
 
+def _report_relations(summary: dict[str, Any]) -> None:
+    """The two scores a relational run earns (design document section 58).
+
+    Only printed when the run had something to say: a project with no
+    references and no declared distributions has no referential integrity to
+    report, and a row reading "100%" for a check nobody ran is a lie told
+    tidily.
+    """
+    quality = summary.get("quality") or {}
+
+    integrity = quality.get("referential_integrity")
+    if integrity is not None:
+        checked = sum(
+            int((entity.get("referential") or {}).get("references_checked", 0))
+            for entity in (summary.get("validation") or {}).values()
+        )
+        style = "cacophony.ok" if integrity >= 1.0 else "cacophony.warn"
+        console.print(
+            f"  [{style}]referential     {integrity:.2%}[/]"
+            f"  [cacophony.muted]({checked:,} references checked)[/]"
+        )
+
+    match = quality.get("distribution_match")
+    if match is not None:
+        style = "cacophony.ok" if match >= 0.92 else "cacophony.warn"
+        console.print(f"  [{style}]distributions   {match:.2%}[/] [cacophony.muted]match[/]")
+
+    relations = summary.get("relations")
+    if relations:
+        console.print(
+            f"  [cacophony.muted]references      {relations['key_lookups']:,} resolved, "
+            f"{relations['key_hit_rate']:.0%} from cache[/]"
+        )
+
+
 def report_outcome(outcome: RunOutcome, *, on_provider_activity: Any = None) -> None:
     """Print what happened, and exit non-zero if it was not what was asked."""
     console.rule(style="cacophony.rule")
@@ -310,6 +345,8 @@ def report_outcome(outcome: RunOutcome, *, on_provider_activity: Any = None) -> 
     failures = int(summary.get("validation_failures", 0))
     if failures:
         console.print(f"  [cacophony.warn]validation failures  {failures:,}[/]")
+
+    _report_relations(summary)
 
     if on_provider_activity is not None:
         on_provider_activity()

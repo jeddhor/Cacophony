@@ -83,6 +83,25 @@ export interface FieldView {
   constraints: Constraints;
   /** Normalised weights, for the distribution preview (section 52). */
   distribution: Record<string, number> | null;
+  /** Where this field points, if it is a foreign key (section 15). */
+  reference: FieldReference | null;
+}
+
+export interface FieldReference {
+  entity: string;
+  field: string | null;
+  distribution: string | null;
+  unique: boolean;
+}
+
+/** One foreign key, as an edge of the relationship graph. */
+export interface ReferenceEdge {
+  from_entity: string;
+  from_field: string;
+  to_entity: string;
+  to_field: string | null;
+  distribution: string | null;
+  unique: boolean;
 }
 
 export interface EntityView {
@@ -117,6 +136,8 @@ export interface SchemaView {
   entity_order: string[];
   entities: Record<string, EntityView>;
   relationships: Relationship[];
+  /** Every foreign key in the project. The graph draws these. */
+  references: ReferenceEdge[];
 }
 
 export interface PlanStep {
@@ -260,6 +281,60 @@ export interface RunView {
   /** Present only while the run is executing in the server process. */
   live?: RunSnapshot;
   paused?: boolean;
+}
+
+/** How closely one field's output matched its declared distribution. */
+export interface DistributionCheck {
+  entity: string;
+  field: string;
+  samples: number;
+  match: number;
+  distance: number;
+  confident: boolean;
+  expected: Record<string, number>;
+  observed: Record<string, number>;
+}
+
+export interface EntityValidation {
+  records_checked: number;
+  records_valid: number;
+  records_repaired: number;
+  records_rejected: number;
+  validity_rate: number;
+  issues_by_category: Record<string, number>;
+  referential?: {
+    references_checked: number;
+    broken_references: number;
+    integrity: number;
+    sample_every: number;
+  };
+  statistical?: {
+    samples: number;
+    fields_checked: number;
+    distribution_match: number;
+    checks: DistributionCheck[];
+  };
+}
+
+export interface ResolverStats {
+  key_lookups: number;
+  key_hit_rate: number;
+  record_lookups: number;
+  record_hit_rate: number;
+  derived_parent_records: number;
+}
+
+/** `GET /api/runs/{id}/quality` - the report of section 58. */
+export interface QualityReport {
+  run_id: string;
+  state: RunState;
+  /** True when the numbers come from a run still in progress. */
+  live: boolean;
+  records: number;
+  quality: Record<string, number>;
+  validation: Record<string, EntityValidation>;
+  relations: ResolverStats | null;
+  providers: Record<string, unknown> | null;
 }
 
 export interface RunEvent {

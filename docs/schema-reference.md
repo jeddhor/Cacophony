@@ -309,9 +309,75 @@ will write a biography that contradicts the record it belongs to.
 (default), `placeholder` (a marked stand-in, fitted to the field's length
 constraints) or `null`.
 
+### `reference` — aliases `fk`, `foreign_key`, `belongs_to`
+
+A foreign key. `entity` (required), `field`, `distribution`, `skew`, `unique`,
+`on_unavailable`.
+
+```yaml
+order:
+  count: 45000
+  fields:
+    customer:
+      generator: reference
+      entity: customer          # which entity to point at
+      distribution: skewed      # uniform, skewed, sequential, round_robin
+      skew: 1.9
+```
+
+`field` chooses which column to point at; it defaults to the target's primary
+key. A reference with no declared `type` takes the type of the key it points
+at, because an integer key referenced by a string column joins to nothing.
+
+**`distribution`** is the option that decides whether the data resembles
+anything:
+
+| Value | Behaviour |
+|---|---|
+| `uniform` *(default)* | Every parent equally likely |
+| `skewed` | A power law: the head of the range attracts most references |
+| `sequential` / `round_robin` | Parent `record_index % count` — every parent appears |
+
+`skew` sets how steep `skewed` is. The busiest tenth of parents take
+`0.1 ** (1 / skew)` of the references:
+
+| `skew` | Share taken by the top 10% |
+|---|---|
+| 1.0 | 10% (uniform) |
+| 1.6 *(default)* | 24% |
+| 2.0 | 32% |
+| 3.3 | 50% |
+| 7.2 | 80% |
+
+`unique: true` gives each parent exactly one child, and forces `sequential`.
+Writing it on the field (`unique: true` beside `type:`) means the same thing as
+writing it as an option.
+
+References cost no memory. A parent is reconstructed from its index rather than
+held in a pool, so a hundred million events pointing at five thousand employees
+is the same amount of state as five.
+
+**Reading a parent's other fields.** A template or expression may name the
+referenced entity:
+
+```yaml
+employee:
+  fields:
+    employer:
+      generator: reference
+      entity: company
+    email:
+      generator: template
+      template: "{first_name|lower}@{company.domain}"     # this row's company
+```
+
+The compiler orders `email` after `employer` on its own. Where a field and the
+entity it points at share a name — `customer:` holding a reference to
+`customer` — a dotted read means the related record, not the key.
+
 ### Declared, not yet implemented
 
-`image` `tts` `reference` `script` — see [ROADMAP.md](ROADMAP.md). All accept
+`image` `tts` `script` — see [ROADMAP.md](ROADMAP.md). All accept
 `on_unavailable`: `error` (default), `placeholder`, `null`.
 
 ---
@@ -327,8 +393,9 @@ relationships:
     required: true
 ```
 
-Relationships affect entity ordering today; foreign-key generation arrives with
-Phase 5.
+Relationships affect entity ordering. They are documentation rather than
+machinery: what actually creates a foreign key is a field with
+`generator: reference`, and a `relationships:` block is not needed for that.
 
 ## `providers`
 
@@ -409,7 +476,17 @@ outputs:
     path: out/fixtures
 ```
 
-Formats: `csv`, `json`, `jsonl` / `ndjson`, `parquet`.
+Formats: `csv`, `json`, `jsonl` / `ndjson`, `parquet`, `sqlite`, `sql`.
+
+`sqlite` writes one database for the whole project, with every entity as a
+table and every reference as an enforced `FOREIGN KEY`. `sql` writes a portable
+`CREATE TABLE` plus `INSERT` script per entity, for a database Cacophony has no
+adapter for.
+
+```bash
+cacophony generate project.yaml -o sqlite -d out/
+sqlite3 out/retail-commerce.db "PRAGMA foreign_key_check"   # silent
+```
 
 ---
 
@@ -427,6 +504,9 @@ cacophony generators [--json]
 cacophony providers  [project.yaml] [--test]
 cacophony models     project.yaml [-p PROVIDER]
 cacophony prompt     project.yaml [-e ENTITY] [--batch-size N] [--schema]
+cacophony propose    "a description" [--out FILE] [--providers project.yaml]
+                                     [--adapter NAME] [--url URL] [-m MODEL]
+                                     [--scale N] [--seed N] [--force]
 
 cacophony runs       [-p PROJECT] [--store FILE] [--state STATE] [--json]
 cacophony run        RUN_ID [-p PROJECT] [--events N] [--json]
@@ -497,6 +577,7 @@ cacophony serve --port 8765
 | `POST` | `/api/runs/{id}/pause` | Pause at the next batch boundary |
 | `POST` | `/api/runs/{id}/resume` | Unpause, or restart from checkpoints |
 | `POST` | `/api/runs/{id}/cancel` | Cancel, checkpointing on the way out |
+| `GET` | `/api/runs/{id}/quality` | Referential and distribution scores |
 | `DELETE` | `/api/runs/{id}` | Delete a finished run |
 | `WS` | `/api/runs/{id}/stream` | Live progress |
 | `GET` | `/api/providers` | Adapters, and a project's configured providers |

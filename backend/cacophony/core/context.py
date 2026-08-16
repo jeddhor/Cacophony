@@ -50,6 +50,10 @@ class GenerationContext:
     #: A :class:`cacophony.generation.runtime.GenerationRuntime`, typed loosely
     #: here so that ``core`` keeps its independence from the provider layer.
     runtime: Any | None = None
+    #: Resolves references to other entities' records (section 15). A
+    #: :class:`cacophony.generation.relations.EntityResolver`, typed loosely for
+    #: the same reason.
+    resolver: Any | None = None
     attempt: int = 1
     extras: dict[str, Any] = dataclass_field(default_factory=dict)
 
@@ -102,6 +106,7 @@ class GenerationContext:
             timeline=self.timeline,
             run_id=self.run_id,
             runtime=self.runtime,
+            resolver=self.resolver,
             attempt=self.attempt,
             extras=self.extras,
         )
@@ -120,6 +125,7 @@ class GenerationContext:
             timeline=self.timeline,
             run_id=self.run_id,
             runtime=self.runtime,
+            resolver=self.resolver,
             attempt=self.attempt,
             extras=self.extras,
         )

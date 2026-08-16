@@ -15,8 +15,14 @@ import { type ReactNode, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { api, ApiError } from "../api/client";
-import { liveOrStored, useRun, useRunControl, useRunStream } from "../api/hooks";
-import type { JobView, RunView, StoredEvent } from "../api/types";
+import {
+  liveOrStored,
+  useRun,
+  useRunControl,
+  useRunQuality,
+  useRunStream,
+} from "../api/hooks";
+import type { DistributionCheck, JobView, RunView, StoredEvent } from "../api/types";
 import { PageHead } from "../components/Layout";
 import {
   Empty,
@@ -221,6 +227,10 @@ export function RunPage(): ReactNode {
 
       <div style={{ height: 16 }} />
 
+      <DataQualityPanel runId={runId} active={active} />
+
+      <div style={{ height: 16 }} />
+
       <EventLog runId={runId} live={live.events} active={active} />
     </>
   );
@@ -294,6 +304,141 @@ function JobsPanel({ run }: { run: RunView }): ReactNode {
               </Notice>
             ))}
         </div>
+      )}
+    </Panel>
+  );
+}
+
+/**
+ * Referential and statistical validation, in detail (design document sections
+ * 57 and 58).
+ *
+ * The Inspector's quality bars give the score. This gives the reason: which
+ * field's distribution drifted, by how much, and against how many samples -
+ * because "distribution match 91%" tells a person that something is off and
+ * nothing at all about what to change.
+ */
+function DataQualityPanel({ runId, active }: { runId: string; active: boolean }): ReactNode {
+  const report = useRunQuality(runId, active);
+  if (!report.data) return null;
+
+  const entities = Object.entries(report.data.validation);
+  const referential = entities.filter(([, value]) => value.referential);
+  const checks: DistributionCheck[] = entities.flatMap(
+    ([, value]) => value.statistical?.checks ?? [],
+  );
+  const relations = report.data.relations;
+
+  if (referential.length === 0 && checks.length === 0) return null;
+
+  return (
+    <Panel
+      title="Data quality"
+      actions={
+        report.data.live ? <span className="faint">measured so far</span> : undefined
+      }
+    >
+      {referential.length > 0 && (
+        <>
+          <div className="panel-title">Referential integrity</div>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Entity</th>
+                  <th style={{ textAlign: "right" }}>Checked</th>
+                  <th style={{ textAlign: "right" }}>Broken</th>
+                  <th style={{ textAlign: "right" }}>Integrity</th>
+                </tr>
+              </thead>
+              <tbody>
+                {referential.map(([name, value]) => (
+                  <tr key={name}>
+                    <td>{name}</td>
+                    <td className="nums" style={{ textAlign: "right" }}>
+                      {formatNumber(value.referential?.references_checked ?? 0)}
+                    </td>
+                    <td
+                      className="nums"
+                      style={{
+                        textAlign: "right",
+                        color:
+                          (value.referential?.broken_references ?? 0) > 0
+                            ? "var(--red)"
+                            : undefined,
+                      }}
+                    >
+                      {formatNumber(value.referential?.broken_references ?? 0)}
+                    </td>
+                    <td className="nums" style={{ textAlign: "right" }}>
+                      {((value.referential?.integrity ?? 1) * 100).toFixed(2)}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {relations && (
+            <p className="faint" style={{ fontSize: "0.74rem" }}>
+              {formatNumber(relations.key_lookups)} references resolved,{" "}
+              {(relations.key_hit_rate * 100).toFixed(0)}% from cache — parent records are
+              derived from their index, never held in memory.
+            </p>
+          )}
+        </>
+      )}
+
+      {checks.length > 0 && (
+        <>
+          <div className="panel-title" style={{ marginTop: 14 }}>
+            Declared vs generated
+          </div>
+          {checks.map((check) => (
+            <div key={`${check.entity}.${check.field}`} style={{ marginBottom: 12 }}>
+              <div className="row spread" style={{ fontSize: "0.82rem", marginBottom: 4 }}>
+                <span>
+                  {check.entity}.<strong>{check.field}</strong>
+                </span>
+                <span className="nums faint">
+                  {(check.match * 100).toFixed(1)}% match
+                  {!check.confident && <> · {formatNumber(check.samples)} samples</>}
+                </span>
+              </div>
+              {Object.entries(check.expected).map(([value, expected]) => {
+                const observed = check.observed[value] ?? 0;
+                return (
+                  <div className="dist-row" key={value}>
+                    <span className="dist-label">{value}</span>
+                    <span className="dist-track">
+                      <span
+                        className="dist-fill"
+                        style={{ width: `${Math.min(1, observed) * 100}%` }}
+                      />
+                      {/* The declared proportion, as a mark to compare against. */}
+                      <span
+                        style={{
+                          position: "absolute",
+                          left: `${Math.min(1, expected) * 100}%`,
+                          top: 0,
+                          bottom: 0,
+                          width: 2,
+                          background: "var(--violet)",
+                        }}
+                      />
+                    </span>
+                    <span className="dist-value">
+                      {(observed * 100).toFixed(1)}%
+                      <span className="faint"> / {(expected * 100).toFixed(1)}%</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+          <p className="faint" style={{ fontSize: "0.74rem", marginBottom: 0 }}>
+            The bar is what was generated; the violet mark is what the schema declared.
+          </p>
+        </>
       )}
     </Panel>
   );

@@ -12,7 +12,6 @@ from .deferred import (
     ImageGenerator,
     PendingGenerator,
     PlaceholderMixin,
-    ReferenceGenerator,
     ScriptGenerator,
     SpeechGenerator,
 )
@@ -21,6 +20,7 @@ from .identifiers import GovernmentIdGenerator, PhoneNumberGenerator
 from .llm import LanguageModelGenerator
 from .network import IpAddressGenerator, MacAddressGenerator
 from .numeric import BooleanGenerator, DistributionGenerator, RandomGenerator
+from .reference import ReferenceGenerator
 from .simple import ConstantGenerator, NullGenerator, SequenceGenerator, UuidGenerator
 from .temporal import TimestampGenerator
 from .text import ExpressionGenerator, PatternGenerator, TemplateGenerator

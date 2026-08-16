@@ -134,6 +134,11 @@ class TimestampGenerator(OptionsMixin, SyncGenerator):
         # Give up on the weekday preference rather than distort the window.
         return moment
 
+    def output_type(self) -> DataType | None:
+        # The declared type already decided this in `prepare`; repeating it
+        # here is what lets an untyped field still get a temporal column.
+        return DataType.DATETIME if self.data_type.is_textual else self.data_type
+
     def describe(self) -> str:
         window = f"{self.start.date().isoformat()}..{self.end.date().isoformat()}"
         return f"datetime({window})" + (" business-hours" if self.business_hours else "")

@@ -13,11 +13,11 @@ built and how to run it.
 
 ---
 
-## Status: Phase 4 — Studio
+## Status: Phase 5 — Relational
 
-Phases 1–3 built the engine, the providers and the run system. Phase 4 puts a
-face on them: Cacophony Studio, a React front end for designing schemas,
-previewing what they produce, launching runs and watching them happen.
+Phases 1–4 built the engine, the providers, the run system and the Studio.
+Phase 5 makes entities point at one another: real foreign keys, resolved
+without a key pool, and databases to write them into.
 
 **Working now**
 
@@ -30,12 +30,21 @@ previewing what they produce, launching runs and watching them happen.
   still gets a sensible generator instead of an expensive language-model call
 - 25 registered generators: constant, sequence, uuid, random, boolean,
   distribution, weighted, lookup, pattern, template, expression, datetime, ip,
-  mac, phone, government_id, faker, composite, transform, null and llm, plus
-  the pending image/tts/reference/script declarations
+  mac, phone, government_id, faker, composite, transform, null, reference and
+  llm, plus the pending image/tts/script declarations
 - Hierarchical deterministic seeds — record *n* is identical whether generated
   first, last, in parallel, or after a resume
 - Structural and constraint validation with repair
-- Streaming exporters: CSV, JSON, JSON Lines, Parquet
+- Streaming exporters: CSV, JSON, JSON Lines, Parquet, SQLite and SQL scripts —
+  the last two carrying the foreign keys as constraints the database enforces
+- Foreign keys that cost no memory: a parent is computed from its index rather
+  than kept in a pool, so a hundred million events pointing at five thousand
+  employees is the same amount of state as five
+- Reference distributions — `skewed` by default in the templates, because real
+  activity concentrates and uniform references produce data that is valid and
+  behaves like nothing
+- Referential and statistical validation: sampled foreign-key checks, and
+  generated distributions compared against declared ones
 - Language-model generation against Ollama, llama.cpp and any
   OpenAI-compatible server, addressed by URI
 - The Prompt Compiler — you write what a field *means*, it writes the
@@ -51,20 +60,22 @@ previewing what they produce, launching runs and watching them happen.
   revision each run used
 - REST API and a WebSocket feed of live progress
 - Structured logging with the fields design document section 86 asks for
-- CLI: `validate`, `lint`, `plan`, `prompt`, `preview`, `generate`, `resume`,
-  `runs`, `run`, `serve`, `generators`, `providers --test`, `models`
+- CLI: `validate`, `lint`, `plan`, `prompt`, `propose`, `preview`, `generate`,
+  `resume`, `runs`, `run`, `serve`, `generators`, `providers --test`, `models`
 - **Cacophony Studio**: project dashboard, schema editor with live preview,
   distribution and relationship views, a generate screen with cost estimates,
   and a live run view fed by the WebSocket
 - Schema edits are applied as targeted patches, so a documented YAML file keeps
   its comments, its ordering and its formatting
+- `cacophony propose "…"` — a description of a domain becomes a compiled,
+  linted schema file. The model proposes the structure; Cacophony picks the
+  generators and refuses to hand back anything that does not compile
 
 **Declared but not yet implemented** — the interfaces exist so later phases
 extend the platform rather than rewrite it, as design document section 111
 requires. Fields using these compile, lint, plan and estimate correctly:
 
 - `image`, `tts` — need the multimodal phase
-- `reference` — needs the relational phase
 - `script` — needs sandboxed execution
 
 Set `on_unavailable: placeholder` on any of them to run the whole pipeline
@@ -106,6 +117,69 @@ cacophony generate templates/corporate-directory.yaml \
   --output parquet \
   --out-dir out/
 ```
+
+### Data that joins
+
+`templates/retail-commerce.yaml` is four entities pointing at one another:
+customer → order → order_item → product. Written as a database, the
+relationships become constraints:
+
+```bash
+cacophony generate templates/retail-commerce.yaml -o sqlite -d out/
+
+sqlite3 out/retail-commerce.db "PRAGMA foreign_key_check"   # silent
+sqlite3 out/retail-commerce.db "
+  SELECT p.category, ROUND(SUM(i.line_total), 2) AS revenue
+  FROM order_item i JOIN product p ON i.product = p.sku
+  GROUP BY p.category ORDER BY revenue DESC"
+```
+
+Every key resolves, and it costs nothing to make that true. A record's seed is
+derived from its *position*, so parent 4,823,913 can be reconstructed directly
+— a foreign key is arithmetic on an index rather than a lookup in a table Cacophony
+had to keep. A hundred million events pointing at five thousand employees is
+the same amount of memory as five.
+
+The derived fields follow the reference rather than the entity:
+
+```yaml
+order:
+  fields:
+    customer:
+      generator: reference
+      entity: customer
+      distribution: skewed      # a few customers place most of the orders
+    ship_to_country:
+      generator: expression
+      expression: "customer.country"    # *this* row's customer
+```
+
+The run reports whether it kept its promises:
+
+```
+complete  173,400 records in 25.00s
+  referential     100.00%  (285,000 references checked)
+  distributions   99.04% match
+  references      570,000 resolved, 91% from cache
+```
+
+### Describing a schema instead of writing one
+
+```bash
+cacophony propose "employees, company laptops, login activity and security
+  alerts for a 5,000-person company" -m llama3.1:8b --out security.yaml
+```
+
+This one needs a model. It talks to Ollama on `localhost:11434` by default;
+`--adapter`, `--url` and `-m` point it elsewhere, and `--providers
+project.yaml` borrows the configuration from a project you have already set up.
+
+The model proposes the entities, their fields, what each field means and which
+entity points at which. Cacophony chooses the generators — it knows that a
+field called `email` wants Faker on a reserved domain, and it will not invent a
+generator that does not exist. The proposal is compiled and linted before you
+see it; one that does not compile goes back to the model with the error
+attached, and if that fails too, nothing is returned.
 
 ### Language-model fields
 
@@ -186,6 +260,7 @@ POST /api/projects                 GET  /api/projects/{id}/plan
 POST /api/projects/{id}/runs       POST /api/projects/{id}/preview
 GET  /api/runs/{id}                POST /api/runs/{id}/pause
 POST /api/runs/{id}/resume         POST /api/runs/{id}/cancel
+GET  /api/runs/{id}/quality        GET  /api/projects/{id}/schema
 WS   /api/runs/{id}/stream         GET  /api/providers/{id}/models
 ```
 

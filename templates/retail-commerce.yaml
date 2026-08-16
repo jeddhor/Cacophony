@@ -1,0 +1,250 @@
+# Retail Commerce
+# Design document section 15: cross-record coherence.
+#
+# The relational template. Where `corporate-directory` shows what one entity
+# can look like, this one shows what four entities pointing at each other look
+# like - and it is deliberately the awkward shape rather than the tidy one:
+#
+#     customer 1--N order 1--N order_item N--1 product
+#
+# `order_item` has two parents, which is the case that separates a real
+# reference from a string that resembles one. Every foreign key here resolves,
+# every derived field reads the record its own row pointed at, and none of it
+# costs memory: a reference is computed from the parent's index rather than
+# looked up in a table (section 75).
+#
+# Best seen as a database:
+#
+#     cacophony generate templates/retail-commerce.yaml -o sqlite
+#     sqlite3 out/retail-commerce.db "PRAGMA foreign_key_check"   # silent
+#
+# Deterministic throughout - no model server involved.
+
+project:
+  name: Retail Commerce
+  description: >
+    A fictional online retailer: customers in a handful of countries, a
+    catalogue of products, orders that concentrate on the customers who buy
+    most, and the line items that make them up.
+  seed: 90210
+  locale: en_US
+  profile: balanced
+
+entities:
+
+  # ------------------------------------------------------------------ #
+  # The parents. Both are small, and both are referenced far more often
+  # than they are generated - which is the whole point: a reference is
+  # arithmetic on an index, so 400,000 line items pointing at 400
+  # products cost nothing to keep straight.
+  # ------------------------------------------------------------------ #
+  customer:
+    count: 8000
+    description: Someone who has bought something at least once.
+    primary_key: customer_id
+
+    fields:
+      customer_id:
+        type: integer
+        generator: sequence
+        start: 100000
+
+      first_name:
+        type: string
+        semantic: "Person's given name"
+
+      last_name:
+        type: string
+        semantic: "Person's family name"
+
+      # Reserved domains only (section 62): nothing generated here can
+      # reach a real inbox.
+      email:
+        type: string
+        generator: template
+        template: "{first_name|lower}.{last_name|lower}@{customer_id}.example"
+
+      country:
+        type: enum
+        generator: weighted
+        choices:
+          US: 44
+          GB: 14
+          DE: 11
+          CA: 9
+          FR: 7
+          AU: 6
+          JP: 5
+          BR: 4
+
+      tier:
+        type: enum
+        generator: weighted
+        choices:
+          standard: 76
+          plus: 19
+          premier: 5
+
+      signed_up_at:
+        type: datetime
+        generator: datetime
+        start: "2019-01-01"
+        end: "2025-06-30"
+
+  # ------------------------------------------------------------------ #
+  product:
+    count: 400
+    description: An item in the catalogue.
+    primary_key: sku
+
+    fields:
+      sku:
+        type: string
+        generator: sequence
+        format: "SKU-{00000}"
+        unique: true
+
+      name:
+        type: string
+        generator: faker
+        provider: catch_phrase
+
+      category:
+        type: enum
+        generator: weighted
+        choices:
+          Home: 22
+          Apparel: 20
+          Electronics: 17
+          Outdoors: 13
+          Kitchen: 12
+          Beauty: 9
+          Toys: 7
+
+      # Lognormal rather than uniform: catalogue prices cluster low with a
+      # long tail, and a flat spread between 5 and 500 looks like nothing
+      # anybody has ever sold.
+      list_price:
+        type: decimal
+        generator: distribution
+        distribution: lognormal
+        mean: 3.4
+        sigma: 0.7
+        min: 3.99
+        max: 2499.0
+        precision: 2
+
+      discontinued:
+        type: boolean
+        generator: boolean
+        probability: 0.06
+
+  # ------------------------------------------------------------------ #
+  # The children. `distribution: skewed` is the important option: a few
+  # customers place most of the orders, which is what real activity does
+  # and what a uniform reference never produces.
+  # ------------------------------------------------------------------ #
+  order:
+    count: 45000
+    description: One purchase, by one customer, on one day.
+    primary_key: order_id
+
+    fields:
+      order_id:
+        type: integer
+        generator: sequence
+        start: 5000000
+
+      customer:
+        generator: reference
+        entity: customer
+        distribution: skewed
+        skew: 1.9
+
+      # Reads the customer this row actually chose, not a different one.
+      # The compiler works out that this field has to be generated after
+      # `customer`; nobody has to write that down.
+      ship_to_country:
+        type: string
+        generator: expression
+        expression: "customer.country"
+
+      placed_at:
+        type: datetime
+        generator: datetime
+        start: "2024-01-01"
+        end: "2025-12-31"
+        business_hours: true
+
+      channel:
+        type: enum
+        generator: weighted
+        choices:
+          web: 58
+          mobile_app: 34
+          phone: 5
+          in_store: 3
+
+      status:
+        type: enum
+        generator: weighted
+        choices:
+          delivered: 71
+          shipped: 12
+          processing: 8
+          cancelled: 5
+          returned: 4
+
+  # ------------------------------------------------------------------ #
+  order_item:
+    count: 120000
+    description: One line of one order.
+    primary_key: order_item_id
+
+    fields:
+      order_item_id:
+        type: integer
+        generator: sequence
+        start: 1
+
+      # Two parents in one record. Each resolves independently, and each
+      # derived field below reads the parent its own row pointed at.
+      order:
+        generator: reference
+        entity: order
+        distribution: skewed
+        skew: 1.3
+
+      product:
+        generator: reference
+        entity: product
+        distribution: skewed
+        skew: 2.1
+
+      quantity:
+        type: integer
+        generator: weighted
+        choices:
+          1: 62
+          2: 21
+          3: 9
+          4: 4
+          5: 2
+          6: 2
+
+      # The price paid: the list price less the standing 10% members'
+      # discount. Derived rather than drawn, so the arithmetic below is
+      # consistent with the catalogue.
+      #
+      # `* 9 / 10` rather than `* 0.9` because these are decimals, and a
+      # decimal will not multiply by a float - which is the same reason money
+      # is stored as a decimal in the first place.
+      unit_price:
+        type: decimal
+        generator: expression
+        expression: "round(product.list_price * 9 / 10, 2)"
+
+      line_total:
+        type: decimal
+        generator: expression
+        expression: "round(unit_price * quantity, 2)"

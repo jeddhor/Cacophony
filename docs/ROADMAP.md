@@ -159,14 +159,58 @@ ruamel's round-trip parser: changing a count changes one scalar, and the
 comment above it survives. The whole patch is verified before anything is
 written, so a rejected edit leaves the file byte-for-byte as it was.
 
-## Phase 5 — Relational
+## Phase 5 — Relational ✅
 
-*Design document section 91.*
+**Delivered.** Design document sections 8, 15, 26, 33, 50, 57, 58, 91.
 
-Makes `generator: reference` real: foreign-key generation against materialised
-key pools, the entity graph UI, stateful record context, SQLite and database
-outputs, statistical distribution validation, the AI schema assistant
-(section 50).
+`generator: reference` is real. Entities point at one another, the keys
+resolve, and a field that reads a parent's other columns reads the parent its
+own row chose.
+
+- **References computed, not looked up** (sections 15, 75). A record's seed is
+  derived by hashing its *position*, so parent 4,823,913 can be reconstructed
+  directly. A foreign key is therefore arithmetic: pick an index in the
+  parent's range, generate exactly the fields that produce that parent's key.
+  No key pool, no memory proportional to the parent count, and the same answer
+  whichever order the entities were generated in
+- **Reference distributions** (section 15): `uniform`, `skewed`, `sequential`
+  and `round_robin`. `skew` is documented as an exact figure — the busiest
+  tenth of parents take `0.1 ** (1 / skew)` of the references — so a schema can
+  choose a shape rather than hope for one
+- **Cross-entity field access**: `{company.domain}` in a template, or
+  `customer.country` in an expression, resolves against the record *this row*
+  referenced. The compiler works out that such a field must be generated after
+  whichever field chose the parent; nobody writes that dependency down
+- **Types that match across the join**: a reference with no declared type takes
+  the type of the key it points at, and a field that named a generator but no
+  type takes the type that generator produces. An integer key referenced by a
+  string column joins to nothing
+- **Referential and statistical validation** (section 57): sampled foreign-key
+  checks, and total-variation distance between declared and generated
+  distributions. Both feed section 58's quality report, in the CLI, the API and
+  the Studio
+- **SQLite and SQL script outputs** (section 33): one database for the whole
+  project, with `FOREIGN KEY … REFERENCES` clauses the database enforces and
+  column types taken from the schema. `PRAGMA foreign_key_check` is silent on
+  what Cacophony produces
+- **Reference linting**: unique references that outnumber their parents,
+  references to empty entities, references to non-unique keys, self-references,
+  and evenly spread references at a scale where evenness is implausible
+- **The AI schema assistant** (section 50): a description becomes a compiled,
+  linted schema. `cacophony propose "employees, laptops and login activity"`
+- **Studio**: the relationship graph draws foreign keys labelled with the field
+  that carries them, and the run view shows generated distributions against
+  declared ones
+- `templates/retail-commerce.yaml`: customer → order → order_item → product,
+  the four-entity shape with a child that has two parents
+
+**The division of labour in the assistant.** The model proposes structure —
+what entities exist, what fields they have, what each field *means*, which
+entity points at which. Cacophony chooses the generators, because that is a
+question about Cacophony and the recommendation engine (section 68) answers it
+better than a model can. Every proposal is compiled and linted before it is
+shown; one that does not compile is handed back to the model with the error
+attached, and if the second attempt fails too, nothing is returned.
 
 ## Phase 6 — Multimodal
 
@@ -223,12 +267,13 @@ mixer used for the per-record and per-field levels, where the derivation runs
 once per generated value. Both are deterministic, order-independent and well
 distributed; neither is cryptographic, and nothing depends on their being so.
 
-**Unimplemented generators (section 111).** `image`, `tts`, `reference` and
+**Unimplemented generators (section 111).** `image`, `tts` and
 `script` are registered and compilable now, so a forward-looking schema
 validates, lints, plans and estimates correctly. At generation time they follow
 section 65's failure-policy list: error by default, or emit a marked
 placeholder, or emit null. `llm` followed the same pattern until Phase 2
-implemented it; nothing about the schemas written against it had to change.
+implemented it and `reference` until Phase 5; nothing about the schemas written
+against either had to change.
 
 **Generation modes (section 11).** `expansion` is a synonym for `per_record`
 rather than a separate code path, because contextual expansion is what every
@@ -305,3 +350,39 @@ deliberately so. Section 8 says scripts should run in an isolated environment
 "where practical". A project file is something people share; an unsandboxed
 `script:` field would make opening one equivalent to running a stranger's code.
 The `expression` generator covers derived values safely today.
+
+**References at scale (sections 15, 26).** Section 15 asks that computers
+belong to employees and login events reference those computers. The obvious
+implementation is a materialised key pool: generate the parents, keep their
+keys, hand them out. That is correct and it does not scale — ten million
+parents is a data structure larger than most of the datasets Cacophony is asked
+to produce, held for the duration of a run that produces something else.
+
+Because seeds are derived from position rather than from stream order
+(section 75), the pool is unnecessary: any parent can be reconstructed on
+demand from its index, and only the fields its key depends on need generating.
+Two bounded caches sit on top — recent keys, and recent whole parent records
+for the fields that want more than the key — and both are pure accelerators. A
+cold cache changes speed and nothing else, which is asserted in the tests
+rather than assumed.
+
+One consequence worth stating: resolving a parent never makes a model call.
+Provider-backed fields are skipped when a parent record is derived, because one
+login event should not cost a biography.
+
+**Sampled referential checks (section 57).** Verifying ten million foreign keys
+one at a time costs more than generating them did. Referential validation
+therefore checks a bounded sample and reports how large a sample it was, which
+is an honest partial answer rather than an expensive complete one nobody waits
+for. The check earns its place despite references being valid by construction,
+because chaos injection deliberately breaks them (section 78) and because a
+schema can point at an entity a particular run did not generate.
+
+**Reference distribution defaults.** `uniform` is the default because it is the
+one that cannot surprise anyone. It is also wrong for almost every real
+dataset, which is why `skewed` exists and why the linter mentions it when a
+project spreads half a million children evenly over a few hundred parents. The
+default `skew` of 1.6 is deliberately moderate: over-skewing by default would
+put most of a dataset on a handful of parents and leave the rest barely
+exercised, and too-concentrated data looks real until someone queries the tail,
+while too-even data is obvious immediately.

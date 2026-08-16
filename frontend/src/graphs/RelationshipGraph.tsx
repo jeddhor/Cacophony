@@ -9,10 +9,19 @@
  *        │              └── Email
  *
  * Section 40 names React Flow as particularly suitable for this, and section 53
- * wants an interactive canvas. Edges come from two places, and both are worth
- * seeing: relationships the schema declares outright, and dependencies the
- * compiler *derived* from field references. The second set is the more useful
- * one, because it is the reason the entities generate in the order they do.
+ * wants an interactive canvas. Edges come from three places, in decreasing
+ * order of how much they tell you:
+ *
+ *   - **References.** An actual foreign key, labelled with the field that
+ *     carries it. `order.customer -> customer_id` says what the relationship
+ *     *is*, not merely that one exists.
+ *   - **Derived dependencies.** Why the entities generate in this order, for
+ *     the pairs no reference explains - a template reading another entity's
+ *     field, say.
+ *   - **Declared relationships.** What the schema stated outright.
+ *
+ * A reference edge supersedes the dependency edge for the same pair, because
+ * the two describe one connection and the reference describes it better.
  */
 
 import {
@@ -29,7 +38,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { type ReactNode, useMemo } from "react";
 
-import type { EntityView, Relationship } from "../api/types";
+import type { EntityView, ReferenceEdge, Relationship } from "../api/types";
 
 interface EntityNodeData extends Record<string, unknown> {
   name: string;
@@ -68,18 +77,20 @@ export function RelationshipGraph({
   entities,
   order,
   relationships,
+  references = [],
   selected,
   onSelect,
 }: {
   entities: Record<string, EntityView>;
   order: string[];
   relationships: Relationship[];
+  references?: ReferenceEdge[];
   selected?: string | null;
   onSelect?: (entity: string) => void;
 }): ReactNode {
   const { nodes, edges } = useMemo(
-    () => build(entities, order, relationships, selected ?? null),
-    [entities, order, relationships, selected],
+    () => build(entities, order, relationships, references, selected ?? null),
+    [entities, order, relationships, references, selected],
   );
 
   if (order.length === 0) {
@@ -127,6 +138,7 @@ function build(
   entities: Record<string, EntityView>,
   order: string[],
   relationships: Relationship[],
+  references: ReferenceEdge[],
   selected: string | null,
 ): { nodes: Node[]; edges: Edge[] } {
   const depth = new Map<string, number>();
@@ -169,12 +181,39 @@ function build(
 
   const edges: Edge[] = [];
   const seen = new Set<string>();
+  // Pairs a reference already explains, so the generic dependency edge for the
+  // same pair is not drawn on top of it.
+  const referenced = new Set<string>();
 
-  // Derived dependencies: why the entities generate in this order.
+  // Foreign keys: the relationships that actually exist in the data.
+  for (const reference of references) {
+    const pair = `${reference.to_entity}->${reference.from_entity}`;
+    const id = `ref:${pair}:${reference.from_field}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    referenced.add(pair);
+    edges.push({
+      id,
+      source: reference.to_entity,
+      target: reference.from_entity,
+      animated: true,
+      style: { stroke: "var(--cyan)", strokeWidth: 2 },
+      label: reference.unique
+        ? `${reference.from_field} (1:1)`
+        : reference.distribution === "skewed"
+          ? `${reference.from_field} (skewed)`
+          : reference.from_field,
+      labelStyle: { fill: "#c8c8dc", fontSize: 10 },
+      labelBgStyle: { fill: "#14141c" },
+    });
+  }
+
+  // Derived dependencies: why the entities generate in this order, for the
+  // pairs no foreign key accounts for.
   for (const name of order) {
     for (const parent of entities[name]?.depends_on ?? []) {
       const id = `dep:${parent}->${name}`;
-      if (seen.has(id)) continue;
+      if (seen.has(id) || referenced.has(`${parent}->${name}`)) continue;
       seen.add(id);
       edges.push({
         id,
@@ -192,7 +231,8 @@ function build(
   // Declared relationships, where they say something the dependency did not.
   for (const relationship of relationships) {
     const id = `rel:${relationship.from}->${relationship.to}`;
-    if (seen.has(id) || seen.has(`dep:${relationship.from}->${relationship.to}`)) continue;
+    const pair = `${relationship.from}->${relationship.to}`;
+    if (seen.has(id) || seen.has(`dep:${pair}`) || referenced.has(pair)) continue;
     seen.add(id);
     edges.push({
       id,

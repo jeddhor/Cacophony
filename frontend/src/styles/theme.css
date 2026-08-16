@@ -560,7 +560,7 @@ label {
 
 .dist-row {
   display: grid;
-  grid-template-columns: minmax(80px, 150px) 1fr 52px;
+  grid-template-columns: minmax(80px, 150px) 1fr minmax(52px, auto);
   gap: 10px;
   align-items: center;
   margin-bottom: 5px;
@@ -571,6 +571,9 @@ label {
   background: var(--surface-2);
   border-radius: 3px;
   overflow: hidden;
+  /* Anchors the declared-proportion mark drawn over the generated bar
+     (design document section 58). */
+  position: relative;
 }
 .dist-fill {
   height: 100%;

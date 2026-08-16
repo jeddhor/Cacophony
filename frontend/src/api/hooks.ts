@@ -41,6 +41,7 @@ export const keys = {
   runs: (params: Record<string, unknown>) => ["runs", params] as const,
   run: (id: string) => ["run", id] as const,
   runEvents: (id: string) => ["run-events", id] as const,
+  runQuality: (id: string) => ["run-quality", id] as const,
   providers: (id?: number) => ["providers", id ?? null] as const,
 };
 
@@ -166,6 +167,21 @@ export const useRun = (id: string | null) =>
       const state = query.state.data?.state;
       return state === "running" || state === "paused" || state === "queued" ? 3_000 : false;
     },
+  });
+
+/**
+ * The quality report for a run (design document section 58).
+ *
+ * Polled while the run is executing, because the numbers are meaningful long
+ * before the run finishes: referential integrity measured over four million
+ * records is already the answer.
+ */
+export const useRunQuality = (id: string | null, live = false) =>
+  useQuery({
+    queryKey: keys.runQuality(id ?? ""),
+    queryFn: () => api.runQuality(id as string),
+    enabled: Boolean(id),
+    refetchInterval: live ? 5_000 : false,
   });
 
 export function useStartRun(projectId: number) {

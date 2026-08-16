@@ -9,9 +9,10 @@ These generators are therefore real, registered and compilable today. A schema
 that uses ``generator: image`` validates, lints, plans and estimates correctly -
 it simply cannot produce a value until the multimodal phase lands.
 
-``llm`` used to live here. It now has a working implementation in
-:mod:`cacophony.generation.generators.llm`; only the media, reference and
-script generators are still waiting on their backends.
+``llm`` and ``reference`` used to live here. Both now have working
+implementations - in :mod:`cacophony.generation.generators.llm` and
+:mod:`cacophony.generation.generators.reference` - leaving only the media and
+script generators waiting on their backends.
 
 What happens at generation time follows section 65's failure-policy list:
 
@@ -42,7 +43,6 @@ __all__ = [
     "ImageGenerator",
     "PendingGenerator",
     "PlaceholderMixin",
-    "ReferenceGenerator",
     "ScriptGenerator",
     "SpeechGenerator",
 ]
@@ -157,40 +157,6 @@ class SpeechGenerator(PendingGenerator):
 
     def placeholder(self, context: GenerationContext) -> Any:
         return f"assets/{context.entity.name}/placeholder_{context.record_index:08d}.wav"
-
-
-@register_generator("reference", aliases=("fk", "foreign_key", "belongs_to"))
-class ReferenceGenerator(PendingGenerator):
-    """A foreign-key-style reference to another entity (section 8).
-
-    Options:
-        ``entity``  the referenced entity
-        ``field``   the referenced field (defaults to its primary key)
-
-    Real foreign-key generation needs a materialised key pool for the target
-    entity, which is the relational phase's job (section 91). The declaration
-    already affects entity ordering today, so a schema written now compiles to
-    the correct topological order.
-    """
-
-    phase = "the relational phase"
-    kind = "reference"
-    deterministic = True
-
-    def prepare(self) -> None:
-        super().prepare()
-        target = self.opt_str("entity", None, "references", "to")
-        if target is None:
-            raise self._fail("option 'entity' is required")
-        self.target: str = target
-        self.target_field = self.opt_str("field", None, "key")
-
-    def placeholder(self, context: GenerationContext) -> Any:
-        return f"[ref:{self.target}#{context.record_index}]"
-
-    def describe(self) -> str:
-        target = self.target + (f".{self.target_field}" if self.target_field else "")
-        return f"reference({target}, pending)"
 
 
 @register_generator("script", aliases=("python", "custom"))

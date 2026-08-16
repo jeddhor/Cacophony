@@ -202,15 +202,16 @@ export function StudioPage(): ReactNode {
                   entities={entities}
                   order={order}
                   relationships={schema.data.relationships}
+                  references={schema.data.references}
                   selected={entityName}
                   onSelect={selectEntity}
                 />
               </Suspense>
               <p className="faint" style={{ fontSize: "0.76rem", marginBottom: 0 }}>
-                Solid cyan edges are dependencies the compiler derived from
-                field references — they are why the entities generate in this
+                Cyan edges are foreign keys, labelled with the field that
+                carries them; they are also why the entities generate in this
                 order. Dashed violet edges are relationships the schema
-                declares.
+                declares but no field implements.
               </p>
             </Panel>
           )}

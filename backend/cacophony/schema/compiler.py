@@ -21,6 +21,7 @@ validate`` instead of two million records into a run.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any
 
 from ..core.errors import GeneratorConfigError, SchemaError, UnknownFieldReferenceError
 from ..core.types import DataType
@@ -114,6 +115,49 @@ def compile_project(project: ProjectSpec) -> CompiledProject:
 # --------------------------------------------------------------------------- #
 
 
+def _is_reference(generator: Any) -> bool:
+    """Whether a generator spec names the reference generator.
+
+    Resolved through the registry rather than compared against a literal, so
+    ``fk:`` and ``belongs_to:`` are recognised as readily as ``reference:``.
+    """
+    if generator is None:
+        return False
+    from ..generation.registry import REGISTRY
+
+    return REGISTRY.resolve(str(generator.type)) == "reference"
+
+
+def _adopt_reference_types(project: ProjectSpec, entity: EntitySpec) -> None:
+    """Give each reference field the type of the key it points at.
+
+    A foreign key that is an integer on one side and a string on the other is
+    not a foreign key. Fields default to ``string``, so an untyped reference to
+    an integer primary key would be coerced to ``"2"`` - which reads fine, joins
+    against nothing, and fails referential validation for a reason that looks
+    like a bug in the reference rather than in the type.
+
+    A field that states its own type keeps it: this fills a gap, it does not
+    overrule anyone.
+    """
+    for field_spec in entity.fields.values():
+        if "type" in field_spec.model_fields_set or not _is_reference(field_spec.generator):
+            continue
+
+        options = field_spec.generator.options if field_spec.generator else {}
+        target_name = options.get("entity") or options.get("references") or options.get("to")
+        target = project.entities.get(str(target_name)) if target_name else None
+        if target is None:
+            # An unknown target is the reference generator's error to report,
+            # with the message it has for exactly that case.
+            continue
+
+        key = options.get("field") or options.get("key") or target.resolved_primary_key()
+        key_spec = target.fields.get(str(key)) if key else None
+        if key_spec is not None:
+            field_spec.type = key_spec.type
+
+
 def _compile_entity(
     *,
     project: ProjectSpec,
@@ -123,6 +167,8 @@ def _compile_entity(
 ) -> CompiledEntity:
     if not entity.fields:
         raise SchemaError(f"Entity '{entity.name}' defines no fields.")
+
+    _adopt_reference_types(project, entity)
 
     field_graph = DependencyGraph(kind="field")
     for field_name in entity.fields:
@@ -151,6 +197,31 @@ def _compile_entity(
             if other != entity.name:
                 related_entities.add(other)
 
+    # Which field of this entity points at each other entity. A reference
+    # generator declares its target, so this is read off the compiled fields
+    # rather than guessed from names.
+    reference_fields: dict[str, str] = {}
+    for name, compiled in compiled_fields.items():
+        target = getattr(compiled.generator, "target", None)
+        if isinstance(target, str) and target not in reference_fields:
+            reference_fields[target] = name
+
+    # A field that reads ``company.domain`` must be produced *after* whichever
+    # field chose the company, or it would be handed a different one. The user
+    # never wrote that dependency because it is not theirs to know.
+    for name, compiled in compiled_fields.items():
+        for other in compiled.related_entities:
+            supplier = reference_fields.get(other)
+            if supplier and supplier != name:
+                field_graph.add_dependency(name, supplier)
+                if supplier not in compiled.dependencies:
+                    compiled.dependencies = (*compiled.dependencies, supplier)
+                # Tell the reference generator its record will be read, so it
+                # can be resolved in full rather than only for its key.
+                generator = compiled_fields[supplier].generator
+                if hasattr(generator, "expose_record"):
+                    generator.expose_record = True
+
     field_order = field_graph.topological_order()
 
     return CompiledEntity(
@@ -159,6 +230,7 @@ def _compile_entity(
         fields=[compiled_fields[name] for name in field_order],
         depends_on=tuple(sorted(related_entities)),
         field_layers=field_graph.layers(),
+        reference_fields=reference_fields,
     )
 
 
@@ -192,6 +264,15 @@ def _compile_field(
             str(exc).split(": ", 1)[-1],
             location=f"{entity.name}.{field_spec.name}",
         ) from exc
+
+    # A field that named a generator but not a type takes the type the
+    # generator produces. Without this, ``generator: boolean`` on an untyped
+    # field is coerced to the string "True" - valid, and wrong in every output
+    # that has real types.
+    if "type" not in field_spec.model_fields_set:
+        produced = generator.output_type()
+        if produced is not None:
+            field_spec.type = produced
 
     own_fields, cross_entity = _split_references(
         [*field_spec.depends_on, *generator.dependencies()]

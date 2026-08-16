@@ -740,3 +740,202 @@ class TestShippedTemplatesEndToEnd:
         assert result.exit_code == 0, result.stdout
         row = json.loads((out / "authentication.jsonl").read_text(encoding="utf-8").splitlines()[0])
         assert row["source_ip"].startswith(("192.0.2.", "198.51.100.", "203.0.113."))
+
+
+# --------------------------------------------------------------------------- #
+# Relational generation and the schema assistant (sections 15, 33, 50)
+# --------------------------------------------------------------------------- #
+
+RELATIONAL_YAML = """
+project:
+  name: CLI Relational
+  seed: 8080
+
+entities:
+  supplier:
+    count: 6
+    primary_key: supplier_id
+    fields:
+      supplier_id:
+        type: integer
+        generator: sequence
+      name:
+        generator: faker
+        provider: company
+
+  part:
+    count: 50
+    primary_key: part_id
+    fields:
+      part_id:
+        type: integer
+        generator: sequence
+      supplier:
+        generator: reference
+        entity: supplier
+        distribution: skewed
+      grade:
+        type: enum
+        generator: weighted
+        choices:
+          standard: 70
+          premium: 30
+"""
+
+MOCK_PROVIDER_YAML = """
+project:
+  name: Assistant Host
+  seed: 1
+providers:
+  designer:
+    type: language_model
+    adapter: mock
+    model: mock-designer
+entities:
+  placeholder:
+    count: 1
+    fields:
+      id:
+        type: integer
+        generator: sequence
+"""
+
+
+@pytest.fixture
+def relational_file(tmp_path: Path) -> Path:
+    path = tmp_path / "relational.yaml"
+    path.write_text(RELATIONAL_YAML, encoding="utf-8")
+    return path
+
+
+class TestRelationalCli:
+    def test_sqlite_output_is_one_database_with_a_working_join(
+        self, relational_file: Path, tmp_path: Path
+    ) -> None:
+        import sqlite3
+
+        out = tmp_path / "db"
+        result = invoke("generate", str(relational_file), "-o", "sqlite", "-d", str(out))
+        assert result.exit_code == 0, result.stdout
+
+        files = list(out.glob("*.db"))
+        assert [path.name for path in files] == ["cli-relational.db"]
+
+        connection = sqlite3.connect(files[0])
+        try:
+            assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+            joined = connection.execute(
+                "SELECT COUNT(*) FROM part p JOIN supplier s ON p.supplier = s.supplier_id"
+            ).fetchone()[0]
+            assert joined == 50
+        finally:
+            connection.close()
+
+    def test_a_sql_script_loads_into_a_database(
+        self, relational_file: Path, tmp_path: Path
+    ) -> None:
+        import sqlite3
+
+        out = tmp_path / "sql"
+        assert invoke("generate", str(relational_file), "-o", "sql", "-d", str(out)).exit_code == 0
+
+        script = (out / "supplier.sql").read_text() + (out / "part.sql").read_text()
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript(script)
+            assert connection.execute("SELECT COUNT(*) FROM part").fetchone()[0] == 50
+        finally:
+            connection.close()
+
+    def test_the_run_reports_referential_integrity(
+        self, relational_file: Path, tmp_path: Path
+    ) -> None:
+        result = invoke("generate", str(relational_file), "-d", str(tmp_path / "out"))
+        assert result.exit_code == 0
+        assert "referential" in result.stdout
+        assert "distributions" in result.stdout
+
+    def test_a_record_override_keeps_references_inside_the_run(
+        self, relational_file: Path, tmp_path: Path
+    ) -> None:
+        """`--records 4` must not produce a reference to supplier 6."""
+        import json
+
+        out = tmp_path / "small"
+        assert invoke("generate", str(relational_file), "-d", str(out), "-n", "4").exit_code == 0
+
+        parts = [json.loads(line) for line in (out / "part.jsonl").read_text().splitlines()]
+        assert all(1 <= part["supplier"] <= 4 for part in parts)
+
+    def test_lint_reports_a_reference_problem(self, tmp_path: Path) -> None:
+        broken = RELATIONAL_YAML.replace(
+            "      supplier:\n        generator: reference\n        entity: supplier\n",
+            "      supplier:\n        generator: reference\n        entity: supplier\n        unique: true\n",
+        )
+        path = tmp_path / "broken.yaml"
+        path.write_text(broken, encoding="utf-8")
+
+        result = invoke("lint", str(path))
+        assert result.exit_code == 1
+        assert "unique-reference-overflow" in result.stdout
+
+
+class TestPropose:
+    @pytest.fixture
+    def provider_file(self, tmp_path: Path) -> Path:
+        path = tmp_path / "provider.yaml"
+        path.write_text(MOCK_PROVIDER_YAML, encoding="utf-8")
+        return path
+
+    def test_it_writes_a_schema_that_validates(self, provider_file: Path, tmp_path: Path) -> None:
+        out = tmp_path / "proposed.yaml"
+        result = invoke(
+            "propose", "a library of books", "--providers", str(provider_file), "--out", str(out)
+        )
+        assert result.exit_code == 0, result.stdout
+        assert out.exists()
+        # Whatever the model said, what was written has to compile.
+        assert invoke("validate", str(out)).exit_code == 0
+
+    def test_it_prints_the_schema_when_no_file_is_named(self, provider_file: Path) -> None:
+        result = invoke("propose", "a library", "--providers", str(provider_file))
+        assert result.exit_code == 0, result.stdout
+        assert "project:" in result.stdout
+        assert "entities:" in result.stdout
+
+    def test_it_refuses_to_overwrite_without_force(
+        self, provider_file: Path, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "existing.yaml"
+        out.write_text("keep me", encoding="utf-8")
+
+        result = invoke(
+            "propose", "a library", "--providers", str(provider_file), "--out", str(out)
+        )
+        assert result.exit_code == 2
+        assert "--force" in result.stderr
+        assert out.read_text() == "keep me"
+
+    def test_force_overwrites(self, provider_file: Path, tmp_path: Path) -> None:
+        out = tmp_path / "existing.yaml"
+        out.write_text("keep me", encoding="utf-8")
+
+        result = invoke(
+            "propose",
+            "a library",
+            "--providers",
+            str(provider_file),
+            "--out",
+            str(out),
+            "--force",
+        )
+        assert result.exit_code == 0, result.stdout
+        assert out.read_text() != "keep me"
+
+    def test_a_project_with_no_language_model_is_refused(
+        self, project_file: Path, tmp_path: Path
+    ) -> None:
+        result = invoke("propose", "a library", "--providers", str(project_file))
+        assert result.exit_code == 2
+        # Errors go to stderr, so a piped proposal stays machine-readable.
+        assert "no language model" in result.stderr

@@ -14,11 +14,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from .referential import ReferentialValidator, StatisticalValidator
 from .results import Severity, ValidationResult, ValidationStats
 from .validators import ConstraintValidator, StructuralValidator
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..core.record import GeneratedRecord
+    from ..generation.relations import EntityResolver
     from ..schema.plan import CompiledEntity
 
 __all__ = ["RecordValidator"]
@@ -35,9 +37,27 @@ class RecordValidator:
     that memory is a job for the relational phase's key pools.
     """
 
-    def __init__(self, entity: CompiledEntity, *, track_unique: bool = True) -> None:
+    def __init__(
+        self,
+        entity: CompiledEntity,
+        *,
+        track_unique: bool = True,
+        resolver: EntityResolver | None = None,
+        reference_sample_every: int = 1,
+    ) -> None:
         self.entity = entity
         self.stats = ValidationStats()
+
+        # Section 57's referential and statistical categories. Both need to
+        # know something about the dataset rather than only about the value,
+        # so both are optional: without a resolver there is nothing to check a
+        # foreign key against.
+        self.referential = (
+            ReferentialValidator(entity, resolver, sample_every=reference_sample_every)
+            if resolver is not None
+            else None
+        )
+        self.statistical = StatisticalValidator(entity)
 
         self._structural: list[tuple[str, StructuralValidator]] = []
         self._constraint: list[tuple[str, ConstraintValidator]] = []
@@ -69,6 +89,12 @@ class RecordValidator:
         for name, constraint_validator in self._constraint:
             result.issues.extend(constraint_validator.validate_sync(record.values.get(name)).issues)
 
+        if self.referential is not None and not self.referential.is_noop:
+            result.issues.extend(self.referential.validate(record).issues)
+
+        if not self.statistical.is_noop:
+            self.statistical.observe(record)
+
         for name in self._unique_fields:
             value = record.values.get(name)
             if value is None:
@@ -92,6 +118,16 @@ class RecordValidator:
         """Clear per-run state so the validator can be reused for another pass."""
         self.stats = ValidationStats()
         self._seen = {name: set() for name in self._unique_fields}
+        self.statistical = StatisticalValidator(self.entity)
+
+    def summary(self) -> dict[str, Any]:
+        """Everything this validator learned, for the run report (section 58)."""
+        data: dict[str, Any] = self.stats.to_dict()
+        if self.referential is not None and not self.referential.is_noop:
+            data["referential"] = self.referential.to_dict()
+        if not self.statistical.is_noop:
+            data["statistical"] = self.statistical.to_dict()
+        return data
 
 
 def _hashable(value: Any) -> Any:

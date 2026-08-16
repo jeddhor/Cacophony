@@ -25,6 +25,7 @@ from cacophony.runs.config import ResourceLimits, RunConfig  # noqa: E402
 from helpers import TEMPLATES  # noqa: E402
 
 CORPORATE = str(TEMPLATES / "corporate-directory.yaml")
+RETAIL = str(TEMPLATES / "retail-commerce.yaml")
 
 
 @pytest.fixture
@@ -52,6 +53,12 @@ def await_run(client, run_id: str, *, tries: int = 400) -> dict[str, Any]:
             return payload
         time.sleep(0.02)
     raise AssertionError(f"run {run_id} did not finish")
+
+
+@pytest.fixture
+def relational_project_id(client) -> int:
+    """A project with real foreign keys, for the relational routes."""
+    return client.post("/api/projects", json={"path": RETAIL}).json()["id"]
 
 
 # --------------------------------------------------------------------------- #
@@ -609,3 +616,119 @@ class TestLiveFeed:
             return [payload async for payload in service.stream("nope")]
 
         assert asyncio.run(drive()) == []
+
+
+# --------------------------------------------------------------------------- #
+# Relationships and quality (design document sections 15, 57, 58)
+# --------------------------------------------------------------------------- #
+
+
+class TestReferences:
+    def test_the_schema_reports_every_foreign_key_as_an_edge(
+        self, client, relational_project_id
+    ) -> None:
+        schema = client.get(f"/api/projects/{relational_project_id}/schema").json()
+        edges = {
+            (edge["from_entity"], edge["from_field"], edge["to_entity"], edge["to_field"])
+            for edge in schema["references"]
+        }
+        assert ("order", "customer", "customer", "customer_id") in edges
+        assert ("order_item", "product", "product", "sku") in edges
+
+    def test_a_reference_field_carries_where_it_points(self, client, relational_project_id) -> None:
+        schema = client.get(f"/api/projects/{relational_project_id}/schema").json()
+        reference = schema["entities"]["order"]["fields"]["customer"]["reference"]
+        assert reference == {
+            "entity": "customer",
+            "field": "customer_id",
+            "distribution": "skewed",
+            "unique": False,
+        }
+
+    def test_an_ordinary_field_points_nowhere(self, client, relational_project_id) -> None:
+        schema = client.get(f"/api/projects/{relational_project_id}/schema").json()
+        assert schema["entities"]["customer"]["fields"]["email"]["reference"] is None
+
+
+class TestQualityRoute:
+    def _start(self, client, project_id, tmp_path, **body: Any) -> str:
+        payload = {
+            "output_dir": str(tmp_path / "out"),
+            "records": 200,
+            "limits": {"batch_size": 100},
+            **body,
+        }
+        response = client.post(f"/api/projects/{project_id}/runs", json=payload)
+        assert response.status_code == 202, response.text
+        return response.json()["id"]
+
+    def test_it_reports_referential_integrity(
+        self, client, relational_project_id, tmp_path
+    ) -> None:
+        run_id = self._start(client, relational_project_id, tmp_path)
+        await_run(client, run_id)
+
+        report = client.get(f"/api/runs/{run_id}/quality").json()
+        assert report["state"] == "completed"
+        assert report["quality"]["referential_integrity"] == 1.0
+        assert report["relations"]["key_lookups"] > 0
+
+    def test_it_reports_which_distribution_drifted(
+        self, client, relational_project_id, tmp_path
+    ) -> None:
+        run_id = self._start(client, relational_project_id, tmp_path)
+        await_run(client, run_id)
+
+        report = client.get(f"/api/runs/{run_id}/quality").json()
+        checks = report["validation"]["customer"]["statistical"]["checks"]
+        fields = {check["field"] for check in checks}
+        assert {"country", "tier"} <= fields
+        assert all(0.0 <= check["match"] <= 1.0 for check in checks)
+
+    def test_a_project_with_no_references_reports_none(self, client, project_id, tmp_path) -> None:
+        run_id = self._start(client, project_id, tmp_path)
+        await_run(client, run_id)
+
+        report = client.get(f"/api/runs/{run_id}/quality").json()
+        assert "referential_integrity" not in report["quality"]
+        assert report["relations"] is None
+
+    def test_an_unknown_run_is_a_404(self, client) -> None:
+        assert client.get("/api/runs/nope/quality").status_code == 404
+
+
+class TestDatabaseRuns:
+    def test_a_sqlite_run_produces_one_database_with_working_joins(
+        self, client, relational_project_id, tmp_path
+    ) -> None:
+        import sqlite3
+
+        response = client.post(
+            f"/api/projects/{relational_project_id}/runs",
+            json={
+                "output_dir": str(tmp_path / "db"),
+                "output_format": "sqlite",
+                "records": 200,
+                "limits": {"batch_size": 100},
+            },
+        )
+        assert response.status_code == 202, response.text
+        await_run(client, response.json()["id"])
+
+        files = list((tmp_path / "db").glob("*.db"))
+        assert len(files) == 1
+
+        connection = sqlite3.connect(files[0])
+        try:
+            assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+            joined = connection.execute(
+                "SELECT COUNT(*) FROM order_item i JOIN product p ON i.product = p.sku"
+            ).fetchone()[0]
+            assert joined == 200
+        finally:
+            connection.close()
+
+    def test_an_unknown_output_format_is_rejected(self, client, project_id) -> None:
+        response = client.post(f"/api/projects/{project_id}/runs", json={"output_format": "parqet"})
+        assert response.status_code == 422
+        assert "parquet" in response.text

@@ -36,6 +36,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .context import GenerationContext
     from .provenance import FieldProvenance
     from .record import GeneratedAsset, GeneratedRecord
+    from .types import DataType
 
 __all__ = [
     "Capability",
@@ -89,6 +90,17 @@ class Generator(ABC):
 
     #: Rough relative cost, used by the planner's workload estimate.
     cost_class: ClassVar[str] = "cpu"
+
+    def output_type(self) -> DataType | None:
+        """What this generator produces, when the field did not say.
+
+        A field's declared ``type`` always wins; this only speaks for the ones
+        left at the default. It exists for outputs with real column types - a
+        ``sequence`` primary key deserves an ``INTEGER`` column rather than the
+        ``TEXT`` that "unspecified" would otherwise become. ``None`` means "no
+        opinion", which is the honest answer for most generators.
+        """
+        return None
 
     def __init__(
         self,

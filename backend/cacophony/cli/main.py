@@ -1044,6 +1044,143 @@ def _print_provider_activity(owner: GenerationEngine | Conductor) -> None:
         )
 
 
+# --------------------------------------------------------------------------- #
+# propose
+# --------------------------------------------------------------------------- #
+
+
+@app.command()
+def propose(
+    description: Annotated[
+        str, typer.Argument(help="What the data should represent, in plain language.")
+    ],
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", "-o", help="Write the proposal here instead of to the screen."),
+    ] = None,
+    provider_from: Annotated[
+        Path | None,
+        typer.Option(
+            "--providers",
+            help="A project file whose provider configuration to borrow.",
+        ),
+    ] = None,
+    adapter: Annotated[
+        str, typer.Option("--adapter", help="Provider adapter to use when none is borrowed.")
+    ] = "ollama",
+    base_url: Annotated[str | None, typer.Option("--url", help="Provider base URL.")] = None,
+    model: Annotated[str | None, typer.Option("--model", "-m", help="Model to ask.")] = None,
+    scale: Annotated[
+        int | None,
+        typer.Option("--scale", help="Divide every proposed record count by this."),
+    ] = None,
+    seed: SeedOpt = None,
+    force: Annotated[
+        bool, typer.Option("--force", help="Overwrite the output file if it exists.")
+    ] = False,
+) -> None:
+    """Propose a schema from a description (design document section 50).
+
+    The model proposes the entities, fields and relationships; Cacophony picks
+    the generators, compiles the result and lints it before showing it. What
+    you get back is a schema that is known to work - and a file to edit.
+    """
+    from ..providers.base import LanguageModelProvider
+    from ..providers.registry import PROVIDER_REGISTRY
+    from ..schema.assistant import SchemaAssistant, SchemaProposalError
+    from ..schema.models import ProviderSpec
+
+    if out is not None and out.exists() and not force:
+        error_console.print(
+            f"[cacophony.error]error[/] {out} already exists. Pass --force to overwrite it."
+        )
+        raise typer.Exit(code=2)
+
+    if provider_from is not None:
+        borrowed = _load(provider_from)
+        specs = [spec for spec in borrowed.spec.providers.values() if spec.type == "language_model"]
+        if not specs:
+            error_console.print(
+                f"[cacophony.error]error[/] {provider_from} configures no language model"
+            )
+            raise typer.Exit(code=2)
+        spec = specs[0]
+        if model:
+            spec = spec.model_copy(update={"model": model})
+    else:
+        spec = ProviderSpec(
+            id="assistant",
+            type="language_model",
+            adapter=adapter,
+            base_url=base_url,
+            model=model,
+        )
+
+    _banner("propose")
+    console.print(f"[cacophony.muted]asking[/] {spec.adapter} {spec.model or '(default model)'}")
+    console.print(f"[cacophony.muted]about [/] {description.strip()}")
+    console.print()
+
+    try:
+        provider = PROVIDER_REGISTRY.create(spec)
+    except CacophonyError as exc:
+        error_console.print(f"[cacophony.error]error[/] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    if not isinstance(provider, LanguageModelProvider):
+        error_console.print(
+            f"[cacophony.error]error[/] adapter '{spec.adapter}' is not a language model"
+        )
+        raise typer.Exit(code=2)
+
+    assistant = SchemaAssistant(provider, model=spec.model)
+
+    async def ask() -> Any:
+        try:
+            return await assistant.propose(description, seed=seed, scale=scale)
+        finally:
+            closer = getattr(provider, "aclose", None)
+            if closer is not None:
+                await closer()
+
+    with console.status("[cacophony.muted]designing…[/]", spinner="dots"):
+        try:
+            proposal = asyncio.run(ask())
+        except (SchemaProposalError, CacophonyError) as exc:
+            error_console.print(f"[cacophony.error]error[/] {exc}")
+            raise typer.Exit(code=1) from exc
+
+    summary = proposal.summary()
+    console.print(
+        f"[cacophony.ok]proposed[/] {len(summary['entities'])} entities, "
+        f"{summary['records']:,} records"
+    )
+    console.print(f"  entity order  {' -> '.join(summary['entities'])}")
+    if proposal.attempts > 1:
+        console.print(f"  [cacophony.muted]attempts      {proposal.attempts}[/]")
+    for note in proposal.notes:
+        console.print(f"  [cacophony.warn]note[/]          {note}")
+
+    if proposal.lint is not None and len(proposal.lint):
+        console.print()
+        console.print(proposal.lint.render())
+
+    if out is None:
+        console.print()
+        console.print(proposal.yaml)
+        console.print(
+            "[cacophony.muted]Pass --out project.yaml to save it, "
+            "then 'cacophony generate project.yaml'.[/]"
+        )
+        return
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(proposal.yaml, encoding="utf-8")
+    console.print()
+    console.print(f"[cacophony.ok]written[/] {out}")
+    console.print(f"[cacophony.muted]next[/] cacophony preview {out}")
+
+
 @app.command()
 def version() -> None:
     """Show the Cacophony version."""

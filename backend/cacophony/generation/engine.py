@@ -29,13 +29,14 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ..core.context import GenerationContext
-from ..core.errors import GenerationError
+from ..core.errors import CacophonyError, GenerationError
 from ..core.provenance import FieldProvenance, ProvenanceMode, RecordProvenance
 from ..core.record import GeneratedRecord
 from ..core.seeds import SeedChain
 from ..core.types import coerce_value
 from ..validation.pipeline import RecordValidator
 from ..validation.results import ValidationResult
+from .relations import EntityResolver
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..schema.plan import CompiledEntity, CompiledField, CompiledProject
@@ -97,6 +98,9 @@ class GenerationEngine:
         seed_namespace: str | None = None,
         run_id: str | None = None,
         runtime: GenerationRuntime | None = None,
+        resolver: EntityResolver | None = None,
+        reference_sample_every: int = 1,
+        counts: dict[str, int] | None = None,
     ) -> None:
         if failure_policy not in FailurePolicy.ALL:
             raise ValueError(
@@ -126,6 +130,18 @@ class GenerationEngine:
         self._validators: dict[str, RecordValidator] = {}
         self._enricher: Any = None
         self._group_cache: dict[tuple[str, int, int], list[Any]] = {}
+
+        # Cross-record coherence (section 15). The resolver needs to generate
+        # records and the engine needs the resolver, so they are introduced to
+        # one another here rather than at construction.
+        self.resolver = (
+            resolver if resolver is not None else EntityResolver(compiled, counts=counts)
+        )
+        self.resolver.bind(self.generate_partial)
+        #: Check one reference in every N. Verifying ten million foreign keys
+        #: one at a time costs more than generating them did, so a large run
+        #: checks a sample and says how large a sample it was.
+        self.reference_sample_every = max(1, reference_sample_every)
 
     # -- provider services -------------------------------------------------- #
 
@@ -246,6 +262,7 @@ class GenerationEngine:
                     related_records=related or {},
                     run_id=self.run_id,
                     runtime=self.runtime,
+                    resolver=self.resolver,
                 )
             )
             records.append(record)
@@ -264,6 +281,8 @@ class GenerationEngine:
                         else seeds.field(compiled_field.name)
                     )
                     context.attempt = 1
+                    if compiled_field.related_entities:
+                        self._attach_related(compiled_field, context)
                     value, field_provenance = await self._generate_field(
                         compiled_field, context, stats
                     )
@@ -277,6 +296,79 @@ class GenerationEngine:
         for record, index in zip(records, indices, strict=True):
             record.id = self._record_id(entity, record, index)
         return records
+
+    def generate_partial(
+        self, entity_name: str, index: int, fields: Sequence[str]
+    ) -> dict[str, Any]:
+        """Produce only ``fields`` of one record, for the resolver.
+
+        This is what makes a foreign key cost no memory: to learn employee
+        4,823,913's id, generate that one field of that one record rather than
+        keeping five million of them.
+        """
+        entity = self.compiled.entity(entity_name)
+        wanted = set(fields)
+        seeds = self.seed_chain_for(entity).record(index)
+        values: dict[str, Any] = {}
+
+        context = GenerationContext(
+            project=self.compiled.spec,
+            entity=entity.spec,
+            record_index=index,
+            seeds=seeds,
+            current_record=values,
+            run_id=self.run_id,
+            runtime=self.runtime,
+            resolver=self.resolver,
+        )
+
+        for compiled_field in entity.fields:
+            if compiled_field.name not in wanted:
+                continue
+            context.field = compiled_field.spec
+            context.seeds = seeds.field(compiled_field.name)
+            context.attempt = 1
+            if compiled_field.related_entities:
+                self._attach_related(compiled_field, context)
+            try:
+                if compiled_field.is_sync:
+                    value = compiled_field.generator.generate_sync(context)  # type: ignore[attr-defined]
+                else:
+                    # A parent's model-written fields are never needed to
+                    # resolve a reference, and calling one here would make a
+                    # single child record cost a language-model request.
+                    value = None
+                values[compiled_field.name] = coerce_value(value, compiled_field.spec.type)
+            except CacophonyError as exc:
+                raise GenerationError(
+                    f"could not derive {entity_name}.{compiled_field.name} at index {index}: {exc}"
+                ) from exc
+
+        return values
+
+    def _attach_related(self, compiled_field: CompiledField, context: GenerationContext) -> None:
+        """Give a field the parent records this row actually referenced.
+
+        The reference generator recorded which index it chose; this turns that
+        into a record. Resolving lazily matters: most fields never look at a
+        parent, and materialising one for every reference would undo the point
+        of deriving keys on demand.
+        """
+        from .generators.reference import LINKS_KEY
+
+        links: dict[str, int] = context.extras.get(LINKS_KEY) or {}
+        for target in compiled_field.related_entities:
+            if target in context.related_records:
+                continue
+            index = links.get(target)
+            if index is None:
+                continue
+            try:
+                context.related_records[target] = self.resolver.record_at(target, index)
+            except CacophonyError:
+                # A parent that cannot be derived is reported when the field
+                # that wanted it fails, with that field's name attached.
+                continue
 
     def _is_enrichable(self, compiled_field: CompiledField) -> bool:
         """Whether this field should be produced by a grouped model call."""
@@ -439,7 +531,11 @@ class GenerationEngine:
     def _validator_for(self, entity: CompiledEntity) -> RecordValidator:
         validator = self._validators.get(entity.name)
         if validator is None:
-            validator = RecordValidator(entity)
+            validator = RecordValidator(
+                entity,
+                resolver=self.resolver,
+                reference_sample_every=self.reference_sample_every,
+            )
             self._validators[entity.name] = validator
         return validator
 
@@ -454,7 +550,7 @@ class GenerationEngine:
                     stats.errors.append(issue.render())
 
     def validation_stats(self) -> dict[str, Any]:
-        return {name: validator.stats.to_dict() for name, validator in self._validators.items()}
+        return {name: validator.summary() for name, validator in self._validators.items()}
 
     def summary(self) -> dict[str, Any]:
         summary: dict[str, Any] = {
@@ -464,6 +560,8 @@ class GenerationEngine:
             "entities": {name: stats.to_dict() for name, stats in self.stats.items()},
             "validation": self.validation_stats(),
         }
+        if self.resolver.stats.key_lookups:
+            summary["relations"] = self.resolver.describe()
         if self.runtime is not None:
             summary.update(self.runtime.summary())
         return summary

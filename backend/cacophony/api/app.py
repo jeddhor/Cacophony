@@ -78,6 +78,45 @@ def _distribution_of(field: Any) -> dict[str, float] | None:
         return None
 
 
+def _reference_of(compiled: Any, field: Any) -> dict[str, Any] | None:
+    """Where a field points, if it points anywhere (design document section 15)."""
+    target = getattr(field.generator, "target", None)
+    if not isinstance(target, str):
+        return None
+
+    key = getattr(field.generator, "target_field", None)
+    if not key:
+        entity = compiled.entities.get(target)
+        key = entity.spec.resolved_primary_key() if entity is not None else None
+
+    return {
+        "entity": target,
+        "field": key,
+        "distribution": getattr(field.generator, "distribution", None),
+        "unique": bool(getattr(field.generator, "unique", False)),
+    }
+
+
+def _reference_edges(compiled: Any) -> list[dict[str, Any]]:
+    """The project's foreign keys, as graph edges."""
+    edges: list[dict[str, Any]] = []
+    for entity in compiled.ordered_entities():
+        for field in entity.fields:
+            reference = _reference_of(compiled, field)
+            if reference is not None:
+                edges.append(
+                    {
+                        "from_entity": entity.name,
+                        "from_field": field.name,
+                        "to_entity": reference["entity"],
+                        "to_field": reference["field"],
+                        "distribution": reference["distribution"],
+                        "unique": reference["unique"],
+                    }
+                )
+    return edges
+
+
 def create_app(
     *,
     store_path: str | Path | None = None,
@@ -274,6 +313,7 @@ def create_app(
                                 mode="json", exclude_none=True
                             ),
                             "distribution": _distribution_of(field),
+                            "reference": _reference_of(compiled, field),
                         }
                         for field in entity.fields
                     },
@@ -284,6 +324,11 @@ def create_app(
                 relationship.model_dump(mode="json", by_alias=True)
                 for relationship in compiled.spec.relationships
             ],
+            # Every foreign key in the project, as edges. The Studio's graph
+            # draws relationships from this rather than inferring them from
+            # `depends_on`, which knows that two entities are connected but not
+            # which field connects them (section 15).
+            "references": _reference_edges(compiled),
         }
 
     @app.patch("/api/projects/{project_id}/schema", tags=["studio"])
@@ -353,6 +398,29 @@ def create_app(
             stored["live"] = conductor.metrics.snapshot()
             stored["paused"] = conductor.handle.is_paused
         return stored
+
+    @app.get("/api/runs/{run_id}/quality", tags=["runs"])
+    async def run_quality(run_id: str) -> dict[str, Any]:
+        """The quality report for one run (design document section 58).
+
+        A live run reports what it has measured so far rather than nothing:
+        referential integrity at four million records is already the answer,
+        and waiting for the other six tells nobody anything new.
+        """
+        stored = _found(runs.repository.get_run(run_id, include_jobs=False), "run")
+        conductor = runs.conductor(run_id)
+        summary = conductor.summary() if conductor is not None else (stored.get("summary") or {})
+
+        return {
+            "run_id": run_id,
+            "state": stored["state"],
+            "live": conductor is not None,
+            "records": summary.get("total_written", stored.get("records_written", 0)),
+            "quality": summary.get("quality") or {},
+            "validation": summary.get("validation") or {},
+            "relations": summary.get("relations"),
+            "providers": summary.get("providers"),
+        }
 
     @app.post("/api/runs/{run_id}/pause", tags=["runs"])
     async def pause_run(run_id: str) -> dict[str, Any]:

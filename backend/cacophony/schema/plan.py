@@ -63,6 +63,10 @@ class CompiledEntity:
     fields: list[CompiledField] = field(default_factory=list)
     depends_on: tuple[str, ...] = ()
     field_layers: list[list[str]] = field(default_factory=list)
+    #: Referenced entity -> the field of this entity that points at it. This
+    #: is what lets a field reading ``company.domain`` be given the company
+    #: *this record* chose rather than an arbitrary one.
+    reference_fields: dict[str, str] = field(default_factory=dict)
 
     @property
     def count(self) -> int:

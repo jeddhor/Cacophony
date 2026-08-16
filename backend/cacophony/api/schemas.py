@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..core.provenance import ProvenanceMode
 from ..providers.cache import CacheMode
@@ -56,7 +56,9 @@ class CreateRunRequest(BaseModel):
     """``POST /api/projects/{id}/runs``."""
 
     output_dir: str = "out"
-    output_format: Literal["csv", "json", "jsonl", "ndjson", "parquet"] = "jsonl"
+    #: Validated against the writer registry rather than pinned to a literal,
+    #: so a newly registered format is offered here the moment it exists.
+    output_format: str = "jsonl"
     entities: list[str] = Field(default_factory=list)
     records: int | None = Field(default=None, ge=0)
     seed: int | None = None
@@ -73,6 +75,16 @@ class CreateRunRequest(BaseModel):
     limits: LimitsRequest = Field(default_factory=LimitsRequest)
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("output_format")
+    @classmethod
+    def _known_format(cls, value: str) -> str:
+        from ..outputs import OUTPUT_FORMATS
+
+        if value.lower() not in OUTPUT_FORMATS:
+            known = ", ".join(sorted(OUTPUT_FORMATS))
+            raise ValueError(f"unknown output format '{value}'. Available: {known}")
+        return value.lower()
 
     def to_config(self) -> RunConfig:
         return RunConfig(

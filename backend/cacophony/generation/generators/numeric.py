@@ -147,6 +147,9 @@ class BooleanGenerator(OptionsMixin, SyncGenerator):
     def generate_sync(self, context: GenerationContext) -> Any:
         return context.rng().random() < self.probability
 
+    def output_type(self) -> DataType | None:
+        return DataType.BOOLEAN
+
     def describe(self) -> str:
         return f"boolean(p={self.probability})"
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 
 import pytest
 
@@ -237,3 +238,162 @@ def test_repair_can_be_switched_off(mode: str) -> None:
     record = GeneratedRecord(entity="e", values={"n": "7"})
     validator.validate(record, repair=(mode == "repair"))
     assert record.values["n"] == (7 if mode == "repair" else "7")
+
+
+# --------------------------------------------------------------------------- #
+# Referential and statistical validation (design document sections 57, 58)
+# --------------------------------------------------------------------------- #
+
+
+def _relational() -> Any:
+    return compile_from(
+        {
+            "team": {
+                "count": 5,
+                "primary_key": "team_id",
+                "fields": {"team_id": {"type": "integer", "generator": "sequence"}},
+            },
+            "player": {
+                "count": 40,
+                "primary_key": "player_id",
+                "fields": {
+                    "player_id": {"type": "integer", "generator": "sequence"},
+                    "team": {"generator": "reference", "entity": "team"},
+                    "position": {
+                        "generator": "weighted",
+                        "choices": {"forward": 40, "midfield": 35, "defence": 25},
+                    },
+                },
+            },
+        }
+    )
+
+
+class TestReferentialValidation:
+    def test_a_generated_reference_is_accepted(self) -> None:
+        import asyncio
+
+        from cacophony.generation.engine import GenerationEngine
+
+        compiled = _relational()
+        engine = GenerationEngine(compiled)
+        validator = RecordValidator(compiled.entity("player"), resolver=engine.resolver)
+
+        for record in asyncio.run(engine.generate_batch("player", 40)):
+            assert validator.validate(record).ok
+
+        assert validator.summary()["referential"]["integrity"] == 1.0
+
+    def test_a_key_outside_the_parent_range_is_reported(self) -> None:
+        from cacophony.generation.engine import GenerationEngine
+
+        compiled = _relational()
+        engine = GenerationEngine(compiled)
+        validator = RecordValidator(compiled.entity("player"), resolver=engine.resolver)
+
+        record = GeneratedRecord(entity="player", values={"player_id": 1, "team": 9999})
+        result = validator.validate(record)
+        assert not result.ok
+        assert any(issue.category == "referential" for issue in result.issues)
+
+    def test_sampling_reports_how_much_it_looked_at(self) -> None:
+        import asyncio
+
+        from cacophony.generation.engine import GenerationEngine
+
+        compiled = _relational()
+        engine = GenerationEngine(compiled)
+        validator = RecordValidator(
+            compiled.entity("player"), resolver=engine.resolver, reference_sample_every=10
+        )
+        for record in asyncio.run(engine.generate_batch("player", 40)):
+            validator.validate(record)
+
+        referential = validator.summary()["referential"]
+        assert referential["sample_every"] == 10
+        assert referential["references_checked"] == 4
+
+    def test_an_entity_with_no_references_says_nothing(self) -> None:
+        compiled = _relational()
+        validator = RecordValidator(compiled.entity("team"))
+        assert "referential" not in validator.summary()
+
+
+class TestStatisticalValidation:
+    def test_a_faithful_distribution_scores_near_one(self) -> None:
+        import asyncio
+
+        from cacophony.generation.engine import GenerationEngine
+
+        compiled = _relational()
+        engine = GenerationEngine(compiled)
+        validator = RecordValidator(compiled.entity("player"))
+        for record in asyncio.run(engine.generate_batch("player", 2000)):
+            validator.validate(record)
+
+        statistical = validator.summary()["statistical"]
+        assert statistical["distribution_match"] > 0.9
+        check = statistical["checks"][0]
+        assert check["field"] == "position"
+        assert check["expected"]["forward"] == pytest.approx(0.4)
+
+    def test_a_small_sample_is_labelled_as_one(self) -> None:
+        from cacophony.validation.referential import DistributionCheck
+
+        check = DistributionCheck(
+            entity="player",
+            field="position",
+            expected={"a": 0.5, "b": 0.5},
+            observed={"a": 0.5, "b": 0.5},
+            samples=12,
+            distance=0.0,
+        )
+        assert not check.confident
+        assert check.match == 1.0
+
+    def test_the_worst_offender_is_named(self) -> None:
+        from cacophony.validation.referential import DistributionCheck
+
+        check = DistributionCheck(
+            entity="e",
+            field="f",
+            expected={"a": 0.6, "b": 0.3, "c": 0.1},
+            observed={"a": 0.2, "b": 0.35, "c": 0.45},
+            samples=1000,
+            distance=0.4,
+        )
+        name, expected, observed = check.worst()
+        assert (name, expected, observed) == ("a", 0.6, 0.2)
+
+    def test_a_wrong_distribution_is_reported_as_a_warning(self) -> None:
+        from cacophony.validation.referential import StatisticalValidator
+
+        compiled = _relational()
+        validator = StatisticalValidator(compiled.entity("player"))
+        # Everything came out "forward" when 40% was declared.
+        for _ in range(500):
+            validator.observe(GeneratedRecord(entity="player", values={"position": "forward"}))
+        result = validator.report()
+        assert not result.ok or result.warnings
+        assert "distribution" in result.render()
+
+    def test_an_entity_with_no_declared_distribution_says_nothing(self) -> None:
+        compiled = _relational()
+        validator = RecordValidator(compiled.entity("team"))
+        assert "statistical" not in validator.summary()
+
+
+class TestQualityReport:
+    def test_it_renders_section_58s_shape(self) -> None:
+        from cacophony.validation.referential import QualityReport
+
+        report = QualityReport(referential_integrity=0.998, distribution_match=0.91)
+        rendered = report.render()
+        assert "Referential Integrity" in rendered
+        assert "99.80%" in rendered
+
+    def test_sample_size_never_pretends_a_dozen_records_is_enough(self) -> None:
+        from cacophony.validation.referential import sample_size_for
+
+        assert sample_size_for(2) >= 100
+        assert sample_size_for(50) > sample_size_for(5)

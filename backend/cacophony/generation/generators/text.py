@@ -325,6 +325,7 @@ class ExpressionGenerator(OptionsMixin, SyncGenerator):
         self._validate(tree)
         self._tree = tree
         self._code = compile(tree, filename="<cacophony-expression>", mode="eval")
+        self._dotted_roots: frozenset[str] = frozenset()
         self._references = self._collect_references(tree)
 
     def _validate(self, tree: ast.AST) -> None:
@@ -372,13 +373,18 @@ class ExpressionGenerator(OptionsMixin, SyncGenerator):
             if isinstance(node, ast.Name) and node.id not in called and node.id not in dotted_roots:
                 references.append(node.id)
 
+        #: Names the expression reads *through a dot*. Kept because a field and
+        #: the entity it points at routinely share a name - ``customer:`` holding
+        #: a reference to ``customer`` - and ``customer.country`` then has to
+        #: mean the related record rather than the key sitting in this field.
+        self._dotted_roots = frozenset(dotted_roots)
         return tuple(dict.fromkeys(references))
 
     def dependencies(self) -> Sequence[str]:
         return self._references
 
     def generate_sync(self, context: GenerationContext) -> Any:
-        namespace = _ExpressionNamespace(context, self.FUNCTIONS)
+        namespace = _ExpressionNamespace(context, self.FUNCTIONS, self._dotted_roots)
         try:
             return eval(self._code, {"__builtins__": {}}, namespace)
         except GenerationError:
@@ -400,14 +406,26 @@ class _ExpressionNamespace(dict):
     produces a message naming the field rather than a bare ``NameError``.
     """
 
-    def __init__(self, context: GenerationContext, functions: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        context: GenerationContext,
+        functions: dict[str, Any],
+        dotted: frozenset[str] = frozenset(),
+    ) -> None:
         super().__init__()
         self._context = context
         self._functions = functions
+        self._dotted = dotted
 
     def __missing__(self, key: str) -> Any:
         if key in self._functions:
             return self._functions[key]
+        # A name read through a dot means the related record, even when a field
+        # of this record has the same name - which it usually does, since the
+        # field holding a reference to `customer` is generally called
+        # `customer`. The field's value is a key; it has no attributes.
+        if key in self._dotted and key in self._context.related_records:
+            return _RelatedProxy(self._context.related_records[key])
         if key in self._context.current_record:
             return self._context.current_record[key]
         if key in self._context.related_records:

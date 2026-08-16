@@ -60,6 +60,7 @@ export function makeField(overrides: Partial<FieldView> = {}): FieldView {
     tone: null,
     constraints: {},
     distribution: null,
+    reference: null,
     ...overrides,
   };
 }
@@ -150,6 +151,16 @@ export const schemaFixture: SchemaView = {
       cardinality: "one_to_many",
       field: null,
       required: true,
+    },
+  ],
+  references: [
+    {
+      from_entity: "device",
+      from_field: "owner",
+      to_entity: "employee",
+      to_field: "employee_id",
+      distribution: "skewed",
+      unique: false,
     },
   ],
 };

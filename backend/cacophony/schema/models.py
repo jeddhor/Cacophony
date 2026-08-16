@@ -210,6 +210,15 @@ class FieldSpec(_Base):
 
         payload = dict(data)
         extras = {key: payload.pop(key) for key in list(payload) if key not in _FIELD_KEYS}
+
+        # A field may also spell the option bag out, which is what someone
+        # writes when a generator option shares a name with a field key. Both
+        # forms mean the same thing, so the explicit one is unwrapped here
+        # rather than becoming an option called "options".
+        explicit = extras.pop("options", None)
+        if isinstance(explicit, dict):
+            extras = {**extras, **explicit}
+
         if not extras:
             return payload
 

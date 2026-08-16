@@ -20,6 +20,7 @@ import type {
   ProjectSummary,
   ProviderHealth,
   ProvidersView,
+  QualityReport,
   RunView,
   SchemaOperation,
   SchemaTypesView,
@@ -147,6 +148,7 @@ export const api = {
   },
   run: (id: string) => request<RunView>(`/runs/${id}`),
   runJobs: (id: string) => request<JobView[]>(`/runs/${id}/jobs`),
+  runQuality: (id: string) => request<QualityReport>(`/runs/${id}/quality`),
   runEvents: (id: string, after = 0, limit = 200) =>
     request<StoredEvent[]>(`/runs/${id}/events?after=${after}&limit=${limit}`),
 
