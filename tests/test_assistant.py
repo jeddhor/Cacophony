@@ -350,3 +350,80 @@ def _parse_yaml(text: str) -> dict[str, Any]:
     import yaml
 
     return yaml.safe_load(text)  # type: ignore[no-any-return]
+
+
+class TestRunnability:
+    """A proposal has to run, not merely compile (design document section 50)."""
+
+    PROSE = json.dumps(
+        {
+            "name": "Laptop Fleet",
+            "entities": [
+                {
+                    "name": "laptop",
+                    "count": 10,
+                    "fields": [
+                        {"name": "laptop_id", "type": "integer", "primary_key": True},
+                        # Reads like prose, so the recommendation engine routes it
+                        # to a language model however the type is declared.
+                        {
+                            "name": "incident_summary",
+                            "type": "string",
+                            "semantic": (
+                                "a paragraph describing what went wrong and how it was investigated"
+                            ),
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+
+    def test_a_field_routed_to_a_model_gets_a_provider(self) -> None:
+        proposal = asyncio.run(assistant(self.PROSE).propose("laptops"))
+
+        assert "providers" in proposal.data
+        provider = next(iter(proposal.data["providers"].values()))
+        assert provider["type"] == "language_model"
+        assert "providers:" in proposal.yaml
+
+    def test_the_provider_reaches_the_compiled_project(self) -> None:
+        proposal = asyncio.run(assistant(self.PROSE).propose("laptops"))
+        assert proposal.compiled is not None
+        assert proposal.compiled.spec.providers
+
+    def test_it_says_so_rather_than_doing_it_silently(self) -> None:
+        proposal = asyncio.run(assistant(self.PROSE).propose("laptops"))
+        assert any("language model" in note for note in proposal.notes)
+
+    def test_a_deterministic_proposal_declares_no_provider(self) -> None:
+        """No provider block appears where nothing needs one."""
+        proposal = asyncio.run(assistant(json.dumps(GOOD_ANSWER)).propose("a company"))
+        assert "providers" not in proposal.data
+        assert "providers:" not in proposal.yaml
+
+    def test_a_backend_the_assistant_cannot_supply_becomes_a_placeholder(self) -> None:
+        """An image field would otherwise abort on the first record."""
+        answer = json.dumps(
+            {
+                "name": "Staff",
+                "entities": [
+                    {
+                        "name": "employee",
+                        "count": 5,
+                        "fields": [
+                            {"name": "employee_id", "type": "integer", "primary_key": True},
+                            {"name": "portrait", "type": "string", "semantic": "a headshot"},
+                        ],
+                    }
+                ],
+            }
+        )
+        proposal = asyncio.run(assistant(answer).propose("staff"))
+        assert proposal.compiled is not None
+
+        # Whatever the recommendation engine chose, the proposal must produce
+        # records without a backend that is not configured.
+        engine = GenerationEngine(proposal.compiled, runtime=None)
+        records = asyncio.run(engine.generate_batch("employee", 3))
+        assert len(records) == 3

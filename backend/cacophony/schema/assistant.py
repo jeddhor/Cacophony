@@ -28,6 +28,14 @@ with the error attached (the repair rung of section 66's ladder). What reaches
 the user is a schema that is known to work, or an honest report that one could
 not be produced.
 
+"Known to work" means runnable, not merely compilable. A field whose meaning
+reads like prose is routed to a language model by the recommendation engine
+whatever its declared type, so a proposal that named no provider would compile,
+lint, and then fail on its first record. The assistant therefore writes the
+provider it is already holding - the one that just designed the schema - into
+the proposal, and marks any field needing a backend it cannot supply as a
+placeholder.
+
 The result is YAML rather than an internal object, because section 50 ends with
 "the user approves or edits it" - and what a person edits is a file.
 """
@@ -63,11 +71,15 @@ __all__ = [
 #:
 #: The model does not need ``binary`` or ``object`` to describe a business
 #: domain, and every name it can choose from is a name that will compile.
-#: ``text`` is absent for a sharper reason: it means long-form prose, which the
-#: recommendation engine quite correctly routes to a language model - and a
-#: proposal carries no ``providers:`` block, so such a field would fail the
-#: moment anyone ran it. Every type offered here generates without a provider,
-#: which is what makes a proposal something you can run rather than read.
+#: ``text`` is absent for a sharper reason: it means long-form prose, and a
+#: proposal is meant to be mostly deterministic so that running it is cheap.
+#:
+#: This list does not, on its own, keep a proposal free of language-model
+#: fields - the recommendation engine reads the *semantic* as well as the type,
+#: so "the model of the laptop hardware" on a plain string field is routed to a
+#: model however it was declared. Runnability is therefore settled after
+#: compilation, in :meth:`SchemaAssistant._make_runnable`, which writes the
+#: provider the assistant is already holding into the proposal.
 _PROPOSABLE_TYPES = (
     "string",
     "integer",
@@ -324,13 +336,94 @@ class SchemaAssistant:
         except CacophonyError as exc:
             raise SchemaProposalError(f"the proposed schema does not compile: {exc}") from exc
 
+        notes = _notes(payload, data)
+        # Compiling is not enough. A field whose meaning reads like prose is
+        # routed to a language model by the recommendation engine, and a
+        # proposal that declares no provider would compile, lint, and then fail
+        # on its first record. Settle that here, while a working provider is
+        # still in hand.
+        data, compiled, provider_notes = self._make_runnable(data, compiled)
+        notes.extend(provider_notes)
+
         return SchemaProposal(
             yaml=to_yaml(data),
             data=data,
             compiled=compiled,
             lint=lint_project(compiled),
-            notes=_notes(payload, data),
+            notes=notes,
         )
+
+    def _make_runnable(
+        self, data: dict[str, Any], compiled: CompiledProject
+    ) -> tuple[dict[str, Any], CompiledProject, list[str]]:
+        """Ensure every field of the proposal can actually produce a value.
+
+        Two outcomes, in order of preference. A field needing a language model
+        gets one: the very provider that wrote this schema, written into the
+        proposal so the file is self-contained. A field needing something the
+        assistant cannot supply - an image backend, say - is set to emit a
+        marked placeholder instead, which keeps the proposal runnable and
+        obviously incomplete rather than runnable-looking and broken.
+        """
+        needed: set[str] = set()
+        for entity in compiled.ordered_entities():
+            for field_view in entity.fields:
+                kind = type(field_view.generator).requires_provider
+                if kind:
+                    needed.add(kind)
+
+        if not needed:
+            return data, compiled, []
+
+        notes: list[str] = []
+        if "language_model" in needed:
+            data["providers"] = {self.provider_id: self._provider_block()}
+            notes.append(
+                f"some fields are written by a language model; the proposal points at "
+                f"{self._describe_provider()}"
+            )
+            needed.discard("language_model")
+
+        for kind in sorted(needed):
+            marked = _mark_unavailable(data, compiled, kind)
+            if marked:
+                notes.append(
+                    f"no {kind.replace('_', ' ')} provider was available, so "
+                    f"{', '.join(marked)} will emit a placeholder until you configure one"
+                )
+
+        try:
+            compiled = compile_project(load_project_data(data))
+        except CacophonyError as exc:  # pragma: no cover - the edit is additive
+            raise SchemaProposalError(f"the proposed schema does not compile: {exc}") from exc
+        return data, compiled, notes
+
+    @property
+    def provider_id(self) -> str:
+        return getattr(self.provider, "id", None) or "local_llm"
+
+    def _provider_block(self) -> dict[str, Any]:
+        """The provider that wrote this schema, as a project declares one.
+
+        Credentials are never written: ``secret`` is a logical id resolved at
+        run time from the keychain or the environment (section 63).
+        """
+        config = getattr(self.provider, "config", {}) or {}
+        block: dict[str, Any] = {
+            "type": "language_model",
+            "adapter": getattr(type(self.provider), "adapter_name", "ollama"),
+        }
+        for key in ("base_url", "model", "secret"):
+            value = self.model if key == "model" else config.get(key)
+            if key == "model":
+                value = self.model or config.get("model")
+            if value:
+                block[key] = value
+        return block
+
+    def _describe_provider(self) -> str:
+        adapter = getattr(type(self.provider), "adapter_name", "the provider")
+        return f"{adapter} {self.model or ''}".strip()
 
 
 # --------------------------------------------------------------------------- #
@@ -468,6 +561,25 @@ def _field_data(item: dict[str, Any], *, known: list[str]) -> tuple[dict[str, An
     return data, is_primary
 
 
+def _mark_unavailable(data: dict[str, Any], compiled: CompiledProject, kind: str) -> list[str]:
+    """Set ``on_unavailable: placeholder`` on fields needing ``kind``.
+
+    Returns the field names it touched, so the caller can say which.
+    """
+    marked: list[str] = []
+    for entity in compiled.ordered_entities():
+        for field_view in entity.fields:
+            if type(field_view.generator).requires_provider != kind:
+                continue
+            entity_data = data["entities"].get(entity.name)
+            field_data = (entity_data or {}).get("fields", {}).get(field_view.name)
+            if field_data is None:
+                continue
+            field_data["on_unavailable"] = "placeholder"
+            marked.append(f"{entity.name}.{field_view.name}")
+    return marked
+
+
 def _identifier(name: str) -> str:
     """``Login Events`` becomes ``login_events``."""
     cleaned = "".join(
@@ -513,6 +625,15 @@ def to_yaml(data: dict[str, Any]) -> str:
     if project.get("description"):
         lines.append(f"  description: {_scalar(project['description'])}")
     lines.append(f"  seed: {project.get('seed', 42)}")
+
+    # Written only when a field actually needs one, and never carrying a
+    # credential - `secret` is a logical id resolved at run time (section 63).
+    for provider_id, provider in (data.get("providers") or {}).items():
+        if not lines[-1].startswith("providers:"):
+            lines.extend(["", "providers:"])
+        lines.append(f"  {provider_id}:")
+        lines.extend(f"    {key}: {_scalar(value)}" for key, value in provider.items())
+
     lines.append("")
     lines.append("entities:")
 
