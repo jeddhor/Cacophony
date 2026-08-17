@@ -13,17 +13,19 @@ built and how to run it.
 
 ---
 
-## Status: Phase 13 — Extension
+## Status: complete
+
+All fourteen delivery phases are done, and every section of
+[CACOPHONY.md](CACOPHONY.md) is either implemented or — in the single case of the
+`script` generator — decided against with the reasoning written down.
 
 Phases 1–7 built the engine, the providers, the run system, the Studio, the
 relational layer, multimodal generation and synthetic worlds. Phase 8 turned
 Cacophony into a workload generator; Phase 9 spread a run across machines, with
-byte-identical output. Phase 10 asked whether what came out is any good:
-repetition, the model that produced it, and what an application does with valid
-but awkward data. Phase 11 made schemas reusable — a catalogue of
-fragments, and projects that can be sent to somebody else. Phase 12 dealt with a dataset that already
-exists and is not quite right. Phase 13 lets other people's code extend the
-platform — and settles what `script` is, which is nothing.
+byte-identical output. Phase 10 asked whether what came out is any good. Phase 11
+made schemas reusable. Phase 12 dealt with a dataset that already exists and is
+not quite right. Phase 13 let other people's code extend the platform. Phase 14
+put it in a window.
 
 **Working now**
 
@@ -81,6 +83,9 @@ platform — and settles what `script` is, which is nothing.
   through the real pipeline and reports validity, usability, clipping, speed and
   repetition, with the cache forced off so nobody is scored on somebody else's
   answers
+- A desktop application — a Tauri window hosting the Studio with the backend as
+  a child process, on a port the OS chose, behind a per-launch token, and gone
+  the moment the window is — verified even when the shell is `SIGKILL`ed
 - A plugin protocol — section 44's eight categories, discovered through
   installed entry points and never from a project directory, with manifests
   checked against what a plugin actually registers
@@ -125,7 +130,7 @@ platform — and settles what `script` is, which is nothing.
 - CLI: `validate`, `lint`, `plan`, `prompt`, `propose`, `preview`, `generate`,
   `resume`, `runs`, `run`, `serve`, `stream`, `cluster`, `controller`,
   `worker`, `worlds`, `benchmark`, `recipes`, `bundle`, `transform`,
-  `regenerate`, `plugins`, `generators`, `providers --test`, `models`
+  `regenerate`, `plugins`, `desktop`, `generators`, `providers --test`, `models`
 - **Cacophony Studio**: project dashboard, schema editor with live preview,
   distribution and relationship views, a generate screen with cost estimates,
   a live run view fed by the WebSocket, a streaming page with per-entity rate
@@ -147,9 +152,8 @@ transformation, or a plugin for real code. A `script` field still compiles, lint
 plans and estimates, and `on_unavailable: placeholder` runs the whole pipeline
 with obviously-marked stand-ins.
 
-**Still to come.** One slice: Tauri desktop packaging (14). Everything else in
-the design document is either delivered or, in the single case of `script`,
-decided against with the reasoning written down.
+See [docs/ROADMAP.md](docs/ROADMAP.md) for what each phase delivered, what broke
+along the way, and the decisions taken where the design document left room.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the phase plan and what makes each
 one hard.
@@ -439,6 +443,33 @@ shard is handed to somebody else, and that worker regenerates it from
 scratch — producing exactly the bytes the dead one would have. Tested by
 `kill -9`ing a worker in the middle of a shard: the dataset still matched,
 half-written file and all.
+
+### On the desktop
+
+```bash
+./desktop/build.sh --bundle
+```
+
+A Tauri window hosting the Studio, with the backend as a child process. Section
+41 prefers Tauri to Electron because the application mainly needs to host a web
+UI while Python does the generation — which is the architecture that already
+existed, so there is no desktop *mode* in the backend at all: `cacophony desktop`
+serves the same application `cacophony serve` does.
+
+```
+$ cacophony desktop
+CACOPHONY_HANDSHAKE {"version":1,"url":"http://127.0.0.1:41287","token":"…","pid":8123}
+```
+
+The window opens on a port the operating system chose, behind a per-launch token
+— a browser tab is an explicit act by a person, and a window is not — and the
+backend stops the moment the window does. That last one is tested by `SIGKILL`ing
+the shell so no handler, no destructor and no signal can help: the backend
+watches its own stdin, and the operating system closes the pipe regardless.
+
+`cacophony serve` is untouched. Section 41 asks that web deployment remain
+possible, and one application serving both is the only way to be sure it stays
+that way.
 
 ### Somebody else's code
 
@@ -846,6 +877,7 @@ backend/cacophony/
 ├── api/           REST API, the live run feed, and the built Studio
 └── cli/           command-line interface
 frontend/          Cacophony Studio (React, TypeScript, Vite)
+desktop/           the Tauri shell (section 41) and its build script
 templates/         starter project schemas
 examples/          worked examples
 tests/             unit and integration tests

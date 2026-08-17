@@ -583,6 +583,9 @@ there.
 
 # The remaining work
 
+*Complete. Every phase below is delivered; this section is kept as the record of
+what was planned and why.*
+
 Sections 90–95 of the design document are delivered, and so is everything the
 earlier phases left open. What is left is the material that was never assigned
 to a phase: nine sections that each add a capability rather than complete one.
@@ -598,7 +601,7 @@ attention rather than squeezed in beside a feature.
 | 11 — Reuse ✅ | 80, 106, 72 | Fragments, catalogues and bundles |
 | 12 — Afterwards ✅ | 105, 104 | Changing a dataset that already exists |
 | 13 — Extension ✅ | 44, and `script` | Third-party code, safely |
-| 14 — Desktop | 41 | Tauri, without giving up the web |
+| 14 — Desktop ✅ | 41 | Tauri, without giving up the web |
 
 Section 83 (agentic generation) is out of scope by the document's own framing —
 it is headed "Future" and describes a research direction rather than a feature.
@@ -1080,9 +1083,87 @@ ship one yet.
 
 ---
 
-## Phase 14 — Desktop
+## Phase 14 — Desktop ✅
 
-*Design document section 41.*
+**Delivered.** Design document section 41. The last phase.
+
+```bash
+./desktop/build.sh            # a shell that uses `cacophony` from PATH
+./desktop/build.sh --bundle   # an installer, with the backend frozen inside
+```
+
+A Tauri window hosting the Studio, with the backend as a child process, built and
+run on Linux; the crate compiles, the binary launches, and the whole lifecycle is
+verified headlessly.
+
+**There is no desktop mode in the backend, and that is the design.** Section 41's
+constraint — "web deployment should remain possible" — is guaranteed by having no
+second application to keep in step: `cacophony desktop` builds the same
+`create_app` that `cacophony serve` builds. A test asserts both call it, and
+another asserts the served behaviour is unchanged.
+
+The interface between the two halves is one line of JSON:
+
+```
+CACOPHONY_HANDSHAKE {"version":1,"url":"http://127.0.0.1:41287","token":"…","pid":8123}
+```
+
+**Four properties, each a way a desktop application goes wrong that a served one
+does not.**
+
+*A port the operating system chose.* A fixed 8765 collides with the
+`cacophony serve` somebody already has running, and an application that refuses
+to start because a terminal is busy is a bad application. Two shells started at
+once get different ports and different tokens — asserted.
+
+*Printed after the port is bound.* A shell opening a window on a guessed URL
+would work on fast machines and show an error page on slow ones, which is the
+worst kind of bug.
+
+*A per-launch token.* A loopback server is reachable by every process on the
+machine. A browser tab is an explicit act by a person; a window is not, and one
+that quietly exposed an unauthenticated generation API to everything else on a
+shared machine would be a surprise nobody asked for. The page reads the token
+from the query string once and strips it from the address bar, so it does not
+survive into a screenshot.
+
+*The backend dies with its window* — including when the window is killed
+outright. Verified the hard way: an intermediate process holding the pipe is
+`SIGKILL`ed, so no exit handler runs, no `Drop` fires and no signal is sent, and
+the backend is gone within seconds because the operating system closed the pipe
+regardless. A generator left running after its window closed is the classic
+desktop failure: invisible, still writing files, still occupying a model server.
+
+**Two defects, both found by running the binary rather than reasoning about it.**
+
+*The token gate had a hole exactly where nobody would look.* `@app.middleware
+("http")` only sees `scope["type"] == "http"`, so a WebSocket handshake passed
+straight through it — leaving `/api/runs/{id}/stream` and
+`/api/streams/{id}/feed` open while every other route was guarded. A gap in a
+security control is worse than no control, because the control is what stops
+anyone checking. The gate is pure ASGI and handles both scope types; the socket
+case is now its own test.
+
+*The failure window was the loudest failure.* Tauri refuses `data:` URLs without
+the `webview-data-url` feature, so the one code path whose entire job is to
+explain why there is nothing to show panicked instead. Found by running the
+binary with no backend on PATH — which is also the single most likely failure in
+a hand-built checkout.
+
+**What was built here and what was not.** The Linux shell was compiled and run;
+the crate, the configuration, the freeze script and a three-platform CI workflow
+are written and reviewed but macOS and Windows binaries were not produced,
+because neither half cross-compiles: Tauri needs the platform's own webview and
+PyInstaller its own interpreter. Signing is not configured and deliberately not
+faked — notarisation needs an Apple identity and Windows a certificate, both
+secrets a repository owner supplies, and a workflow that pretended to sign would
+produce installers that fail on first launch.
+
+---
+
+## Phase 14 — Desktop, as planned
+
+*The plan this replaced.*
 
 A Tauri shell hosting the built Studio, with the Python backend as a sidecar
 process. Section 41 prefers Tauri to Electron because the application mainly

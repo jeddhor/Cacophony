@@ -1008,6 +1008,67 @@ def models(
 
 
 @app.command()
+def desktop(
+    store: StoreOpt = None,
+    project: Annotated[
+        Path | None, typer.Option("--project", "-p", help="Project whose store to serve.")
+    ] = None,
+    studio: Annotated[
+        Path | None, typer.Option("--studio", help="Directory holding a built Studio.")
+    ] = None,
+    host: Annotated[str, typer.Option("--host", help="Interface to bind.")] = "127.0.0.1",
+    port: Annotated[
+        int | None, typer.Option("--port", help="Fixed port. Default: one the OS says is free.")
+    ] = None,
+    no_token: Annotated[
+        bool, typer.Option("--no-token", help="Do not require a token. For debugging only.")
+    ] = False,
+    keep_running: Annotated[
+        bool,
+        typer.Option(
+            "--keep-running", help="Do not stop when stdin closes. For running it by hand."
+        ),
+    ] = False,
+    log_level: LogLevelOpt = "warning",
+) -> None:
+    """Serve the Studio for a desktop shell (design document section 41).
+
+        cacophony desktop
+
+    Prints one handshake line on stdout - the URL, a per-launch token and the
+    process id - then serves until stdin closes. The Tauri shell spawns this,
+    reads that line and points a window at the URL.
+
+    It is the same application ``cacophony serve`` runs. Section 41 requires that
+    web deployment remain possible, and the cheapest way to guarantee that is to
+    have no second application to keep in step.
+    """
+    try:
+        import uvicorn  # noqa: F401
+    except ImportError as exc:
+        error_console.print(
+            "[cacophony.error]error[/] the desktop shell needs FastAPI and uvicorn. "
+            "Install them with: pip install 'cacophony[api]'"
+        )
+        raise typer.Exit(code=2) from exc
+
+    from ..desktop import run_sidecar
+
+    configure_logging(log_level)
+    store_path = store or (default_store_path(project) if project else default_store_path())
+
+    run_sidecar(
+        host=host,
+        port=port,
+        token="" if no_token else None,
+        store_path=store_path,
+        studio=studio,
+        watch_parent=not keep_running,
+        log_level=log_level,
+    )
+
+
+@app.command()
 def plugins(
     show: Annotated[str | None, typer.Option("--show", "-s", help="One plugin, in full.")] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,

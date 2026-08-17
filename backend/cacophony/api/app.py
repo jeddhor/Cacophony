@@ -140,17 +140,79 @@ def _asset_root(stored: dict[str, Any]) -> Path | None:
     return Path(str(output_dir)) / "assets" if output_dir else None
 
 
+class _TokenGate:
+    """Require a per-launch token on every API call (design document section 41).
+
+    Pure ASGI rather than ``@app.middleware("http")``, and that is the point.
+    Starlette's HTTP middleware only sees ``scope["type"] == "http"``, so a
+    WebSocket handshake passes straight through it - which left
+    ``/api/runs/{id}/stream`` and ``/api/streams/{id}/feed`` reachable without a
+    token while every other route was guarded. Found by testing the socket
+    rather than assuming it behaved like the rest; a gap in a security control
+    is worse than no control, because the control is what stops anyone looking.
+
+    The Studio itself is served unauthenticated: static files carrying no data,
+    and the window has to load before it can present anything.
+    """
+
+    def __init__(self, app: Any, token: str) -> None:
+        self.app = app
+        self.token = token
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        guarded = scope["type"] in ("http", "websocket") and str(scope.get("path", "")).startswith(
+            "/api"
+        )
+        if not guarded or self._authorised(scope):
+            await self.app(scope, receive, send)
+            return
+
+        if scope["type"] == "websocket":
+            # 1008 is "policy violation" - something a client can report, rather
+            # than a silent disconnect it would retry forever.
+            await send({"type": "websocket.close", "code": 1008})
+            return
+
+        response = JSONResponse(
+            status_code=401,
+            content={"error": "unauthorised", "detail": "a valid token is required"},
+        )
+        await response(scope, receive, send)
+
+    def _authorised(self, scope: Any) -> bool:
+        expected = f"Bearer {self.token}".encode()
+        for key, value in scope.get("headers") or []:
+            if key == b"authorization" and value == expected:
+                return True
+        # A WebSocket handshake cannot carry an Authorization header, so the
+        # query string is accepted too - for both kinds, since a page that must
+        # use it for sockets may as well use it consistently.
+        from urllib.parse import parse_qs
+
+        presented = parse_qs(scope.get("query_string", b"").decode("latin-1")).get("token", [])
+        return bool(presented) and presented[0] == self.token
+
+
 def create_app(
     *,
     store_path: str | Path | None = None,
     service: RunService | None = None,
     static_dir: str | Path | None = None,
+    token: str | None = None,
 ) -> FastAPI:
     """Build the FastAPI application.
 
     ``static_dir`` mounts a built Studio at the root, so one process serves
     both the API and the UI. In development the Vite server proxies to this
     instead, and nothing is mounted.
+
+    ``token`` requires every API call to present it, and is what the desktop
+    shell uses (section 41). A local HTTP server is reachable by every process
+    on the machine: opening a browser tab is an explicit act by a person, while
+    a desktop window is not, and one that quietly exposed an unauthenticated
+    generation API to everything else on a shared machine would be a surprise
+    nobody asked for. ``cacophony serve`` passes nothing, so the served
+    behaviour is unchanged.
     """
     runs = service or RunService(store_path=store_path)
     streams = StreamService()
@@ -172,6 +234,10 @@ def create_app(
     )
     app.state.runs = runs
     app.state.streams = streams
+    app.state.token = token
+
+    if token:
+        app.add_middleware(_TokenGate, token=token)
 
     # -- error translation -------------------------------------------------- #
 

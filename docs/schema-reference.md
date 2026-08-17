@@ -1016,6 +1016,8 @@ cacophony transform  FILE [-s 'FIELD=OP']... [-w EXPR] [--drop-where EXPR]
 cacophony regenerate project.yaml -r N|N-M [-e ENTITY] [-c a,b,c] [--json] [--seed N]
 
 cacophony plugins    [--show NAME] [--json]
+cacophony desktop    [--store FILE] [-p project.yaml] [--studio DIR] [--port N]
+                     [--no-token] [--keep-running]
 ```
 
 `generate` and `preview` also accept `--cache MODE` (`disabled`, `read_only`,
@@ -1214,6 +1216,66 @@ it does stop, at compile time, by name.
 
 `CACOPHONY_NO_PLUGINS=1` skips loading entirely — for a run that must be
 reproducible against the built-ins alone, or for bisecting a plugin problem.
+
+---
+
+## The desktop application
+
+Design document section 41.
+
+```bash
+./desktop/build.sh            # a shell that uses `cacophony` from PATH
+./desktop/build.sh --bundle   # an installer, with the backend frozen inside
+```
+
+A Tauri window hosting the Studio, with the Python backend as a child process.
+Section 41 prefers Tauri to Electron because the application mainly needs to host
+a web UI while Python does the generation — which is the architecture that
+already existed.
+
+**There is no desktop mode in the backend.** `cacophony desktop` serves the same
+application `cacophony serve` serves. Section 41 requires that web deployment
+remain possible, and the cheapest way to guarantee that is to have no second
+application to keep in step.
+
+```
+$ cacophony desktop
+CACOPHONY_HANDSHAKE {"version":1,"url":"http://127.0.0.1:41287","token":"…","pid":8123}
+```
+
+One line of JSON on stdout, then the server runs. The shell spawns that, reads
+the line, and opens a window at the URL.
+
+| Property | Why |
+|---|---|
+| A port the OS chose | A fixed 8765 collides with the `cacophony serve` already running |
+| Printed after binding | A shell that opened a window on a guessed URL would work on fast machines and fail on slow ones |
+| A per-launch token | A loopback server is reachable by every process on the machine; a browser tab is an explicit act, a window is not |
+| Dies when stdin closes | The one shutdown path that survives the shell being `SIGKILL`ed, which no signal handler does |
+
+The token guards `/api` over **both** HTTP and WebSockets. The Studio itself is
+served unauthenticated: static files carrying no data, and the window has to load
+before it can present anything. `cacophony serve` passes no token and behaves
+exactly as it always has.
+
+### Building a release
+
+The shell is the easy half; the runtime is the hard one. A user who
+double-clicks an icon must not need Python, so a bundle freezes an interpreter
+and the backend into one executable with PyInstaller, which the shell finds
+beside itself as `cacophony-backend`. `CACOPHONY_BACKEND` overrides that, which
+is how a checkout points at its own virtualenv.
+
+Neither half cross-compiles — Tauri needs the platform's own webview and
+PyInstaller needs the platform's own interpreter — so a release is built once per
+platform. `.github/workflows/desktop.yml` does that for Linux, macOS and Windows,
+and smoke-tests each frozen backend by reading its handshake.
+
+**Signing is not configured and is deliberately not faked.** macOS notarisation
+needs an Apple Developer identity and Windows needs a code-signing certificate;
+both are secrets a repository owner supplies. A workflow that pretended to sign
+would produce installers that fail on first launch with a message about an
+unidentified developer.
 
 ---
 

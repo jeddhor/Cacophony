@@ -65,6 +65,14 @@ secrets.toml
 *.key
 *.pem
 
+# ---- Desktop build (design document section 41) ----
+# The Rust target directory and the frozen backend are build output, not source.
+# Anchored, like the runtime-state patterns above and for the same reason.
+/desktop/src-tauri/target/
+/desktop/src-tauri/binaries/
+/desktop/src-tauri/gen/
+/desktop/.build/
+
 # ---- Editors / OS ----
 .vscode/
 .idea/

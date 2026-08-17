@@ -1,0 +1,26 @@
+[package]
+name = "cacophony-desktop"
+version = "0.1.0"
+description = "Cacophony, as a desktop application (design document section 41)."
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `webview-data-url` is needed by the failure window, which renders its message
+# from a data URL. Without it Tauri refuses the URL and the shell panics -
+# meaning the one path whose entire job is to explain a failure was itself the
+# loudest failure. Found by running the binary with no backend on PATH.
+tauri = { version = "2", features = ["webview-data-url"] }
+serde_json = "1"
+
+[features]
+# Tauri's own convention: the release bundle turns off the dev console.
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

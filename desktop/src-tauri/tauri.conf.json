@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Cacophony",
+  "version": "0.1.0",
+  "identifier": "app.cacophony.studio",
+  "build": {
+    "frontendDist": "../../backend/cacophony/api/static"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage", "dmg", "nsis"],
+    "icon": ["icons/icon.png"],
+    "category": "DeveloperTool",
+    "shortDescription": "A synthetic reality compiler.",
+    "longDescription": "Cacophony generates enormous quantities of realistic, structured, internally consistent synthetic data from schemas that describe what data means rather than how to fabricate it.",
+    "externalBin": [],
+    "resources": []
+  }
+}

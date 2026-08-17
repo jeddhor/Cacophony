@@ -1,0 +1,99 @@
+# Building the desktop application (design document section 41).
+#
+# Three platforms, because neither half cross-compiles: Tauri needs the
+# platform's own webview and PyInstaller needs the platform's own interpreter.
+# A release is therefore built once per platform rather than once.
+#
+# Signing is not configured here and is deliberately not faked. macOS
+# notarisation needs an Apple Developer identity and Windows needs a code
+# signing certificate; both are secrets a repository owner supplies, and a
+# workflow that pretended to sign would produce installers that fail on first
+# launch with a message about an unidentified developer.
+name: desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux
+          - os: macos-latest
+            target: macos
+          - os: windows-latest
+            target: windows
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Tauri's Linux prerequisites. macOS and Windows use the system webview.
+      - name: System dependencies
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf
+
+      - name: Install Cacophony
+        run: python -m pip install -e ".[api,parquet]" pyinstaller
+
+      - name: Build
+        shell: bash
+        run: ./desktop/build.sh --bundle
+
+      # The check that matters: the shell starts, spawns the frozen backend,
+      # reads its handshake and shuts it down again. A bundle that builds and
+      # cannot start is worse than one that fails to build.
+      - name: Smoke test the frozen backend
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, subprocess, sys, urllib.request
+          from pathlib import Path
+
+          binary = next(Path("desktop/src-tauri/binaries").glob("cacophony-backend*"))
+          proc = subprocess.Popen(
+              [str(binary), "desktop"],
+              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
+          )
+          for _ in range(200):
+              line = proc.stdout.readline()
+              if line.startswith("CACOPHONY_HANDSHAKE "):
+                  break
+          else:
+              sys.exit("the frozen backend never announced itself")
+
+          payload = json.loads(line.split(" ", 1)[1])
+          request = urllib.request.Request(
+              payload["url"] + "/api/system",
+              headers={"Authorization": "Bearer " + payload["token"]},
+          )
+          print("frozen backend reports", json.loads(urllib.request.urlopen(request, timeout=30).read()))
+          proc.stdin.close()
+          proc.wait(timeout=60)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cacophony-${{ matrix.target }}
+          path: |
+            desktop/src-tauri/target/release/bundle/**
+            desktop/src-tauri/binaries/**
+          if-no-files-found: warn

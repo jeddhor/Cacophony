@@ -49,12 +49,43 @@ export class ApiError extends Error {
 
 const BASE = "/api";
 
+/**
+ * The desktop shell's per-launch token (design document section 41).
+ *
+ * A served Cacophony has none and needs none — a browser tab is an explicit act
+ * by a person. A desktop window is not, and its backend listens on loopback
+ * where every other process on the machine can reach it, so the shell generates
+ * a token, hands it to the page in the query string, and the API requires it.
+ *
+ * Read once at load and then removed from the address bar, so it does not end
+ * up in a screenshot, a bookmark or a shared link.
+ */
+const TOKEN: string | null = (() => {
+  if (typeof window === "undefined") return null;
+  const found = new URLSearchParams(window.location.search).get("token");
+  if (!found) return null;
+  const clean = new URL(window.location.href);
+  clean.searchParams.delete("token");
+  window.history.replaceState({}, "", clean.toString());
+  return found;
+})();
+
+/** Whether this page is running inside the desktop shell. */
+export const isDesktop = (): boolean => TOKEN !== null;
+
+function withToken(init?: RequestInit): HeadersInit | undefined {
+  const headers: Record<string, string> = {};
+  if (init?.body) headers["Content-Type"] = "application/json";
+  if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
+  return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${BASE}${path}`, {
-      headers: init?.body ? { "Content-Type": "application/json" } : undefined,
       ...init,
+      headers: { ...withToken(init), ...(init?.headers as Record<string, string>) },
     });
   } catch (cause) {
     // A dead backend is the single most likely failure in local development,
@@ -226,5 +257,8 @@ export function streamFeedUrl(streamId: string): string {
 
 function socketUrl(path: string): string {
   const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${window.location.host}${BASE}${path}`;
+  // A WebSocket handshake cannot carry an Authorization header, so the token
+  // goes in the query string - which the API accepts for exactly this reason.
+  const suffix = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "";
+  return `${scheme}//${window.location.host}${BASE}${path}${suffix}`;
 }
