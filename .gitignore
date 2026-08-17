@@ -35,12 +35,21 @@ backend/cacophony/api/static/
 
 # ---- Cacophony runtime state ----
 # Generated datasets and assets must never be committed.
-out/
-output/
-runs/
+#
+# Anchored with a leading slash, deliberately. An unanchored directory pattern
+# matches at every depth, and `runs/` therefore also matched
+# `backend/cacophony/runs/` - the Conductor - which went uncommitted from
+# Phase 3 until it was noticed in Phase 10. A fresh clone could not import
+# `cacophony.runs`. Generated output lives in a directory the user names with
+# `-d`, so anchoring loses nothing and the trap is worth closing for good.
+/out/
+/output/
+/runs/
+/generated/
+out/*/
+output/*/
 .cacophony/
 *.cacophony-run
-generated/
 assets/generated/
 
 # Local metadata database (SQLite) - see CACOPHONY.md section 42
