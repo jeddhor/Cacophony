@@ -807,6 +807,7 @@ Rates are written the way people say them: `250/s`, `8 per minute`,
 | Syslog | `syslog://host:514`, `syslog+tcp://host:601` | RFC 5424 by default, `rfc: 3164` available. TCP uses octet-counted framing |
 | HTTP | `https://host/ingest` | POSTs an ndjson batch per delivery; `array` and `single` bodies available |
 | Kafka | `kafka://broker:9092/topic` | Needs `pip install 'cacophony[kafka]'`. `key_field` partitions by a field |
+| Memory | `memory://200` | A bounded window of recent records, for the API and the Studio to read back. Useless from the CLI, where stdout already does this |
 
 Several `--to` flags send the same records to every destination.
 
@@ -962,6 +963,16 @@ cacophony serve --port 8765
 | `GET` | `/api/runs/{id}/assets/file` | One file, refusing paths outside the run |
 | `DELETE` | `/api/runs/{id}` | Delete a finished run |
 | `WS` | `/api/runs/{id}/stream` | Live progress |
+| `POST` | `/api/projects/{id}/streams` | Start a live stream (sections 35, 94) |
+| `GET` | `/api/streams` | Streams this server is running, filterable by project |
+| `GET` | `/api/streams/{id}` | Rates, attainment, destinations, per-entity counters |
+| `GET` | `/api/streams/{id}/records` | The bounded window of what it just produced |
+| `POST` | `/api/streams/{id}/retarget` | Change one entity's rate while it runs |
+| `POST` | `/api/streams/{id}/pause` | Hold, keeping the indices |
+| `POST` | `/api/streams/{id}/resume` | Carry on |
+| `POST` | `/api/streams/{id}/stop` | Stop, waiting for the destinations to close |
+| `DELETE` | `/api/streams/{id}` | Stop and forget |
+| `WS` | `/api/streams/{id}/feed` | Status, pushed twice a second |
 | `GET` | `/api/providers` | Adapters, and a project's configured providers |
 | `GET` | `/api/providers/{id}/models` | Models a provider serves |
 | `POST` | `/api/providers/{id}/test` | Health check |

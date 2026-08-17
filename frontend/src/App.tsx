@@ -17,6 +17,7 @@ import { ProjectsPage } from "./pages/ProjectsPage";
 import { ProvidersPage } from "./pages/ProvidersPage";
 import { RunPage } from "./pages/RunPage";
 import { RunsPage } from "./pages/RunsPage";
+import { StreamPage } from "./pages/StreamPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { StudioPage } from "./pages/StudioPage";
 
@@ -39,6 +40,7 @@ export function App(): ReactNode {
         <Route path="/projects" element={<ProjectsPage />} />
         <Route path="/studio" element={<StudioPage />} />
         <Route path="/generate" element={<GeneratePage />} />
+        <Route path="/stream" element={<StreamPage />} />
         <Route path="/runs" element={<RunsPage />} />
         <Route path="/runs/:runId" element={<RunPage />} />
         <Route path="/providers" element={<ProvidersPage />} />

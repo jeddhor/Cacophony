@@ -854,3 +854,38 @@ label {
   line-height: 1;
   color: var(--violet);
 }
+
+/* --------------------------------------------------------------------- */
+/* Streaming (sections 35, 94)                                            */
+/* --------------------------------------------------------------------- */
+
+/* Counts and rates line up under one another, so a column of them can be
+   compared by eye rather than read one at a time. */
+th.numeric,
+td.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+tbody tr.selected {
+  background: rgba(179, 136, 255, 0.09);
+}
+
+/* A stream's configuration: label and value, read down rather than across. */
+.detail-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0;
+  font-size: 0.83rem;
+}
+.detail-list dt {
+  color: var(--text-faint);
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  align-self: center;
+}
+.detail-list dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}

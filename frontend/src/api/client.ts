@@ -27,6 +27,9 @@ import type {
   SchemaTypesView,
   SchemaView,
   StoredEvent,
+  StreamRecordsView,
+  StreamView,
+  CreateStreamBody,
   SystemInfo,
 } from "./types";
 
@@ -168,6 +171,32 @@ export const api = {
   cancelRun: (id: string) => request<{ state: string }>(`/runs/${id}/cancel`, { method: "POST" }),
   deleteRun: (id: string) => request<void>(`/runs/${id}`, { method: "DELETE" }),
 
+  // -- live streams ------------------------------------------------------ //
+  streams: (projectId?: number) =>
+    request<StreamView[]>(`/streams${projectId !== undefined ? `?project_id=${projectId}` : ""}`),
+  stream: (id: string) => request<StreamView>(`/streams/${id}`),
+  streamRecords: (id: string, params: { limit?: number; entity?: string | null } = {}) => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set("limit", String(params.limit));
+    if (params.entity) query.set("entity", params.entity);
+    const suffix = query.toString();
+    return request<StreamRecordsView>(`/streams/${id}/records${suffix ? `?${suffix}` : ""}`);
+  },
+  startStream: (projectId: number, body: CreateStreamBody) =>
+    request<StreamView>(`/projects/${projectId}/streams`, json(body)),
+  retargetStream: (id: string, entity: string, rate: string) =>
+    request<{ entity: string; rate: string; per_second: number }>(
+      `/streams/${id}/retarget`,
+      json({ entity, rate }),
+    ),
+  pauseStream: (id: string) =>
+    request<{ paused: boolean; state: string }>(`/streams/${id}/pause`, { method: "POST" }),
+  resumeStream: (id: string) =>
+    request<{ resumed: boolean; state: string }>(`/streams/${id}/resume`, { method: "POST" }),
+  stopStream: (id: string) => request<StreamView>(`/streams/${id}/stop`, { method: "POST" }),
+  forgetStream: (id: string) =>
+    request<{ forgotten: boolean }>(`/streams/${id}`, { method: "DELETE" }),
+
   // -- providers --------------------------------------------------------- //
   providers: (projectId?: number) =>
     request<ProvidersView>(
@@ -183,6 +212,15 @@ export const api = {
 
 /** The WebSocket URL for a run's live feed (design document section 55). */
 export function runStreamUrl(runId: string): string {
+  return socketUrl(`/runs/${runId}/stream`);
+}
+
+/** The WebSocket URL for a live stream's status feed (section 94). */
+export function streamFeedUrl(streamId: string): string {
+  return socketUrl(`/streams/${streamId}/feed`);
+}
+
+function socketUrl(path: string): string {
   const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${window.location.host}${BASE}/runs/${runId}/stream`;
+  return `${scheme}//${window.location.host}${BASE}${path}`;
 }

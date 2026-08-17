@@ -129,8 +129,28 @@ class StreamStats:
     def elapsed(self) -> float:
         return max(1e-9, time.monotonic() - self.started_at)
 
-    #: What the stream was asked to produce per second, for the shortfall.
+    #: What the stream is being asked to produce per second, right now.
     target_rate: float = 0.0
+    #: Records the stream *should* have produced by the moment the target last
+    #: changed, and when that was. A rate turned up mid-stream (section 94)
+    #: makes a lifetime denominator wrong for the whole history - the first ten
+    #: minutes were not a shortfall against a rate that was only requested in
+    #: the eleventh - so the request is integrated over time rather than
+    #: assumed constant.
+    _owed: float = 0.0
+    _target_since: float = field(default_factory=time.monotonic)
+
+    def set_target(self, rate: float) -> None:
+        """Record a new requested rate from this moment on."""
+        now = time.monotonic()
+        self._owed += self.target_rate * (now - self._target_since)
+        self._target_since = now
+        self.target_rate = rate
+
+    @property
+    def expected(self) -> float:
+        """Records the request implies by now, across every rate it has had."""
+        return self._owed + self.target_rate * (time.monotonic() - self._target_since)
 
     @property
     def mean_rate(self) -> float:
@@ -138,14 +158,15 @@ class StreamStats:
 
     @property
     def attainment(self) -> float:
-        """Achieved rate over requested rate.
+        """Produced over requested, integrated over the run.
 
         Below 1.0 means the stream could not keep up - almost always because
         generation or a destination is slower than the rate asked for. A
         workload generator that silently produces less workload than requested
         is measuring the wrong thing, so this is reported rather than inferred.
         """
-        return self.mean_rate / self.target_rate if self.target_rate else 1.0
+        expected = self.expected
+        return self.generated / expected if expected > 0 else 1.0
 
     #: Samples kept for the recent-throughput window. Bounded because a stream
     #: is meant to run for hours.
@@ -177,6 +198,7 @@ class StreamStats:
             "records_per_second": round(self.current_rate(), 2),
             "mean_records_per_second": round(self.mean_rate, 2),
             "target_records_per_second": round(self.target_rate, 2),
+            "expected_records": round(self.expected, 1),
             "attainment": round(self.attainment, 4),
             "by_entity": dict(self.by_entity),
         }
@@ -300,7 +322,15 @@ class LiveStream:
         parsed = parse_rate(rate)
         stream.retarget(parsed)
         self.config.rates[entity] = parsed
+        # Attainment is achieved over *requested*, so the denominator has to
+        # move with the request. Without this a stream turned up from 200/s to
+        # 800/s reports 400% attainment - the exact "measuring the wrong thing"
+        # failure the number exists to prevent.
+        self.stats.set_target(self._target_rate())
         return parsed
+
+    def _target_rate(self) -> float:
+        return sum(stream.rate.per_second for stream in self.streams.values())
 
     @property
     def running(self) -> bool:
@@ -316,7 +346,7 @@ class LiveStream:
 
         self.state = "running"
         self.stats = StreamStats()
-        self.stats.target_rate = sum(stream.rate.per_second for stream in self.streams.values())
+        self.stats.set_target(self._target_rate())
         deadline = (
             self.stats.started_at + self.config.duration_seconds
             if self.config.duration_seconds

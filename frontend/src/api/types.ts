@@ -493,3 +493,102 @@ export interface CreateRunBody {
     max_retries?: number;
   };
 }
+
+// --------------------------------------------------------------------------- //
+// Live streams (design document sections 35, 94)
+// --------------------------------------------------------------------------- //
+
+/** One entity's share of a stream. */
+export interface StreamEntity {
+  entity: string;
+  index: number;
+  produced: number;
+  rate: string;
+  per_second: number;
+  available: number;
+}
+
+/** What a destination has actually accepted. */
+export interface StreamSinkStats {
+  sink: string;
+  delivered: number;
+  failed: number;
+  batches: number;
+  bytes_sent: number;
+  success_rate: number;
+  seconds_blocked: number;
+  last_error: string | null;
+  keep?: number;
+  held?: number;
+}
+
+/**
+ * A stream's whole status.
+ *
+ * `attainment` is the number that matters: achieved over requested. A workload
+ * generator that reports "18,204 delivered" while running at sixty per cent of
+ * the rate it was given is measuring the wrong thing.
+ */
+export interface StreamView {
+  id: string;
+  project_id: number;
+  project: string;
+  state: string;
+  error: string | null;
+  created_at: number;
+  destinations: string[];
+  config: {
+    rates: Record<string, string>;
+    batch_size: number;
+    flush_seconds: number;
+    duration_seconds: number | null;
+    max_records: number | null;
+    live_time: boolean;
+    follow_shape: boolean;
+    scenario_cycle_seconds: number;
+    max_in_flight: number;
+  };
+  stats: {
+    elapsed_seconds: number;
+    generated: number;
+    delivered: number;
+    dropped: number;
+    records_per_second: number;
+    mean_records_per_second: number;
+    target_records_per_second: number;
+    attainment: number;
+    by_entity: Record<string, number>;
+  };
+  entities: StreamEntity[];
+  sinks: StreamSinkStats[];
+}
+
+/** One record the stream produced, as the sample window holds it. */
+export interface StreamRecordRow {
+  seq: number;
+  entity: string;
+  record: Record<string, unknown>;
+}
+
+export interface StreamRecordsView {
+  stream_id: string;
+  sampled: boolean;
+  keep: number;
+  records: StreamRecordRow[];
+}
+
+export interface CreateStreamBody {
+  rates: Record<string, string>;
+  destinations?: string[];
+  keep_records?: number;
+  batch_size?: number;
+  flush_seconds?: number;
+  duration_seconds?: number | null;
+  max_records?: number | null;
+  start_index?: number;
+  live_time?: boolean;
+  follow_shape?: boolean;
+  scenario_cycle_seconds?: number;
+  on_error?: "continue" | "abort";
+  seed?: number | null;
+}

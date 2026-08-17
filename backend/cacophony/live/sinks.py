@@ -33,6 +33,7 @@ import contextlib
 import json
 import socket
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -52,6 +53,7 @@ __all__ = [
     "FileStreamSink",
     "HttpSink",
     "KafkaSink",
+    "MemorySink",
     "StdoutSink",
     "StreamSink",
     "SyslogSink",
@@ -155,6 +157,51 @@ class StdoutSink(StreamSink):
         sys.stdout.write(payload)
         sys.stdout.flush()
         return self._note(len(records), 0, len(payload))
+
+
+class MemorySink(StreamSink):
+    """The last ``keep`` records, and nothing older.
+
+    What a browser needs and a terminal does not. The Studio's streaming page
+    shows the records going past, and a page cannot tail a file on the server
+    or read the process's stdout - so a stream started over the API keeps a
+    bounded window of what it produced and the page reads that.
+
+    Bounded by construction, with a ``deque``. A sink that accumulated for the
+    benefit of a dashboard would defeat the whole point of a stream, which is
+    that it runs for hours in constant memory.
+    """
+
+    name = "memory"
+
+    #: Enough to fill a screen several times over, small enough that a stream
+    #: at 50,000/s costs the same as one at 5/s.
+    DEFAULT_KEEP = 200
+
+    def __init__(self, **options: Any) -> None:
+        super().__init__(**options)
+        self.keep = max(1, int(options.get("keep", self.DEFAULT_KEEP)))
+        #: The entity is kept beside the record rather than mixed into it, so a
+        #: schema with a field called ``entity`` cannot shadow the label.
+        self.records: deque[dict[str, Any]] = deque(maxlen=self.keep)
+        self._sequence = 0
+
+    async def send(self, records: Sequence[GeneratedRecord]) -> int:
+        size = 0
+        for record in records:
+            values = record.to_dict(jsonable=True)
+            self._sequence += 1
+            self.records.append({"seq": self._sequence, "entity": record.entity, "record": values})
+            size += len(str(values))
+        return self._note(len(records), 0, size)
+
+    def recent(self, limit: int | None = None, entity: str | None = None) -> list[dict[str, Any]]:
+        """The most recent records first, optionally for one entity."""
+        rows = [row for row in reversed(self.records) if entity is None or row["entity"] == entity]
+        return rows[: limit or self.keep]
+
+    def describe(self) -> dict[str, Any]:
+        return {**super().describe(), "keep": self.keep, "held": len(self.records)}
 
 
 class FileStreamSink(StreamSink):
@@ -527,6 +574,7 @@ class KafkaSink(StreamSink):
 
 SINK_TYPES: dict[str, type[StreamSink]] = {
     "stdout": StdoutSink,
+    "memory": MemorySink,
     "file": FileStreamSink,
     "syslog": SyslogSink,
     "http": HttpSink,
@@ -573,4 +621,9 @@ def _options_for(spec: str | dict[str, Any]) -> dict[str, Any]:
     if scheme == "kafka":
         brokers, _, topic = remainder.rpartition("/")
         return {"type": "kafka", "brokers": brokers or "localhost:9092", "topic": topic}
+    if scheme == "memory":
+        # ``memory://200`` or bare ``memory://``. How many records to keep is
+        # the only thing this destination has to be told.
+        keep = remainder.strip("/")
+        return {"type": "memory", **({"keep": int(keep)} if keep.isdigit() else {})}
     raise OutputError(f"unknown stream destination scheme '{scheme}://'")

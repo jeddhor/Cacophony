@@ -12,6 +12,12 @@ look like something while it happens::
     POST   /api/runs/{id}/cancel      GET    /api/runs/{id}/events
     WS     /api/runs/{id}/stream
 
+    POST   /api/projects/{id}/streams GET    /api/streams
+    GET    /api/streams/{id}          DELETE /api/streams/{id}
+    GET    /api/streams/{id}/records  POST   /api/streams/{id}/retarget
+    POST   /api/streams/{id}/pause    POST   /api/streams/{id}/resume
+    POST   /api/streams/{id}/stop     WS     /api/streams/{id}/feed
+
     GET    /api/providers             GET    /api/providers/{id}/models
     POST   /api/providers/{id}/test
 
@@ -48,11 +54,14 @@ from ..runs.state import RunState
 from .schemas import (
     CreateProjectRequest,
     CreateRunRequest,
+    CreateStreamRequest,
     PatchSchemaRequest,
     PreviewRequest,
+    RetargetRequest,
     WriteSchemaRequest,
 )
 from .service import RunService
+from .streams import StreamService
 
 __all__ = ["create_app"]
 
@@ -143,10 +152,15 @@ def create_app(
     instead, and nothing is mounted.
     """
     runs = service or RunService(store_path=store_path)
+    streams = StreamService()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> Any:
         yield
+        # Streams first: a stream stops in milliseconds, and stopping them
+        # before the runs means a server going away stops sending somebody's
+        # syslog collector traffic it will never explain.
+        await streams.shutdown()
         await runs.shutdown()
 
     app = FastAPI(
@@ -156,6 +170,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.runs = runs
+    app.state.streams = streams
 
     # -- error translation -------------------------------------------------- #
 
@@ -186,7 +201,7 @@ def create_app(
 
     @app.get("/api/system", tags=["system"])
     async def system() -> dict[str, Any]:
-        return {"version": __version__, **runs.describe()}
+        return {"version": __version__, **runs.describe(), **streams.describe()}
 
     @app.get("/api/generators", tags=["system"])
     async def generators() -> list[dict[str, Any]]:
@@ -577,6 +592,127 @@ def create_app(
                 await websocket.send_json(payload)
                 if payload["kind"] in FINAL_EVENT_KINDS:
                     return
+        except (WebSocketDisconnect, asyncio.CancelledError):
+            return
+
+    # -- live streams ------------------------------------------------------- #
+
+    @app.post("/api/projects/{project_id}/streams", status_code=201, tags=["streams"])
+    async def start_stream(project_id: int, body: CreateStreamRequest) -> dict[str, Any]:
+        """Start a workload generator (design document sections 35, 94).
+
+        The response is the stream's first status, so a page can render the
+        dashboard from the reply that started it rather than polling to find
+        out what it just created.
+        """
+        compiled, _revision, name = runs.load_for_run(project_id)
+        if body.seed is not None:
+            compiled.spec.project.seed = body.seed
+        return streams.start(
+            compiled,
+            project_id=project_id,
+            project_name=name,
+            rates=dict(body.rates),
+            destinations=body.destinations,
+            keep_records=body.keep_records,
+            **body.to_options(),
+        )
+
+    @app.get("/api/streams", tags=["streams"])
+    async def list_streams(project_id: int | None = Query(default=None)) -> list[dict[str, Any]]:
+        return streams.listing(project_id=project_id)
+
+    @app.get("/api/streams/{stream_id}", tags=["streams"])
+    async def get_stream(stream_id: str) -> dict[str, Any]:
+        return _found(streams.get(stream_id), "stream").describe()
+
+    @app.get("/api/streams/{stream_id}/records", tags=["streams"])
+    async def stream_records(
+        stream_id: str,
+        limit: int = Query(default=50, ge=1, le=1000),
+        entity: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        """The last records the stream produced, newest first.
+
+        A window, not a log. The stream keeps a bounded number of records so a
+        browser can see what is going past; everything older has already been
+        delivered and forgotten, which is what makes a six-hour stream cost the
+        same as a six-second one.
+        """
+        _found(streams.get(stream_id), "stream")
+        rows = streams.records(stream_id, limit=limit, entity=entity)
+        sink = streams.require(stream_id).memory
+        return {
+            "stream_id": stream_id,
+            "sampled": sink is not None,
+            "keep": sink.keep if sink else 0,
+            "records": rows,
+        }
+
+    @app.post("/api/streams/{stream_id}/retarget", tags=["streams"])
+    async def retarget_stream(stream_id: str, body: RetargetRequest) -> dict[str, Any]:
+        """Change one entity's rate while the stream runs (section 94).
+
+        The point of the API over the CLI: a rate you can turn up while
+        watching what it does to whatever is receiving it.
+        """
+        _found(streams.get(stream_id), "stream")
+        return streams.retarget(stream_id, body.entity, body.rate)
+
+    @app.post("/api/streams/{stream_id}/pause", tags=["streams"])
+    async def pause_stream(stream_id: str) -> dict[str, Any]:
+        _found(streams.get(stream_id), "stream")
+        return {
+            "paused": streams.pause(stream_id),
+            "state": streams.require(stream_id).stream.state,
+        }
+
+    @app.post("/api/streams/{stream_id}/resume", tags=["streams"])
+    async def resume_stream(stream_id: str) -> dict[str, Any]:
+        _found(streams.get(stream_id), "stream")
+        return {
+            "resumed": streams.resume(stream_id),
+            "state": streams.require(stream_id).stream.state,
+        }
+
+    @app.post("/api/streams/{stream_id}/stop", tags=["streams"])
+    async def stop_stream(stream_id: str) -> dict[str, Any]:
+        """Stop a stream and wait for its destinations to close.
+
+        Waiting matters: a file sink that has not been closed may be holding
+        the last batch, and a caller told "stopped" should be able to read the
+        file immediately.
+        """
+        _found(streams.get(stream_id), "stream")
+        stopped = await streams.stop(stream_id)
+        return {"stopped": stopped, **streams.require(stream_id).describe()}
+
+    @app.delete("/api/streams/{stream_id}", tags=["streams"])
+    async def forget_stream(stream_id: str) -> dict[str, Any]:
+        """Drop a finished stream. A running one is stopped first."""
+        _found(streams.get(stream_id), "stream")
+        await streams.stop(stream_id)
+        return {"forgotten": streams.forget(stream_id)}
+
+    @app.websocket("/api/streams/{stream_id}/feed")
+    async def stream_feed(websocket: WebSocket, stream_id: str) -> None:
+        """Push a stream's status until it finishes.
+
+        Polled at a fixed interval rather than pushed per batch. A run emits a
+        handful of events a minute; a stream produces tens of thousands of
+        records a second, and a frame per batch would make the dashboard the
+        most expensive thing in the process.
+        """
+        await websocket.accept()
+        if streams.get(stream_id) is None:
+            await websocket.send_json(
+                {"kind": "error", "stream_id": stream_id, "message": f"no stream {stream_id}"}
+            )
+            return
+
+        try:
+            async for payload in streams.feed(stream_id):
+                await websocket.send_json({"kind": "stream.status", **payload})
         except (WebSocketDisconnect, asyncio.CancelledError):
             return
 

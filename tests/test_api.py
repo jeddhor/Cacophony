@@ -814,3 +814,176 @@ class TestAssetRoutes:
         summary = client.get(f"/api/runs/{run_id}").json()["summary"]
         assert summary["assets"]["assets"] == 12
         assert summary["assets"]["bytes_written"] > 0
+
+
+# --------------------------------------------------------------------------- #
+# Live streams
+# --------------------------------------------------------------------------- #
+
+
+def await_stream_records(client, stream_id: str, *, tries: int = 200) -> list[dict[str, Any]]:
+    """Wait for a stream to have actually produced something."""
+    import time
+
+    for _ in range(tries):
+        rows = client.get(f"/api/streams/{stream_id}/records").json()["records"]
+        if rows:
+            return rows
+        time.sleep(0.05)
+    return []
+
+
+class TestStreams:
+    """Sections 35 and 94, over HTTP."""
+
+    def _start(self, client, project_id: int, **body: Any) -> dict[str, Any]:
+        payload = {"rates": {"employee": "200/s"}, "keep_records": 50, **body}
+        response = client.post(f"/api/projects/{project_id}/streams", json=payload)
+        assert response.status_code == 201, response.text
+        return response.json()
+
+    def test_starting_one_returns_its_status(self, client, project_id) -> None:
+        stream = self._start(client, project_id)
+        assert stream["state"] in ("queued", "running")
+        assert stream["config"]["rates"] == {"employee": "200/s"}
+        assert [entity["entity"] for entity in stream["entities"]] == ["employee"]
+        client.post(f"/api/streams/{stream['id']}/stop")
+
+    def test_a_stream_needs_somewhere_to_go(self, client, project_id) -> None:
+        """No destination and no sample window is a stream nobody can observe."""
+        response = client.post(
+            f"/api/projects/{project_id}/streams",
+            json={"rates": {"employee": "10/s"}, "keep_records": 0},
+        )
+        assert response.status_code == 400
+        assert "somewhere to go" in response.json()["detail"]
+
+    def test_an_unknown_entity_is_refused(self, client, project_id) -> None:
+        response = client.post(
+            f"/api/projects/{project_id}/streams", json={"rates": {"nonexistent": "10/s"}}
+        )
+        assert response.status_code == 400
+        assert "nonexistent" in response.json()["detail"]
+
+    def test_it_produces_records_a_browser_can_read(self, client, project_id) -> None:
+        stream = self._start(client, project_id)
+        rows = await_stream_records(client, stream["id"])
+        assert rows, "the stream produced nothing"
+        assert rows[0]["entity"] == "employee"
+        assert "employee_id" in rows[0]["record"]
+        # Newest first, and the window is bounded.
+        assert rows[0]["seq"] >= rows[-1]["seq"]
+        payload = client.get(f"/api/streams/{stream['id']}/records?limit=5").json()
+        assert payload["sampled"] and len(payload["records"]) <= 5
+        client.post(f"/api/streams/{stream['id']}/stop")
+
+    def test_the_window_does_not_grow(self, client, project_id) -> None:
+        """A six-hour stream must cost what a six-second one does."""
+        stream = self._start(client, project_id, rates={"employee": "2000/s"}, keep_records=20)
+        await_stream_records(client, stream["id"])
+        import time
+
+        time.sleep(0.4)
+        payload = client.get(f"/api/streams/{stream['id']}/records?limit=1000").json()
+        assert len(payload["records"]) <= 20
+        client.post(f"/api/streams/{stream['id']}/stop")
+
+    def test_retarget_changes_the_rate_while_it_runs(self, client, project_id) -> None:
+        """Section 94's steering - the reason these routes exist."""
+        stream = self._start(client, project_id)
+        response = client.post(
+            f"/api/streams/{stream['id']}/retarget", json={"entity": "employee", "rate": "50/s"}
+        )
+        assert response.status_code == 200
+        assert response.json()["per_second"] == 50.0
+
+        status = client.get(f"/api/streams/{stream['id']}").json()
+        assert status["config"]["rates"]["employee"] == "50/s"
+        client.post(f"/api/streams/{stream['id']}/stop")
+
+    def test_retargeting_an_entity_that_is_not_streaming(self, client, project_id) -> None:
+        stream = self._start(client, project_id)
+        response = client.post(
+            f"/api/streams/{stream['id']}/retarget", json={"entity": "device", "rate": "5/s"}
+        )
+        assert response.status_code == 400
+        assert "not being streamed" in response.json()["detail"]
+        client.post(f"/api/streams/{stream['id']}/stop")
+
+    def test_pause_and_resume(self, client, project_id) -> None:
+        stream = self._start(client, project_id)
+        await_stream_records(client, stream["id"])
+
+        assert client.post(f"/api/streams/{stream['id']}/pause").json()["paused"]
+        assert client.get(f"/api/streams/{stream['id']}").json()["state"] == "paused"
+        assert client.post(f"/api/streams/{stream['id']}/resume").json()["resumed"]
+        assert client.get(f"/api/streams/{stream['id']}").json()["state"] == "running"
+        client.post(f"/api/streams/{stream['id']}/stop")
+
+    def test_stopping_waits_for_the_destinations(self, client, project_id, tmp_path) -> None:
+        """A caller told "stopped" should be able to read the file at once."""
+        path = tmp_path / "stream.jsonl"
+        stream = self._start(
+            client, project_id, destinations=[f"file://{path}"], rates={"employee": "500/s"}
+        )
+        await_stream_records(client, stream["id"])
+
+        stopped = client.post(f"/api/streams/{stream['id']}/stop").json()
+        assert stopped["stopped"]
+        assert stopped["state"] in ("stopped", "completed", "finished")
+        assert path.exists() and path.read_text(encoding="utf-8").strip()
+
+    def test_listing_and_filtering(self, client, project_id) -> None:
+        stream = self._start(client, project_id)
+        assert any(row["id"] == stream["id"] for row in client.get("/api/streams").json())
+        filtered = client.get(f"/api/streams?project_id={project_id}").json()
+        assert any(row["id"] == stream["id"] for row in filtered)
+        assert client.get("/api/streams?project_id=9999").json() == []
+        client.post(f"/api/streams/{stream['id']}/stop")
+
+    def test_forgetting_stops_it_first(self, client, project_id) -> None:
+        stream = self._start(client, project_id)
+        assert client.delete(f"/api/streams/{stream['id']}").json()["forgotten"]
+        assert client.get(f"/api/streams/{stream['id']}").status_code == 404
+
+    def test_unknown_streams_are_404(self, client) -> None:
+        assert client.get("/api/streams/nope").status_code == 404
+        assert client.get("/api/streams/nope/records").status_code == 404
+        assert client.post("/api/streams/nope/pause").status_code == 404
+        assert (
+            client.post("/api/streams/nope/retarget", json={"entity": "e", "rate": "1/s"})
+        ).status_code == 404
+
+    def test_the_feed_pushes_status(self, client, project_id) -> None:
+        stream = self._start(client, project_id, rates={"employee": "300/s"})
+        with client.websocket_connect(f"/api/streams/{stream['id']}/feed") as socket:
+            first = socket.receive_json()
+            assert first["kind"] == "stream.status"
+            assert first["id"] == stream["id"]
+            assert "attainment" in first["stats"]
+        client.post(f"/api/streams/{stream['id']}/stop")
+
+    def test_the_feed_says_so_when_there_is_no_stream(self, client) -> None:
+        with client.websocket_connect("/api/streams/nope/feed") as socket:
+            assert socket.receive_json()["kind"] == "error"
+
+    def test_the_system_route_counts_streams(self, client, project_id) -> None:
+        stream = self._start(client, project_id)
+        system = client.get("/api/system").json()
+        assert system["streams"] >= 1
+        assert stream["id"] in system["active_streams"]
+        client.post(f"/api/streams/{stream['id']}/stop")
+
+    def test_a_bounded_stream_finishes_on_its_own(self, client, project_id) -> None:
+        stream = self._start(
+            client, project_id, rates={"employee": "500/s"}, max_records=40, keep_records=100
+        )
+        import time
+
+        for _ in range(200):
+            status = client.get(f"/api/streams/{stream['id']}").json()
+            if status["state"] not in ("queued", "running"):
+                break
+            time.sleep(0.05)
+        assert status["stats"]["generated"] >= 40
+        assert status["state"] not in ("queued", "running")

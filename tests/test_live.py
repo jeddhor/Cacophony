@@ -543,3 +543,59 @@ class TestStreamCli:
 
         with pytest.raises(CacophonyError, match="login"):
             parse_rates(["ghost=1/s"], logins_project())
+
+
+class TestRetargetedAttainment:
+    """Attainment when the request itself changes (section 94).
+
+    A stream turned up from 200/s to 800/s has not been failing for the first
+    ten minutes - it was not asked for 800/s then. The denominator therefore
+    integrates the request over time rather than assuming it was constant, or
+    the number the whole dashboard is built around reads 400%.
+    """
+
+    def test_the_denominator_follows_the_request(self) -> None:
+        from cacophony.live.stream import StreamStats
+
+        stats = StreamStats()
+        stats.set_target(100.0)
+        stats._target_since -= 10.0  # ten seconds at 100/s: 1,000 owed
+        stats.note("e", 1_000)
+        assert stats.attainment == pytest.approx(1.0, abs=0.02)
+
+        stats.set_target(400.0)
+        stats._target_since -= 10.0  # ten more at 400/s: 4,000 more owed
+        stats.note("e", 4_000)
+        assert stats.expected == pytest.approx(5_000, rel=0.02)
+        assert stats.attainment == pytest.approx(1.0, abs=0.02)
+
+    def test_turning_a_stream_up_does_not_invent_attainment(self) -> None:
+        """The bug this replaced: a lifetime mean over the newest target."""
+        from cacophony.live.stream import StreamStats
+
+        stats = StreamStats()
+        stats.set_target(200.0)
+        stats.started_at -= 10.0
+        stats._target_since -= 10.0
+        stats.note("e", 2_000)
+
+        stats.set_target(800.0)
+        # Immediately after the change almost nothing is owed at the new rate,
+        # so attainment stays at 1.0 rather than jumping to 2,000/800 = 250%.
+        assert stats.attainment == pytest.approx(1.0, abs=0.05)
+
+    def test_a_shortfall_is_still_reported(self) -> None:
+        from cacophony.live.stream import StreamStats
+
+        stats = StreamStats()
+        stats.set_target(1_000.0)
+        stats._target_since -= 10.0
+        stats.note("e", 5_000)
+        assert stats.attainment == pytest.approx(0.5, abs=0.02)
+
+    def test_retarget_updates_the_target_on_the_stream(self) -> None:
+        stream, _sink = stream_for({"login": "100/s"})
+        stream.stats.set_target(100.0)
+        stream.retarget("login", "400/s")
+        assert stream.stats.target_rate == 400.0
+        assert stream.stats.to_dict()["target_records_per_second"] == 400.0

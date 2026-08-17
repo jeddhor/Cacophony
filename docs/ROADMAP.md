@@ -419,9 +419,8 @@ the surplus stays in the bucket, the stream runs at what it can actually do,
 and attainment reports the gap. The same case now peaks at 127 MB and reports
 0.4%.
 
-**Not in this phase:** REST routes to start and steer a stream, and a Studio
-streaming page. `retarget` exists and is tested; nothing yet calls it over
-HTTP.
+**Closed after Phase 9.** The REST routes and the Studio streaming page landed
+later, and are described under "Phase 8, completed" below.
 
 ---
 
@@ -503,6 +502,48 @@ for one that is pure arithmetic. `generate` remains the single-node path with
 run records, checkpoints and resume; the distributed commands trade that
 bookkeeping for parallelism, which is honest because a shard needs no
 checkpoint.
+
+---
+
+## Phase 8, completed — streams over HTTP ✅
+
+**Delivered.** Design document sections 35, 36, 94. The one thing Phase 8 left
+open: a stream you can start, watch and *steer* from somewhere other than a
+terminal.
+
+```
+POST   /api/projects/{id}/streams      GET  /api/streams
+GET    /api/streams/{id}               GET  /api/streams/{id}/records
+POST   /api/streams/{id}/retarget      POST /api/streams/{id}/pause|resume|stop
+DELETE /api/streams/{id}               WS   /api/streams/{id}/feed
+```
+
+- **A Studio streaming page**: rates as editable fields with presets, a
+  retarget button per entity, per-destination delivery counts, the live
+  configuration, and a table of the records going past
+- **`retarget` is finally called by something.** It existed and was tested from
+  Phase 8; nothing used it. Over HTTP it becomes what section 94 describes — a
+  workload you turn up while watching what it does to whatever is receiving it
+- **A `memory://` sink**: a bounded ring of recent records, because a browser
+  cannot tail a file on the server or read its stdout. Bounded by a `deque`, so
+  a stream at 50,000/s costs what one at 5/s costs
+- **Streams are process state, not history.** They are held in a service rather
+  than the run store: a stream that outlived the server producing it would be a
+  row describing traffic nobody is sending. Shutdown stops them first, so a
+  server going away stops sending somebody's collector traffic
+
+**Attainment survived contact with steering — but only after a fix.** Turning a
+live stream up from 200/s to 800/s made it report **182% attainment**: the
+denominator was captured once when the stream started, and the numerator was a
+lifetime mean. Both halves were wrong. Setting the new target is not enough
+either, because the first ten minutes were not a shortfall against a rate that
+was only requested in the eleventh.
+
+So the request is now *integrated over time*: each retarget banks what the old
+rate owed and starts accruing at the new one. Measured against a real server —
+98% at 200/s, still 96% in the instant after the retarget, 99.3% five seconds
+later at 800/s. A number that jumps to 400% because somebody moved a slider is
+exactly the "measuring the wrong thing" failure attainment exists to prevent.
 
 ---
 

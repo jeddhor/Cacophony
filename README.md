@@ -82,14 +82,17 @@ record's seed is a hash of its position rather than a point in a stream.
   from an interruption without duplicating or skipping a record
 - Run history in a SQLite store beside the project, recording the exact schema
   revision each run used
-- REST API and a WebSocket feed of live progress
+- REST API and a WebSocket feed of live progress, for runs and for streams —
+  including `retarget`, so a workload can be turned up while you watch what it
+  does to whatever is receiving it
 - Structured logging with the fields design document section 86 asks for
 - CLI: `validate`, `lint`, `plan`, `prompt`, `propose`, `preview`, `generate`,
   `resume`, `runs`, `run`, `serve`, `stream`, `cluster`, `controller`,
   `worker`, `worlds`, `generators`, `providers --test`, `models`
 - **Cacophony Studio**: project dashboard, schema editor with live preview,
   distribution and relationship views, a generate screen with cost estimates,
-  a live run view fed by the WebSocket, and an asset browser that shows the
+  a live run view fed by the WebSocket, a streaming page with per-entity rate
+  controls and the records going past, and an asset browser that shows the
   images, plays the audio and opens the documents
 - Schema edits are applied as targeted patches, so a documented YAML file keeps
   its comments, its ordering and its formatting
@@ -337,6 +340,22 @@ cacophony stream project.yaml -r authentication=200/s -t stdout \
 requested, and warns below 95%. A workload generator that reports "18,204
 delivered" while quietly running at sixty per cent of the rate you asked for is
 measuring the wrong thing.
+
+The same stream over HTTP, where you can also *steer* it:
+
+```bash
+curl -X POST localhost:8765/api/projects/1/streams -H 'content-type: application/json' \
+  -d '{"rates": {"authentication": "250/s"}, "destinations": ["syslog://siem:514"]}'
+
+# Turn it up while it runs, and watch what that does to the collector
+curl -X POST localhost:8765/api/streams/$ID/retarget -H 'content-type: application/json' \
+  -d '{"entity": "authentication", "rate": "2000/s"}'
+```
+
+The Studio's streaming page is that, with the rates as fields you edit, the
+per-destination delivery counts beside them, and a window of the records going
+past. Attainment integrates the request over time, so turning a stream up does
+not make it claim it was over-delivering all along.
 
 ### Many machines, the same bytes
 

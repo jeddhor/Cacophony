@@ -28,6 +28,7 @@ const DESTINATIONS: Destination[] = [
   { to: "/projects", label: "Projects", glyph: "◈" },
   { to: "/studio", label: "Studio", glyph: "◆", needsProject: true },
   { to: "/generate", label: "Generate", glyph: "▶", needsProject: true },
+  { to: "/stream", label: "Stream", glyph: "≋", needsProject: true },
   { to: "/runs", label: "Runs", glyph: "◉" },
   { to: "/providers", label: "Providers", glyph: "⌁" },
   { to: "/assets", label: "Assets", glyph: "▣" },

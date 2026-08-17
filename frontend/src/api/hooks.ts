@@ -16,13 +16,15 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, runStreamUrl } from "./client";
+import { api, runStreamUrl, streamFeedUrl } from "./client";
 import type {
   CreateRunBody,
+  CreateStreamBody,
   RunEvent,
   RunSnapshot,
   RunView,
   SchemaOperation,
+  StreamView,
 } from "./types";
 
 /** Never changes while the page is open. */
@@ -309,3 +311,131 @@ export function liveOrStored(run: RunView | undefined, live: LiveRun): RunSnapsh
 }
 
 export type { UseQueryResult };
+
+// --------------------------------------------------------------------------- //
+// Live streams (design document sections 35, 94)
+// --------------------------------------------------------------------------- //
+
+export const streamKeys = {
+  all: (projectId?: number) => ["streams", projectId ?? null] as const,
+  one: (id: string) => ["stream", id] as const,
+  records: (id: string, params: Record<string, unknown>) => ["stream-records", id, params] as const,
+};
+
+/** Every stream this server is running. */
+export const useStreams = (projectId?: number) =>
+  useQuery({
+    queryKey: streamKeys.all(projectId),
+    queryFn: () => api.streams(projectId),
+    refetchInterval: 5_000,
+  });
+
+/**
+ * The records a stream has just produced.
+ *
+ * Polled rather than pushed. The socket carries the numbers, which move
+ * continuously; the sample window is a peek at the data, and a browser
+ * re-rendering fifty rows twenty times a second would be the most expensive
+ * thing on the page for no benefit.
+ */
+export const useStreamRecords = (
+  id: string | null,
+  params: { limit?: number; entity?: string | null } = {},
+  live = true,
+) =>
+  useQuery({
+    queryKey: streamKeys.records(id ?? "", params),
+    queryFn: () => api.streamRecords(id as string, params),
+    enabled: Boolean(id),
+    refetchInterval: live ? 1_000 : false,
+  });
+
+/** Start, steer and stop a stream. */
+export function useStreamControls(projectId: number | null) {
+  const client = useQueryClient();
+  const refresh = () => {
+    void client.invalidateQueries({ queryKey: ["streams"] });
+    void client.invalidateQueries({ queryKey: ["stream"] });
+  };
+
+  return {
+    start: useMutation({
+      mutationFn: (body: CreateStreamBody) => api.startStream(projectId as number, body),
+      onSuccess: refresh,
+    }),
+    retarget: useMutation({
+      mutationFn: ({ id, entity, rate }: { id: string; entity: string; rate: string }) =>
+        api.retargetStream(id, entity, rate),
+      onSuccess: refresh,
+    }),
+    pause: useMutation({ mutationFn: (id: string) => api.pauseStream(id), onSuccess: refresh }),
+    resume: useMutation({ mutationFn: (id: string) => api.resumeStream(id), onSuccess: refresh }),
+    stop: useMutation({ mutationFn: (id: string) => api.stopStream(id), onSuccess: refresh }),
+    forget: useMutation({ mutationFn: (id: string) => api.forgetStream(id), onSuccess: refresh }),
+  };
+}
+
+export interface LiveStreamFeed {
+  status: StreamStatus;
+  view: StreamView | null;
+  finished: boolean;
+}
+
+const STREAM_RUNNING = new Set(["queued", "running", "paused"]);
+
+/**
+ * Follow a stream's status over its WebSocket (section 94).
+ *
+ * The server pushes a whole status frame twice a second rather than an event
+ * per batch: a stream at 50,000 records a second would otherwise spend more
+ * time serialising JSON for a dashboard than generating data.
+ */
+export function useStreamFeed(streamId: string | null, enabled = true): LiveStreamFeed {
+  const [status, setStatus] = useState<StreamStatus>("connecting");
+  const [view, setView] = useState<StreamView | null>(null);
+  const [finished, setFinished] = useState(false);
+
+  useEffect(() => {
+    if (!streamId || !enabled || typeof WebSocket === "undefined") {
+      setStatus("closed");
+      return;
+    }
+
+    setStatus("connecting");
+    setFinished(false);
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(streamFeedUrl(streamId));
+    } catch {
+      setStatus("unavailable");
+      return;
+    }
+
+    socket.onopen = () => setStatus("open");
+    socket.onmessage = (message) => {
+      let payload: (StreamView & { kind?: string }) | null;
+      try {
+        payload = JSON.parse(message.data as string) as StreamView & { kind?: string };
+      } catch {
+        return;
+      }
+      if (!payload || payload.kind === "error") {
+        setStatus("unavailable");
+        return;
+      }
+      setView(payload);
+      if (!STREAM_RUNNING.has(payload.state)) setFinished(true);
+    };
+    socket.onerror = () => setStatus("unavailable");
+    socket.onclose = () => setStatus((current) => (current === "open" ? "closed" : current));
+
+    return () => {
+      socket.onmessage = null;
+      socket.onclose = null;
+      socket.onerror = null;
+      if (socket.readyState <= WebSocket.OPEN) socket.close();
+    };
+  }, [streamId, enabled]);
+
+  return { status, view, finished };
+}
