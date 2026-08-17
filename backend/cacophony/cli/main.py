@@ -1008,6 +1008,115 @@ def models(
 
 
 @app.command()
+def plugins(
+    show: Annotated[str | None, typer.Option("--show", "-s", help="One plugin, in full.")] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+) -> None:
+    """List installed plugins and what they contribute (section 44).
+
+        cacophony plugins
+        cacophony plugins --show network_packets
+
+    Plugins are found through the ``cacophony.plugins`` entry point, which means
+    a package somebody chose to install. Cacophony deliberately does not load
+    Python from a project directory: a schema is something people share, and
+    opening one must not be the same as running its author's code.
+    """
+    from ..plugins import CATEGORIES, ENTRY_POINT_GROUP, load_plugins
+
+    registry = load_plugins(force=True)
+
+    if as_json:
+        console.print_json(json.dumps(registry.describe()))
+        raise typer.Exit(code=1 if registry.broken else 0)
+
+    if show:
+        manifest = registry.by_name(show)
+        if manifest is None:
+            error_console.print(
+                f"[cacophony.error]error[/] no plugin named '{show}'. "
+                f"Installed: {', '.join(registry.names()) or '<none>'}"
+            )
+            raise typer.Exit(code=2)
+
+        _banner("plugin", manifest.name)
+        if manifest.description:
+            console.print(" ".join(manifest.description.split()))
+        console.print(f"[cacophony.muted]version [/] {manifest.version}")
+        console.print(f"[cacophony.muted]source  [/] {manifest.source}")
+        if manifest.author:
+            console.print(f"[cacophony.muted]author  [/] {manifest.author}")
+        if manifest.homepage:
+            console.print(f"[cacophony.muted]homepage[/] {manifest.homepage}")
+
+        console.print("\n[cacophony.accent]declares[/]")
+        for category, names in sorted(manifest.provides.items()):
+            console.print(f"  {category:<16} {', '.join(names)}")
+        if manifest.registered:
+            console.print("[cacophony.accent]registered[/]")
+            for category, names in sorted(manifest.registered.items()):
+                console.print(f"  {category:<16} {', '.join(names)}")
+        for item in manifest.refused:
+            error_console.print(
+                f"  [cacophony.error]refused[/] {item} - it was not in the manifest"
+            )
+        for item in manifest.missing:
+            error_console.print(
+                f"  [cacophony.warn]missing[/] {item} - declared but never registered"
+            )
+        if manifest.error:
+            error_console.print(f"  [cacophony.error]error[/] {manifest.error}")
+        raise typer.Exit(code=0 if manifest.ok else 1)
+
+    _banner("plugins", f"{len(registry.manifests)} installed")
+    if registry.disabled:
+        console.print("[cacophony.warn]loading is disabled by CACOPHONY_NO_PLUGINS[/]\n")
+
+    if not registry.manifests:
+        console.print("[cacophony.muted]none installed[/]\n")
+        console.print("A plugin is a package that declares itself:")
+        console.print("")
+        # Escaped: rich would read the brackets as a style tag.
+        console.print(f'  \\[project.entry-points."{ENTRY_POINT_GROUP}"]')
+        console.print('  network_packets = "my_package:NetworkPackets"')
+        console.print(f"\n[cacophony.muted]Categories: {', '.join(sorted(CATEGORIES))}[/]")
+        console.print(
+            "[cacophony.muted]Cacophony does not load Python from a project directory - "
+            "a schema is something people share (section 44).[/]"
+        )
+        return
+
+    from rich.table import Table
+
+    table = Table(box=None, pad_edge=False, header_style="cacophony.muted")
+    table.add_column("plugin")
+    table.add_column("version")
+    table.add_column("provides")
+    table.add_column("state")
+    for manifest in sorted(registry.manifests, key=lambda item: item.name):
+        provided = ", ".join(
+            f"{category} {len(names)}" for category, names in sorted(manifest.provides.items())
+        )
+        state = "[cacophony.ok]loaded[/]" if manifest.ok else "[cacophony.error]problem[/]"
+        table.add_row(manifest.name, manifest.version, provided or "-", state)
+    console.print(table)
+
+    for manifest in registry.broken:
+        detail = manifest.error or ", ".join([*manifest.refused, *manifest.missing])
+        error_console.print(f"\n[cacophony.error]{manifest.name}[/] {detail}")
+
+    contributions = registry.contributions()
+    if contributions:
+        console.print("\n[cacophony.accent]contributed[/]")
+        for category, added in sorted(contributions.items()):
+            for name, plugin in sorted(added.items()):
+                console.print(f"  {category:<16} {name:<24} [cacophony.muted]{plugin}[/]")
+
+    if registry.broken:
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def recipes(
     project: Annotated[
         Path | None,

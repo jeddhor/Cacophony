@@ -13,7 +13,7 @@ built and how to run it.
 
 ---
 
-## Status: Phase 12 — Afterwards
+## Status: Phase 13 — Extension
 
 Phases 1–7 built the engine, the providers, the run system, the Studio, the
 relational layer, multimodal generation and synthetic worlds. Phase 8 turned
@@ -21,8 +21,9 @@ Cacophony into a workload generator; Phase 9 spread a run across machines, with
 byte-identical output. Phase 10 asked whether what came out is any good:
 repetition, the model that produced it, and what an application does with valid
 but awkward data. Phase 11 made schemas reusable — a catalogue of
-fragments, and projects that can be sent to somebody else. Phase 12 deals with a
-dataset that already exists and is not quite right.
+fragments, and projects that can be sent to somebody else. Phase 12 dealt with a dataset that already
+exists and is not quite right. Phase 13 lets other people's code extend the
+platform — and settles what `script` is, which is nothing.
 
 **Working now**
 
@@ -80,6 +81,9 @@ dataset that already exists and is not quite right.
   through the real pipeline and reports validity, usability, clipping, speed and
   repetition, with the cache forced off so nobody is scored on somebody else's
   answers
+- A plugin protocol — section 44's eight categories, discovered through
+  installed entry points and never from a project directory, with manifests
+  checked against what a plugin actually registers
 - Post-generation transforms — mask, hash, round, jitter, coarsen a date,
   encode, compress, filter; streaming, so a 124 MB file transforms at 69 MB of
   memory, and never writing over its input until the new file is complete
@@ -121,7 +125,7 @@ dataset that already exists and is not quite right.
 - CLI: `validate`, `lint`, `plan`, `prompt`, `propose`, `preview`, `generate`,
   `resume`, `runs`, `run`, `serve`, `stream`, `cluster`, `controller`,
   `worker`, `worlds`, `benchmark`, `recipes`, `bundle`, `transform`,
-  `regenerate`, `generators`, `providers --test`, `models`
+  `regenerate`, `plugins`, `generators`, `providers --test`, `models`
 - **Cacophony Studio**: project dashboard, schema editor with live preview,
   distribution and relationship views, a generate screen with cost estimates,
   a live run view fed by the WebSocket, a streaming page with per-entity rate
@@ -133,18 +137,19 @@ dataset that already exists and is not quite right.
   linted schema file. The model proposes the structure; Cacophony picks the
   generators and refuses to hand back anything that does not compile
 
-**Declared but not yet implemented** — the interfaces exist so later phases
-extend the platform rather than rewrite it, as design document section 111
-requires. Fields using these compile, lint, plan and estimate correctly:
+**Declared and deliberately not implemented.** `script` (section 8) would run
+code from a project file, and a project file is something people share. No
+sandbox available is trustworthy on all three platforms Cacophony targets, so
+after measuring the options the plugin phase decided against shipping one — see
+[docs/schema-reference.md](docs/schema-reference.md#the-script-generator) for the
+reasoning. Use `expression` for a derived value, `patches` for a per-record
+transformation, or a plugin for real code. A `script` field still compiles, lints,
+plans and estimates, and `on_unavailable: placeholder` runs the whole pipeline
+with obviously-marked stand-ins.
 
-- `script` — needs sandboxed execution
-
-Set `on_unavailable: placeholder` on any of them to run the whole pipeline
-today with obviously-marked stand-in values.
-
-**Still to come.** Sections 90–95 of the design document are delivered, and so
-is everything the earlier phases left open. Two slices remain: the plugin
-protocol and a sandboxed `script` (13), and Tauri desktop packaging (14).
+**Still to come.** One slice: Tauri desktop packaging (14). Everything else in
+the design document is either delivered or, in the single case of `script`,
+decided against with the reasoning written down.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the phase plan and what makes each
 one hard.
@@ -434,6 +439,42 @@ shard is handed to somebody else, and that worker regenerates it from
 scratch — producing exactly the bytes the dead one would have. Tested by
 `kill -9`ing a worker in the middle of a shard: the dataset still matched,
 half-written file and all.
+
+### Somebody else's code
+
+```toml
+# In their package, not in your schema.
+[project.entry-points."cacophony.plugins"]
+network_packets = "my_package:NetworkPackets"
+```
+
+```yaml
+requires:
+  plugins: [network_packets]
+```
+
+```
+$ cacophony plugins
+plugin           version  provides                    state
+network_packets  1.0      generators 1, transforms 1  loaded
+
+contributed
+  generators       network_packet           network_packets
+  transforms       rot13                    network_packets
+```
+
+**Cacophony never loads Python from a project directory**, and that is the
+feature. A schema arrives by email, in a Git repository, inside a bundle — if
+opening one could load its own code, every other safety property here would be
+decoration. Plugins come from packages you chose to `pip install`, so the trust
+decision sits with a person at install time rather than with a program at open
+time.
+
+All eight of section 44's categories reach a registry that already existed:
+generators, transforms, output formats, validators, scenarios, and the three
+kinds of provider. A manifest is a contract checked both ways — register
+something you did not declare and it is refused; declare something and never
+register it and you are told.
 
 ### Changing a dataset that already exists
 
@@ -800,8 +841,8 @@ backend/cacophony/
 ├── simulation/    timelines, subject allocation, state folds, scenarios, chaos
 ├── live/          rates, sinks and the continuous stream
 ├── distributed/   controller, workers, leases, capabilities, assembly
-├── scenarios/     scenario engine (later phase)
-├── plugins/       plugin protocol (later phase)
+├── scenarios/     scenario declarations and the plugin hook
+├── plugins/       the plugin protocol: manifests, host, entry-point discovery
 ├── api/           REST API, the live run feed, and the built Studio
 └── cli/           command-line interface
 frontend/          Cacophony Studio (React, TypeScript, Vite)

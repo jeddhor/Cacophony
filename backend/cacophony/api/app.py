@@ -22,6 +22,7 @@ look like something while it happens::
     POST   /api/providers/{id}/test
 
     GET    /api/generators            GET    /api/system
+    GET    /api/plugins
 
 Errors are translated once, here, so a schema mistake is a 400 with the
 compiler's message rather than a 500 with a traceback.
@@ -202,6 +203,18 @@ def create_app(
     @app.get("/api/system", tags=["system"])
     async def system() -> dict[str, Any]:
         return {"version": __version__, **runs.describe(), **streams.describe()}
+
+    @app.get("/api/plugins", tags=["system"])
+    async def plugins() -> dict[str, Any]:
+        """Installed plugins and what they contribute (section 44).
+
+        Loaded rather than cached, so the page reflects what a `pip install`
+        just did without restarting the server.
+        """
+        from ..plugins import CATEGORIES, load_plugins
+
+        registry = load_plugins(force=True)
+        return {"categories": sorted(CATEGORIES), **registry.describe()}
 
     @app.get("/api/generators", tags=["system"])
     async def generators() -> list[dict[str, Any]]:

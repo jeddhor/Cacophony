@@ -634,3 +634,38 @@ export interface CreateStreamBody {
   on_error?: "continue" | "abort";
   seed?: number | null;
 }
+
+// --------------------------------------------------------------------------- //
+// Plugins (design document section 44)
+// --------------------------------------------------------------------------- //
+
+/** One plugin, and how its manifest compares with what it actually did. */
+export interface PluginView {
+  name: string;
+  version: string;
+  description: string;
+  homepage: string;
+  author: string;
+  source: string;
+  /** What the manifest declares, by category. */
+  provides: Record<string, string[]>;
+  /** What it actually registered. */
+  registered: Record<string, string[]>;
+  /** Registered without being declared. */
+  refused: string[];
+  /** Declared without being registered. */
+  missing: string[];
+  error: string;
+  ok: boolean;
+}
+
+export interface PluginsView {
+  loaded: boolean;
+  /** True when CACOPHONY_NO_PLUGINS is set. */
+  disabled: boolean;
+  entry_point_group: string;
+  categories: string[];
+  plugins: PluginView[];
+  /** Category to name to the plugin that contributed it. */
+  contributions: Record<string, Record<string, string>>;
+}

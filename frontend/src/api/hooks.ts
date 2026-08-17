@@ -50,6 +50,10 @@ export const keys = {
 
 export const useSystem = () => useQuery({ queryKey: keys.system, queryFn: api.system });
 
+/** Installed plugins (section 44). Refetched on mount so a `pip install` shows. */
+export const usePlugins = () =>
+  useQuery({ queryKey: ["plugins"], queryFn: api.plugins, staleTime: 5_000 });
+
 export const useSchemaTypes = () =>
   useQuery({ queryKey: keys.types, queryFn: api.schemaTypes, ...STATIC });
 

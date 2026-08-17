@@ -13,6 +13,7 @@ import { Layout } from "./components/Layout";
 import { Empty } from "./components/ui";
 import { GeneratePage } from "./pages/GeneratePage";
 import { AssetsPage } from "./pages/AssetsPage";
+import { PluginsPage } from "./pages/PluginsPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { ProvidersPage } from "./pages/ProvidersPage";
 import { RunPage } from "./pages/RunPage";
@@ -21,16 +22,8 @@ import { StreamPage } from "./pages/StreamPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { StudioPage } from "./pages/StudioPage";
 
-function Later({ what, phase }: { what: string; phase: string }): ReactNode {
-  return (
-    <Empty title={what}>
-      <p>
-        Arrives in the {phase}. The schema already carries the declarations it
-        will read, so nothing written now will need rewriting.
-      </p>
-    </Empty>
-  );
-}
+// Every destination in section 46's navigation now exists. The placeholder
+// helper that stood in for the later-phase pages is gone with the last of them.
 
 export function App(): ReactNode {
   return (
@@ -45,7 +38,7 @@ export function App(): ReactNode {
         <Route path="/runs/:runId" element={<RunPage />} />
         <Route path="/providers" element={<ProvidersPage />} />
         <Route path="/assets" element={<AssetsPage />} />
-        <Route path="/plugins" element={<Later what="Plugins" phase="plugin phase" />} />
+        <Route path="/plugins" element={<PluginsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route
           path="*"

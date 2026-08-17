@@ -28,6 +28,7 @@ _TOP_LEVEL = (
     "chaos",
     "quality",
     "patches",
+    "requires",
     "outputs",
     "relationships",
 )

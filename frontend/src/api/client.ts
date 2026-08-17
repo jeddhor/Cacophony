@@ -26,6 +26,7 @@ import type {
   SchemaOperation,
   SchemaTypesView,
   SchemaView,
+  PluginsView,
   StoredEvent,
   StreamRecordsView,
   StreamView,
@@ -170,6 +171,9 @@ export const api = {
     request<{ state: string; mode: string }>(`/runs/${id}/resume`, { method: "POST" }),
   cancelRun: (id: string) => request<{ state: string }>(`/runs/${id}/cancel`, { method: "POST" }),
   deleteRun: (id: string) => request<void>(`/runs/${id}`, { method: "DELETE" }),
+
+  // -- plugins ----------------------------------------------------------- //
+  plugins: () => request<PluginsView>("/plugins"),
 
   // -- live streams ------------------------------------------------------ //
   streams: (projectId?: number) =>

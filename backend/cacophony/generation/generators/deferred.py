@@ -82,6 +82,11 @@ class PendingGenerator(OptionsMixin, PlaceholderMixin, SyncGenerator):
 
     #: Which development phase implements this generator.
     phase: ClassVar[str] = "a later phase"
+    #: The whole refusal sentence, for a generator whose absence is a decision
+    #: rather than a schedule. ``script`` is the case: saying it "arrives in a
+    #: later phase" would be a promise the plugin phase deliberately did not
+    #: make.
+    refusal: ClassVar[str] = ""
     #: Short human description used in the placeholder value.
     kind: ClassVar[str] = "value"
 
@@ -102,6 +107,8 @@ class PendingGenerator(OptionsMixin, PlaceholderMixin, SyncGenerator):
             return None
         if self.on_unavailable == "placeholder":
             return self._fit(self.placeholder(context))
+        if self.refusal:
+            raise GenerationError(f"{context.location}: {self.refusal}")
         raise GenerationError(
             f"{context.location}: the '{self.name}' generator needs the provider backend, "
             f"which arrives in {self.phase}. Set 'on_unavailable: placeholder' to run the "
@@ -117,14 +124,66 @@ class PendingGenerator(OptionsMixin, PlaceholderMixin, SyncGenerator):
 class ScriptGenerator(PendingGenerator):
     """A user-provided generator run in an isolated environment (section 8).
 
-    Sandboxing is the whole difficulty here, and doing it badly is worse than
-    not doing it at all: a project file is something people share, and an
-    unsandboxed ``script:`` field would make opening one equivalent to running
-    a stranger's code. The ``expression`` generator covers derived values
-    safely today; this stays unimplemented until the isolation is real.
+    **Still declared and still refused, and this is now a decision rather than a
+    postponement.** The plugin phase examined the options and concluded that a
+    real sandbox is not affordable here, so ``script`` is not shipping. The
+    reasoning, recorded because a future reader will want to reopen it:
+
+    *The requirement is absolute.* A project file is something people share - by
+    email, in a Git repository, inside a ``.cacophony`` bundle. If a ``script:``
+    field ran, opening a schema somebody sent you would be equivalent to running
+    their code, and every other safety property in the platform would be
+    decoration: the expression evaluator's allow-list, the bundle importer's
+    refusal of path traversal, the plugin loader's insistence on entry points.
+
+    *A restricted interpreter is not a sandbox.* Stripping ``__builtins__`` and
+    denying imports is a denylist, and denylists on a language with
+    introspection are routinely escaped through object graphs nobody thought
+    about. Shipping one would invite exactly the trust it cannot support.
+
+    *What isolation is actually available was measured, not assumed.*
+    Unprivileged user and network namespaces do work on this Linux host - a
+    subprocess in one cannot open a socket. But the filesystem remains fully
+    readable, and blocking it needs a mount namespace and a pivot into an empty
+    root: Linux-only machinery, untestable on the macOS and Windows the desktop
+    phase targets. A security boundary that exists on one of three platforms is
+    not a security boundary; it is a false sense of one.
+
+    *WebAssembly is the honest option and is out of scope here.* A CPython build
+    for a WASM runtime gives real isolation - no filesystem, no sockets, no host
+    imports, with memory and fuel ceilings enforced by the runtime rather than by
+    a list. It is also a multi-megabyte dependency and a substantial piece of
+    work, and it is the right way to do this when it is done.
+
+    **What to use instead**, in ascending order of power:
+
+    ``expression``
+        Derived values over the record, with the same allow-list, no ``eval``
+        and no imports. Covers most of what a ``script`` field is reached for.
+
+    ``patches``
+        The same expressions and section 105's operations, applied per record
+        during generation (section 104).
+
+    A plugin
+        Arbitrary Python, in a package somebody chose to ``pip install``
+        (section 44). The trust decision sits with a person at install time
+        rather than with a program at open time, which is the whole difference.
+
+    A field using ``script`` still compiles, lints, plans and estimates, and
+    ``on_unavailable: placeholder`` runs the pipeline with a marked stand-in.
     """
 
-    phase = "the plugin phase"
+    phase = "no scheduled phase - see the class docstring"
+    refusal = (
+        "the 'script' generator is deliberately not implemented. Running code from a "
+        "project file would make opening a schema somebody sent you equivalent to running "
+        "their code, and no sandbox available here is trustworthy on every platform "
+        "Cacophony targets (design document sections 8, 44). Use 'expression' for a "
+        "derived value, 'patches' to transform one, or a plugin for real code - a plugin "
+        "is a package you chose to install, which is where that decision belongs. "
+        "'on_unavailable: placeholder' runs the pipeline with a marked stand-in."
+    )
     kind = "script"
 
     def prepare(self) -> None:

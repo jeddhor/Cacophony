@@ -54,6 +54,7 @@ __all__ = [
     "ProviderSpec",
     "QualitySpec",
     "RelationshipSpec",
+    "RequiresSpec",
     "ScenarioSpec",
     "SimulationSpec",
     "TimelineSpec",
@@ -526,6 +527,18 @@ class DuplicationSpec(_Base):
         return self.max_exact is not None or self.max_near is not None or bool(self.fields)
 
 
+class RequiresSpec(_Base):
+    """What a project needs that it does not carry (design document section 44).
+
+    A project may depend on a plugin without shipping its code - which is the
+    only way to depend on code at all, since Cacophony does not load Python from
+    a project directory. Missing plugins are refused at compile time, naming what
+    to install.
+    """
+
+    plugins: list[str] = Field(default_factory=list)
+
+
 class PatchSpec(_Base):
     """A patch rule (design document section 104).
 
@@ -600,6 +613,8 @@ class ProjectSpec(_Base):
     quality: QualitySpec = Field(default_factory=QualitySpec)
     #: Project-local recipe definitions (section 80). Consumed by expansion.
     recipes: dict[str, Any] = Field(default_factory=dict)
+    #: Plugins this project needs installed (section 44).
+    requires: RequiresSpec = Field(default_factory=RequiresSpec)
     #: Patch rules (section 104), applied during generation in authored order.
     #: Being part of the project is the point: an edit recorded here travels
     #: with the schema and survives a regeneration, while an edit made to an

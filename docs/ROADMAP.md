@@ -597,7 +597,7 @@ attention rather than squeezed in beside a feature.
 | 10 — Assurance ✅ | 59, 67, 79 | Is what came out any good? |
 | 11 — Reuse ✅ | 80, 106, 72 | Fragments, catalogues and bundles |
 | 12 — Afterwards ✅ | 105, 104 | Changing a dataset that already exists |
-| 13 — Extension | 44, and `script` | Third-party code, safely |
+| 13 — Extension ✅ | 44, and `script` | Third-party code, safely |
 | 14 — Desktop | 41 | Tauri, without giving up the web |
 
 Section 83 (agentic generation) is out of scope by the document's own framing —
@@ -955,9 +955,94 @@ transform provenance in the output.
 
 ---
 
-## Phase 13 — Extension
+## Phase 13 — Extension ✅
 
-*Design document section 44, and the `script` generator from section 8.*
+**Delivered.** Design document section 44. And a decision, not an
+implementation, about `script`.
+
+```toml
+[project.entry-points."cacophony.plugins"]
+network_packets = "my_package:NetworkPackets"
+```
+
+```yaml
+requires:
+  plugins: [network_packets]
+```
+
+**The phase turned on one property, and it is a negative one: Cacophony does not
+load Python from a project directory.** A schema arrives by email, in a Git
+repository, inside a bundle. If opening one could load its own code, every other
+safety property in the platform would be decoration — the expression allow-list,
+the bundle importer's refusal of traversal, the linter's careful messages, all
+pointless, because the file could simply ask for a shell.
+
+So discovery is installed entry points and only entry points, and that is
+asserted directly rather than assumed: a test writes Python into `plugins/`,
+`cacophony_plugins/` and `extensions/` beside a schema, generates from it, and
+checks the marker file was never written. A second test greps the loader for
+`glob`, `rglob`, `iterdir`, `listdir` and `spec_from_file` and fails if any
+appears. The trust decision belongs to a person running `pip install`.
+
+**All eight categories reach a registry that already existed** — generators since
+phase one, providers since phase two, output formats since phase one, transform
+operations since phase twelve. A plugin is a door into an extension point, not a
+mechanism beside one. Two new hooks were added for the two categories that had
+none: `extra_validators()` and `extra_scenarios()`.
+
+**The manifest is a contract checked in both directions.** Registering something
+undeclared has it refused; declaring something and never registering it is
+reported missing. Neither is a security measure — a plugin is code you installed
+— but a manifest that has drifted from its code produces a project that works on
+one machine and fails on another with no clue why. A plugin may not take over an
+existing name without `replace = True`: one that silently replaced the built-in
+`uuid` would change every project on the machine.
+
+**Verified against a really installed package.** Section 44's own example, built
+as `cacophony-netpackets`, `pip install`ed, and used in a project that requires
+it: the plugin contributed a generator *and* a transform operation, and the
+transform was consumed by a Phase 12 patch rule. Then uninstalled, so the test
+suite does not depend on what happens to be on this machine — the tests use fake
+entry points, and the one CLI test that needed an empty environment patches the
+discovery function rather than assuming one.
+
+**The Studio's Plugins page exists**, which retires the last placeholder in
+section 46's navigation. The helper that stood in for later-phase destinations is
+gone with it.
+
+### `script` stays refused, and that is now a decision
+
+The plan for this phase said: *if the sandbox turns out not to be affordable,
+`script` stays declared and refused*. It is not affordable, so it does.
+
+*A restricted interpreter is not a sandbox.* Stripping `__builtins__` and denying
+imports is a denylist, and denylists on a language with introspection are
+routinely escaped through object graphs nobody anticipated. Shipping one would
+invite exactly the trust it cannot support.
+
+*What isolation is available was measured rather than assumed.* Unprivileged user
+and network namespaces do work on this host — a subprocess in one cannot open a
+socket, confirmed. But the filesystem stays fully readable, and blocking it needs
+a mount namespace and a pivot into an empty root: Linux-only machinery,
+untestable on the macOS and Windows the desktop phase targets. A security
+boundary that exists on one of three platforms is not a boundary.
+
+*WebAssembly is the honest option and is out of scope here.* A CPython build for
+a WASM runtime gives real isolation with memory and fuel ceilings enforced by the
+runtime. It is also a multi-megabyte dependency and substantial work, and it is
+how this should be done when it is done.
+
+The refusal message now says "deliberately not implemented" and points at the
+three alternatives — `expression`, `patches`, a plugin — rather than promising a
+phase that is not planned. Fixing it also surfaced a small long-standing wart:
+the engine prefixed the field location onto an error that already carried it, so
+the message read `row.x: row.x: …`.
+
+---
+
+## Phase 13 — Extension, as planned
+
+*The plan this replaced.*
 
 Section 44's eight plugin categories — `GeneratorPlugin`, `ValidatorPlugin`,
 `TransformPlugin`, `OutputPlugin`, `LanguageModelPlugin`, `ImagePlugin`,

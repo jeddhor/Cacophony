@@ -592,10 +592,24 @@ class TestPendingGenerators:
         generator, field_spec = build("image", {"on_unavailable": "null"}, type=DataType.IMAGE)
         assert asyncio.run(generator.generate(make_context(field_spec))).value is None
 
-    def test_script_is_still_pending(self) -> None:
+    def test_script_is_refused_as_a_decision_not_a_schedule(self) -> None:
+        """The plugin phase examined the options and did not ship it.
+
+        The message therefore says "deliberately not implemented" and points at
+        `expression`, `patches` and plugins, rather than promising a phase that
+        is not planned.
+        """
         generator, field_spec = build("script", {"code": "return 1"})
-        with pytest.raises(GenerationError, match="plugin phase"):
+        with pytest.raises(GenerationError, match="deliberately not implemented"):
             generator.generate_sync(make_context(field_spec))
+
+    def test_the_script_refusal_names_what_to_use_instead(self) -> None:
+        generator, field_spec = build("script", {"code": "return 1"})
+        with pytest.raises(GenerationError) as caught:
+            generator.generate_sync(make_context(field_spec))
+        message = str(caught.value)
+        assert "expression" in message
+        assert "plugin" in message
 
     def test_reference_requires_a_target_entity(self) -> None:
         with pytest.raises(GeneratorConfigError, match="entity"):

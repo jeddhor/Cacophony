@@ -685,7 +685,12 @@ class GenerationEngine:
                 stats.retries += 1
 
         stats.field_failures += 1
-        message = f"{context.location}: {last_error}"
+        # The location once, not twice. A generator that already knows where it
+        # is - and several do, because a good message needs the field name -
+        # would otherwise be reported as "t.x: t.x: ...".
+        detail = str(last_error)
+        prefix = f"{context.location}: "
+        message = detail if detail.startswith(prefix) else prefix + detail
         if len(stats.errors) < 100:
             stats.errors.append(message)
 

@@ -845,6 +845,21 @@ an opening sentence and nothing else score 0.13.
 
 ---
 
+## `requires`
+
+Design document section 44. What a project needs that it does not carry.
+
+```yaml
+requires:
+  plugins: [network_packets]
+```
+
+Checked at compile time, so a project whose plugin is not installed fails
+immediately and by name rather than three million records into a run with a
+field quietly missing. `cacophony plugins` lists what is installed.
+
+---
+
 ## `patches`
 
 Design document sections 104, 105. An edit recorded as a rule.
@@ -999,6 +1014,8 @@ cacophony transform  FILE [-s 'FIELD=OP']... [-w EXPR] [--drop-where EXPR]
                           [-f FORMAT] [-p project.yaml] [-e ENTITY]
                           [--record-as NAME] [--force] [--json]
 cacophony regenerate project.yaml -r N|N-M [-e ENTITY] [-c a,b,c] [--json] [--seed N]
+
+cacophony plugins    [--show NAME] [--json]
 ```
 
 `generate` and `preview` also accept `--cache MODE` (`disabled`, `read_only`,
@@ -1104,6 +1121,136 @@ specializes in…" — two fields disagreeing is a broken fixture, not a finding
 
 Which records get a case, and which case, is derived from the record index
 (section 75), so a bug found once is found again.
+
+---
+
+## Plugins
+
+Design document section 44.
+
+```bash
+cacophony plugins
+cacophony plugins --show network_packets
+```
+
+**Discovery is by installed entry point, never from a project directory, and that
+is the decision the feature turns on.** A schema arrives by email, in a Git
+repository, inside a `.cacophony` bundle. If Cacophony loaded Python from a
+`plugins/` folder beside a schema, opening one somebody sent you would be
+equivalent to running their code — and every other safety property here would be
+decoration: the expression allow-list, the bundle importer's refusal of
+traversal, all of it. The trust decision belongs to a person running
+`pip install`, not to a program opening a file.
+
+### Writing one
+
+A plugin is a package with a manifest and a `register` method.
+
+```toml
+# pyproject.toml
+[project.entry-points."cacophony.plugins"]
+network_packets = "my_package:NetworkPackets"
+```
+
+```python
+from cacophony.core.interfaces import SyncGenerator
+from cacophony.generation.generators.base import OptionsMixin
+
+
+class NetworkPacketGenerator(OptionsMixin, SyncGenerator):
+    deterministic = True
+
+    def prepare(self):
+        self.protocol = self.opt_choice("protocol", ("tcp", "udp"), "tcp")
+
+    def generate_sync(self, context):
+        rng = context.rng()
+        return f"{self.protocol}/{rng.randrange(1024, 65536)}"
+
+
+class NetworkPackets:
+    manifest = {
+        "name": "network_packets",
+        "version": "1.0",
+        "provides": {"generators": ["network_packet"]},
+    }
+
+    def register(self, host):
+        host.add_generator("network_packet", NetworkPacketGenerator, aliases=("packet",))
+```
+
+### The eight categories
+
+Section 44's list. Each reaches a registry that already existed — the generator
+registry since the first phase, providers since the second, output formats since
+the first, transform operations since the twelfth. A plugin is a door into an
+extension point, not a mechanism beside one.
+
+| Category | Host method | Reaches |
+|---|---|---|
+| `generators` | `add_generator(name, cls, aliases=())` | The generator registry (section 8) |
+| `transforms` | `add_transform(name, fn)` | Section 105's operations |
+| `outputs` | `add_output(name, writer)` | The output formats (section 33) |
+| `validators` | `add_validator(name, cls)` | Validation categories (section 57) |
+| `scenarios` | `add_scenario(name, cls)` | Scenario behaviours (section 17) |
+| `language_models` | `add_language_model(name, cls)` | The provider registry (section 43) |
+| `images` | `add_image_provider(name, cls)` | The provider registry (section 18) |
+| `speech` | `add_speech_provider(name, cls)` | The provider registry (section 20) |
+
+**The manifest is a contract, checked both ways.** Registering something the
+manifest did not declare has it *refused*; declaring something and never
+registering it is reported as *missing*. Neither is a security measure — a plugin
+is code you installed — but a manifest that has drifted from its code produces a
+project that works on one machine and fails on another with no clue why.
+
+A plugin may not take over a name that already exists unless it sets
+`replace = True`, because one that silently replaced the built-in `uuid`
+generator would change every project on the machine.
+
+**A broken plugin does not stop a run.** One that raises on import is recorded
+with its error and skipped, since a plugin installed last month should not stop
+today's generation of a project that does not use it. A project that *requires*
+it does stop, at compile time, by name.
+
+`CACOPHONY_NO_PLUGINS=1` skips loading entirely — for a run that must be
+reproducible against the built-ins alone, or for bisecting a plugin problem.
+
+---
+
+## The `script` generator
+
+Design document section 8 lists a `script` generator: "a user-provided generator
+run in an isolated environment". **It is declared, it compiles, and it is
+deliberately not implemented.** That is a decision taken in the plugin phase, not
+a postponement, and the reasoning is recorded here because a future reader will
+want to reopen it.
+
+*The requirement is absolute.* A project file is shared. If a `script:` field
+ran, opening a schema somebody sent you would be equivalent to running their
+code.
+
+*A restricted interpreter is not a sandbox.* Stripping `__builtins__` and denying
+imports is a denylist, and denylists on a language with introspection are
+routinely escaped through object graphs nobody thought about.
+
+*What isolation is available was measured, not assumed.* Unprivileged user and
+network namespaces do work on Linux — a subprocess in one cannot open a socket —
+but the filesystem stays readable, and blocking it needs a mount namespace and a
+pivot into an empty root. That is Linux-only machinery, untestable on the macOS
+and Windows the desktop phase targets. A security boundary that exists on one of
+three platforms is not a boundary; it is a false sense of one.
+
+*WebAssembly is the honest option and is out of scope.* A CPython build for a
+WASM runtime gives real isolation with ceilings enforced by the runtime rather
+than by a list. It is also a multi-megabyte dependency and substantial work, and
+it is how this should be done when it is done.
+
+**Use instead**, in ascending order of power: `expression` for a derived value,
+`patches` for a per-record transformation, and a plugin for arbitrary code — a
+package you chose to install, which is where that decision belongs.
+
+A `script` field still compiles, lints, plans and estimates, and
+`on_unavailable: placeholder` runs the whole pipeline with a marked stand-in.
 
 ---
 

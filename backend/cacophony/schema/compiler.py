@@ -69,9 +69,18 @@ def compile_project(project: ProjectSpec) -> CompiledProject:
     # package-level dependency arrow pointing one way.
     from ..generation.recommend import recommend_generator
     from ..generation.registry import REGISTRY
+    from ..plugins import check_requirements, loaded_plugins
 
     if not project.entities:
         raise SchemaError("The project defines no entities; there is nothing to generate.")
+
+    # Plugins first, and before any generator is resolved (section 44). A plugin
+    # contributes generators, so a project using one has to have it loaded before
+    # the compiler looks a name up - and a project that *requires* one that is
+    # not installed must fail here, with the name, rather than three million
+    # records into a run with a field quietly missing.
+    loaded_plugins()
+    check_requirements(project.requires.plugins)
 
     compiled_entities: dict[str, CompiledEntity] = {}
     entity_graph = DependencyGraph(kind="entity")

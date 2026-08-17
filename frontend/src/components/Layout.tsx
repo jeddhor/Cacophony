@@ -32,7 +32,7 @@ const DESTINATIONS: Destination[] = [
   { to: "/runs", label: "Runs", glyph: "◉" },
   { to: "/providers", label: "Providers", glyph: "⌁" },
   { to: "/assets", label: "Assets", glyph: "▣" },
-  { to: "/plugins", label: "Plugins", glyph: "⬡", later: "plugin phase" },
+  { to: "/plugins", label: "Plugins", glyph: "⬡" },
   { to: "/settings", label: "Settings", glyph: "⚙" },
 ];
 
