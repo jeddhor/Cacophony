@@ -596,7 +596,7 @@ attention rather than squeezed in beside a feature.
 |---|---|---|
 | 10 — Assurance ✅ | 59, 67, 79 | Is what came out any good? |
 | 11 — Reuse ✅ | 80, 106, 72 | Fragments, catalogues and bundles |
-| 12 — Afterwards | 105, 104 | Changing a dataset that already exists |
+| 12 — Afterwards ✅ | 105, 104 | Changing a dataset that already exists |
 | 13 — Extension | 44, and `script` | Third-party code, safely |
 | 14 — Desktop | 41 | Tauri, without giving up the web |
 
@@ -836,9 +836,86 @@ attribution through the plan, the API and the Studio.
 
 ---
 
-## Phase 12 — Afterwards
+## Phase 12 — Afterwards ✅
 
-*Design document sections 105, 104.*
+**Delivered.** Design document sections 104 and 105.
+
+```bash
+cacophony transform out/employee.jsonl --set 'email=mask:8' \
+    --where "department == 'Finance'" -o masked.jsonl --record-as mask_finance
+cacophony regenerate project.yaml -e employee -r 4823913-4823920
+```
+
+```yaml
+patches:
+  mask_finance_emails:
+    entity: employee
+    where: "department == 'Finance'"
+    set:
+      email: "mask:8"
+```
+
+**The claim the phase rests on, and the test that earns it.** Transform a file
+with a rule; put the same rule in the schema; regenerate. The two are
+byte-identical. If they were not, the rule would be a second implementation of
+the same intent and one of them would be wrong. Verified on 300 records through
+both paths, and again on a real 200-record dataset through the CLI.
+
+That is what makes section 104's "patch rules" a real answer rather than a
+euphemism for editing the output. A Cacophony dataset is a pure function of its
+schema and its seed; a row edited in a file corresponds to nothing, and the next
+`generate` overwrites it without noticing. So the Studio's record editor shows
+you a `patches:` block and a Copy button — never a "saved" message about a file
+that does not exist.
+
+**One definition of every operation.** Section 105's list lives in
+`transforms/operations.py` and is used by the `transform` generator, by
+`patches:`, and by the command line. Two copies of `mask` would drift, and the
+day they disagreed would be the day somebody's masked column stopped matching the
+masked column beside it. The safe-expression allow-lists are shared the same way
+and for a stronger reason: two copies of a security boundary means the safer one
+is the one nobody is using.
+
+**`add_noise` derives its jitter by hashing rather than drawing.** An operation
+that reached for a random number would make a transformed dataset unreproducible
+and would change the file every time it ran — so a transform could not be safely
+re-run after a failure. Asserted: running the same transform twice produces
+identical bytes, and the offset stays inside the percentage asked for across 400
+values.
+
+**Nothing is destroyed.** A transform writes beside its target and swaps at the
+end, `--in-place` included. Verified by pointing a rule that raises at a file:
+the original is untouched and no partial is left behind. Writing over the source
+without `--in-place` is refused, and an existing destination needs `--force`.
+
+**It streams.** 124 MB and 400,000 records transformed in 5.4 seconds at **69 MB
+peak RSS** — bounded by one record, whatever the file size. Parquet is refused
+with a reason rather than half-supported: its records live in column chunks, so a
+row-by-row rewrite is a different piece of work and doing it badly would lose the
+schema silently.
+
+**Regeneration is nearly free, and that is the point.** Record 4,823,913's seed
+is a hash of its position, so it can be produced without the 4,823,912 before it,
+without the dataset, and without the run that made it. Verified against a run's
+own output, patch rule included. `regenerate` refuses more than a thousand
+records and points at `generate`.
+
+**Two defects, both familiar.** `field: str` on a dataclass shadowed
+`dataclasses.field` for every later default in the class body — the same bug as
+the multimodal phase, fixed the same way with an aliased import. And a CSV
+transform shadowed its own writer with the file handle. Neither survived mypy,
+which is the argument for having it.
+
+**Not in this phase:** a Studio button that writes the rule into the project
+file. The editor produces the YAML and copies it; applying it would go through
+the schema patcher, which is Phase 4 machinery that has no route for a
+whole-block insert yet.
+
+---
+
+## Phase 12 — Afterwards, as planned
+
+*The plan this replaced.*
 
 These are one feature. Section 104 says that for enormous datasets, editing
 rows is inappropriate and the answer is "regeneration, transformations,

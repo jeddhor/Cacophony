@@ -845,6 +845,71 @@ an opening sentence and nothing else score 0.13.
 
 ---
 
+## `patches`
+
+Design document sections 104, 105. An edit recorded as a rule.
+
+```yaml
+patches:
+  mask_finance_emails:
+    description: Finance addresses are masked before this dataset leaves the building.
+    entity: employee                        # omit to apply to every entity
+    where: "department == 'Finance'"        # omit to apply to every record
+    set:
+      email: "mask:8"                      # an operation pipeline
+      notes: "upper(department)"            # or an expression over the record
+      internal_ref: {value: null}           # or a literal
+  drop_test_accounts:
+    where: "startswith(email, 'test@')"
+    drop: true                              # or `keep: true` for the inverse
+```
+
+**A rule, not a mutation — and that is the whole point.** A Cacophony dataset is
+a pure function of its schema and its seed. Editing a row in an output file
+breaks that silently: the file stops corresponding to anything, no other machine
+reproduces it, and the next `generate` overwrites the edit without noticing. A
+rule in the project applies on every run, travels with the schema, and
+`cacophony regenerate` produces the edited value a year later.
+
+Rules apply in authored order, after chaos and before validation — so what the
+validator checks is what reaches the file, and a rule is the last word on what a
+record contains. Order matters: masking then hashing is a different value from
+hashing then masking.
+
+### Operations
+
+Section 105's list, available in `patches:`, in the `transform` generator, and
+on the command line. Several are joined with `|`.
+
+| Operation | Effect |
+|---|---|
+| `lowercase` `uppercase` `title` `strip` | Case and whitespace |
+| `truncate:N` | At most N characters (default 50) |
+| `normalize` | Collapse whitespace, NFKC |
+| `slug` | Lowercase, hyphenated |
+| `mask:N` | All but the last N characters become `*` (default 4) |
+| `hash:N` | A stable BLAKE2b digest, N hex characters (default 32) |
+| `round:N` | N decimal places; a `Decimal` stays a `Decimal` |
+| `add_noise:N` | Jitter a number by up to N per cent |
+| `format_date:FMT` | `strftime` a date or datetime (default `%Y-%m-%d`) |
+| `encode:KIND` | `base64`, `hex`, `url` or `json` |
+| `compress:N` / `decompress` | Deflate to base64, and back |
+| `nullify` | Drop the value |
+
+**Every operation is deterministic, including `add_noise`.** Its jitter is
+derived by hashing the value, not drawn from a generator — because an operation
+that reached for a random number would make a transformed dataset
+unreproducible, and would change the file every time it ran. The same value
+always moves the same way.
+
+**An inapplicable operation raises.** Rounding a name or formatting something
+that is not a date stops the pass rather than passing the value through: a
+masking run that quietly skipped half a column is worse than one that failed.
+A null short-circuits, because deliberate nulls are what a chaos preset put
+there.
+
+---
+
 ## `outputs`
 
 ```yaml
@@ -928,6 +993,12 @@ cacophony recipes    [-p project.yaml] [--show NAME] [--group NAME] [--json]
 cacophony bundle export  project.yaml [-o FILE] [--force]
 cacophony bundle inspect FILE [--json]
 cacophony bundle import  FILE -d DIR [--force]
+
+cacophony transform  FILE [-s 'FIELD=OP']... [-w EXPR] [--drop-where EXPR]
+                          [--keep-where EXPR] [-o FILE | --in-place]
+                          [-f FORMAT] [-p project.yaml] [-e ENTITY]
+                          [--record-as NAME] [--force] [--json]
+cacophony regenerate project.yaml -r N|N-M [-e ENTITY] [-c a,b,c] [--json] [--seed N]
 ```
 
 `generate` and `preview` also accept `--cache MODE` (`disabled`, `read_only`,
@@ -1033,6 +1104,56 @@ specializes in…" — two fields disagreeing is a broken fixture, not a finding
 
 Which records get a case, and which case, is derived from the record index
 (section 75), so a bug found once is found again.
+
+---
+
+## Changing a dataset that exists
+
+Sections 104, 105.
+
+```bash
+# Rewrite a file. Streams, so the size does not matter.
+cacophony transform out/employee.jsonl \
+    --set 'email=mask:8' --where "department == 'Finance'" \
+    -o out/employee.masked.jsonl --record-as mask_finance_emails
+
+# Apply the project's own patch rules to a file.
+cacophony transform out/employee.jsonl --project project.yaml --in-place
+
+# Filter.
+cacophony transform out/employee.jsonl --keep-where "department == 'Engineering'" -o eng.jsonl
+
+# Re-derive specific records, with no run and no file.
+cacophony regenerate project.yaml -e employee -r 4823913-4823920
+```
+
+`jsonl`, `csv` and `json` can be transformed a record at a time. Parquet cannot:
+its records live in column chunks, so a row-by-row rewrite would mean decoding
+and re-encoding every one. Convert to JSON Lines, transform, convert back.
+
+**It never writes over its input** until the new file is complete — including
+`--in-place`, which writes beside and swaps at the end. A rule that raises
+halfway through leaves the original untouched and no partial file behind.
+
+**It records what it did** in a `<name>.transform.json` sidecar, because a masked
+column is indistinguishable from a column that was always masked.
+
+**`--record-as NAME` prints the equivalent patch rule.** Without it, `transform`
+warns that it changed a file and not the project — and that the next `generate`
+will produce the untransformed data again. That warning is the honest one: a file
+edited outside its schema has stopped being a function of it.
+
+### Regeneration is nearly free
+
+A record's seed is a hash of its position (section 75), so record 4,823,913 can
+be produced on its own — without the 4,823,912 before it, without the dataset,
+and without the run that made it. "This row looks wrong" is a question with a
+millisecond answer. `regenerate` refuses more than a thousand records and points
+at `generate`, which is the tool for that.
+
+The Studio's data preview does the same thing from the other end: double-click a
+row and it builds a patch rule from it, showing the YAML rather than offering to
+save the row.
 
 ---
 

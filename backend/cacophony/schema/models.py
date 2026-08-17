@@ -49,6 +49,7 @@ __all__ = [
     "FieldSpec",
     "GeneratorSpec",
     "OutputProfileSpec",
+    "PatchSpec",
     "ProjectSpec",
     "ProviderSpec",
     "QualitySpec",
@@ -525,6 +526,29 @@ class DuplicationSpec(_Base):
         return self.max_exact is not None or self.max_near is not None or bool(self.fields)
 
 
+class PatchSpec(_Base):
+    """A patch rule (design document section 104).
+
+    Kept deliberately loose - the ``set`` values are parsed by
+    :class:`~cacophony.transforms.rules.FieldEdit`, which understands three
+    spellings and reports on a fourth. Restating that grammar as a pydantic
+    model would put the error messages in the wrong place: a person editing a
+    rule wants to be told which field and which word, not which union member
+    failed to validate.
+    """
+
+    description: str | None = None
+    #: Which entity the rule applies to. Empty means every entity.
+    entity: str = ""
+    #: An expression over the record. Empty means every record.
+    where: str | None = None
+    #: Field name to an operation pipeline, an expression, or a literal.
+    set: dict[str, Any] = Field(default_factory=dict)
+    #: Filter matching records out, or keep only matching records.
+    drop: bool = False
+    keep: bool = False
+
+
 class QualitySpec(_Base):
     """The ``quality:`` block (design document sections 58, 59)."""
 
@@ -576,6 +600,11 @@ class ProjectSpec(_Base):
     quality: QualitySpec = Field(default_factory=QualitySpec)
     #: Project-local recipe definitions (section 80). Consumed by expansion.
     recipes: dict[str, Any] = Field(default_factory=dict)
+    #: Patch rules (section 104), applied during generation in authored order.
+    #: Being part of the project is the point: an edit recorded here travels
+    #: with the schema and survives a regeneration, while an edit made to an
+    #: output file does neither.
+    patches: dict[str, PatchSpec] = Field(default_factory=dict)
     outputs: dict[str, OutputProfileSpec] = Field(default_factory=dict)
 
     @model_validator(mode="after")

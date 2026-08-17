@@ -27,6 +27,7 @@ _TOP_LEVEL = (
     "timeline",
     "chaos",
     "quality",
+    "patches",
     "outputs",
     "relationships",
 )

@@ -506,6 +506,32 @@ def _report_edge_cases(summary: dict[str, Any]) -> None:
             )
 
 
+def _report_patches(summary: dict[str, Any]) -> None:
+    """What the project's patch rules did (design document section 104).
+
+    Reported because a patched column looks exactly like a column that was
+    always that way. Somebody reading the run later needs to know that thirteen
+    addresses are masked because the schema says so.
+    """
+    reports = summary.get("patches") or {}
+    if not reports:
+        return
+
+    for name, report in reports.items():
+        edited = int(report.get("records_edited", 0))
+        dropped = int(report.get("records_dropped", 0))
+        if not edited and not dropped:
+            continue
+        parts = []
+        if edited:
+            parts.append(f"{edited:,} records edited ({report.get('values_changed', 0):,} values)")
+        if dropped:
+            parts.append(f"{dropped:,} dropped")
+        console.print(f"  patches         {name}: {', '.join(parts)}")
+        for rule in report.get("rules") or []:
+            console.print(f"  [cacophony.muted]                {rule['name']}[/]")
+
+
 def report_outcome(outcome: RunOutcome, *, on_provider_activity: Any = None) -> None:
     """Print what happened, and exit non-zero if it was not what was asked."""
     console.rule(style="cacophony.rule")
@@ -538,6 +564,7 @@ def report_outcome(outcome: RunOutcome, *, on_provider_activity: Any = None) -> 
     _report_assets(summary)
     _report_world(summary)
     _report_edge_cases(summary)
+    _report_patches(summary)
 
     if on_provider_activity is not None:
         on_provider_activity()

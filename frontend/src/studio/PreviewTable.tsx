@@ -10,10 +10,11 @@
  * configuration and the fields it read.
  */
 
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 
 import type { EntityView, PreviewResult } from "../api/types";
 import { GeneratorBadge, renderCell } from "../components/ui";
+import { RecordEditor } from "./RecordEditor";
 
 export function PreviewTable({
   preview,
@@ -23,8 +24,12 @@ export function PreviewTable({
   entity: EntityView | undefined;
 }): ReactNode {
   const columns = preview.columns;
+  // Which row the record editor is open on. Section 104's editing, which writes
+  // a patch rule rather than saving a row - see `RecordEditor`.
+  const [editing, setEditing] = useState<number | null>(null);
 
   return (
+    <>
     <div className="table-scroll">
       <table>
         <thead>
@@ -51,7 +56,12 @@ export function PreviewTable({
         </thead>
         <tbody>
           {preview.records.map((record, index) => (
-            <tr key={index}>
+            <tr
+              key={index}
+              onDoubleClick={() => setEditing(index)}
+              title="Double-click to build a patch rule from this record (section 104)"
+              className={editing === index ? "selected" : undefined}
+            >
               {columns.map((column) => {
                 const value = record[column];
                 const field = entity?.fields[column];
@@ -70,6 +80,14 @@ export function PreviewTable({
         </tbody>
       </table>
     </div>
+    {editing !== null && preview.records[editing] && (
+      <RecordEditor
+        entity={entity}
+        record={preview.records[editing] as Record<string, unknown>}
+        onClose={() => setEditing(null)}
+      />
+    )}
+    </>
   );
 }
 

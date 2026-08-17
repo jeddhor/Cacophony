@@ -107,6 +107,7 @@ class GenerationEngine:
         detect_duplicates: bool = True,
         edge_cases: float = 0.0,
         edge_categories: list[str] | None = None,
+        patches: bool = True,
     ) -> None:
         if failure_policy not in FailurePolicy.ALL:
             raise ValueError(
@@ -187,6 +188,13 @@ class GenerationEngine:
         self.edge_cases = min(1.0, max(0.0, float(edge_cases)))
         self.edge_categories = list(edge_categories or [])
         self._edge_injectors: dict[str, Any] = {}
+
+        # Patch rules (section 104). Part of the project, so a patched dataset
+        # is still a pure function of the schema and the seed - which is what
+        # lets record 4,823,913 be regenerated next year with the same edit
+        # applied. An edit made to an output file has neither property.
+        self.apply_patches = patches
+        self._patch_sets: dict[str, Any] = {}
 
     # -- provider services -------------------------------------------------- #
 
@@ -551,6 +559,33 @@ class GenerationEngine:
             self._injectors[entity.name] = injector
         return injector
 
+    def _patches_for(self, entity: CompiledEntity) -> Any:
+        """The patch rules that apply to an entity, or None (section 104)."""
+        if not self.apply_patches:
+            return None
+        if entity.name in self._patch_sets:
+            return self._patch_sets[entity.name]
+
+        from ..transforms.rules import PatchRule, PatchSet
+
+        declared = self.compiled.spec.patches
+        rules = [
+            PatchRule.from_spec(name, spec)
+            for name, spec in declared.items()
+            if not spec.entity or spec.entity == entity.name
+        ]
+        patch_set = PatchSet(rules, entity=entity.name) if rules else None
+        self._patch_sets[entity.name] = patch_set
+        return patch_set
+
+    def patch_reports(self) -> dict[str, Any]:
+        """What the patch rules did, per entity."""
+        return {
+            name: patch_set.describe()
+            for name, patch_set in self._patch_sets.items()
+            if patch_set is not None and patch_set.stats.records_seen
+        }
+
     def _edges_for(self, entity: CompiledEntity) -> Any:
         """The edge-case injector for an entity, or None (section 79)."""
         if self.edge_cases <= 0:
@@ -705,6 +740,19 @@ class GenerationEngine:
             if self.inject_chaos:
                 records = self._damage(entity, records, list(indices))
 
+            # Patch rules last, and before validation (section 104). Last
+            # because a rule is the final word on what a record contains -
+            # somebody masking a column means the column masked, not masked and
+            # then damaged. Before validation because what reaches the file is
+            # what should be checked.
+            patch_set = self._patches_for(entity)
+            if patch_set is not None:
+                records = [
+                    patched
+                    for patched in (self._patch(patch_set, record) for record in records)
+                    if patched is not None
+                ]
+
             detector = self._detector_for(entity)
             batch: list[GeneratedRecord] = []
             for record in records:
@@ -726,6 +774,12 @@ class GenerationEngine:
             # Give the event loop a turn so a long CPU-bound run stays
             # cancellable and, later, so writers can drain concurrently.
             await asyncio.sleep(0)
+
+    @staticmethod
+    def _patch(patch_set: Any, record: GeneratedRecord) -> GeneratedRecord | None:
+        """Apply the rules to one record, in place. None means filtered out."""
+        result = patch_set.apply(record.values)
+        return None if result is None else record
 
     def _damage(
         self,

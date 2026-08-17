@@ -13,15 +13,16 @@ built and how to run it.
 
 ---
 
-## Status: Phase 11 — Reuse
+## Status: Phase 12 — Afterwards
 
 Phases 1–7 built the engine, the providers, the run system, the Studio, the
 relational layer, multimodal generation and synthetic worlds. Phase 8 turned
 Cacophony into a workload generator; Phase 9 spread a run across machines, with
 byte-identical output. Phase 10 asked whether what came out is any good:
 repetition, the model that produced it, and what an application does with valid
-but awkward data. Phase 11 makes schemas reusable — a catalogue of fragments, and
-projects that can be sent to somebody else.
+but awkward data. Phase 11 made schemas reusable — a catalogue of
+fragments, and projects that can be sent to somebody else. Phase 12 deals with a
+dataset that already exists and is not quite right.
 
 **Working now**
 
@@ -79,6 +80,14 @@ projects that can be sent to somebody else.
   through the real pipeline and reports validity, usability, clipping, speed and
   repetition, with the cache forced off so nobody is scored on somebody else's
   answers
+- Post-generation transforms — mask, hash, round, jitter, coarsen a date,
+  encode, compress, filter; streaming, so a 124 MB file transforms at 69 MB of
+  memory, and never writing over its input until the new file is complete
+- Patch rules — an edit recorded in the project rather than made to a file, so
+  it applies on every run and survives a regeneration. Verified: transforming a
+  file and regenerating with the same rule produce identical bytes
+- `cacophony regenerate` — re-derive record 4,823,913 on its own, with no run,
+  no file and no state, because its seed is a hash of its position
 - Generation recipes — `recipes: [employee]` expands to the twelve fields
   everybody writes the same way, with attribution on every one so expansion is
   never invisible; override a field without forking the recipe
@@ -111,8 +120,8 @@ projects that can be sent to somebody else.
 - Structured logging with the fields design document section 86 asks for
 - CLI: `validate`, `lint`, `plan`, `prompt`, `propose`, `preview`, `generate`,
   `resume`, `runs`, `run`, `serve`, `stream`, `cluster`, `controller`,
-  `worker`, `worlds`, `benchmark`, `recipes`, `bundle`, `generators`,
-  `providers --test`, `models`
+  `worker`, `worlds`, `benchmark`, `recipes`, `bundle`, `transform`,
+  `regenerate`, `generators`, `providers --test`, `models`
 - **Cacophony Studio**: project dashboard, schema editor with live preview,
   distribution and relationship views, a generate screen with cost estimates,
   a live run view fed by the WebSocket, a streaming page with per-entity rate
@@ -134,9 +143,8 @@ Set `on_unavailable: placeholder` on any of them to run the whole pipeline
 today with obviously-marked stand-in values.
 
 **Still to come.** Sections 90–95 of the design document are delivered, and so
-is everything the earlier phases left open. Three slices remain:
-post-generation transforms and record editing (12); the plugin protocol and a
-sandboxed `script` (13); and Tauri desktop packaging (14).
+is everything the earlier phases left open. Two slices remain: the plugin
+protocol and a sandboxed `script` (13), and Tauri desktop packaging (14).
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the phase plan and what makes each
 one hard.
@@ -426,6 +434,47 @@ shard is handed to somebody else, and that worker regenerates it from
 scratch — producing exactly the bytes the dead one would have. Tested by
 `kill -9`ing a worker in the middle of a shard: the dataset still matched,
 half-written file and all.
+
+### Changing a dataset that already exists
+
+```bash
+cacophony transform out/employee.jsonl \
+    --set 'email=mask:8' --where "department == 'Finance'" \
+    -o out/masked.jsonl --record-as mask_finance_emails
+```
+
+```
+rule   cli where department == 'Finance' set email = mask:8
+
+wrote  out/masked.jsonl
+  read            400,000
+  written         400,000
+  edited           26,113  (26,113 values)
+
+as a patch rule
+  patches:
+    mask_finance_emails:
+      where: department == 'Finance'
+      set:
+        email: mask:8
+```
+
+**It prints the rule because the file is the wrong place to keep the change.** A
+Cacophony dataset is a pure function of its schema and its seed; a row edited in
+an output file corresponds to nothing, and the next `generate` overwrites it
+without noticing. Paste that block into the project and the change applies on
+every run — and transforming the file and regenerating from the schema produce
+*byte-identical* output, which is the property that makes patch rules a real
+answer rather than a euphemism.
+
+It streams: 124 MB and 400,000 records in 5.4 seconds at 69 MB of memory. And it
+never writes over its input until the new file is complete, `--in-place`
+included.
+
+```bash
+# No run, no file, no state — record 4,823,913's seed is a hash of its position.
+cacophony regenerate project.yaml -e employee -r 4823913-4823920
+```
 
 ### One line instead of forty
 
@@ -741,6 +790,7 @@ backend/cacophony/
 ├── schema/        project model, compiler, graph, plan, linter, recipes, bundles
 ├── generation/    generator registry, built-in generators, recommendation, engine
 ├── validation/    structural and constraint validators, duplicate detection
+├── transforms/    section 105's operations, patch rules, the file pipeline
 ├── outputs/       CSV, JSON, JSONL and Parquet writers
 ├── runs/          the Conductor: jobs, checkpoints, pause/resume/cancel
 ├── store/         SQLite metadata: projects, schema revisions, runs, jobs

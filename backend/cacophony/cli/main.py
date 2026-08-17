@@ -1605,6 +1605,7 @@ def _human_bytes(count: int) -> str:
     return f"{size:,.1f} TB"
 
 
+from .afterwards import register as _register_afterwards  # noqa: E402
 from .bundles import register as _register_bundles  # noqa: E402
 from .distributed import register as _register_distributed  # noqa: E402
 from .stream import register as _register_stream  # noqa: E402
@@ -1612,6 +1613,7 @@ from .stream import register as _register_stream  # noqa: E402
 _register_stream(app)
 _register_distributed(app)
 _register_bundles(app)
+_register_afterwards(app)
 
 
 def run() -> None:

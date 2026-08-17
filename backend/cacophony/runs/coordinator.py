@@ -856,6 +856,11 @@ class Conductor:
             if edges:
                 data["edge_cases"] = edges
 
+            # What the project's own patch rules did (section 104).
+            patched = engine.patch_reports()
+            if patched:
+                data["patches"] = patched
+
         data["jobs"] = [
             {
                 "entity": job.entity,
