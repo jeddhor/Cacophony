@@ -693,6 +693,19 @@ scoring 100% unique and 29% of records carrying edge cases.
 it needs an embedding provider, and no adapter offers one — so declaring the
 method raises with an explanation rather than quietly doing something else.
 
+**Found on the way past, and much worse than any of the above.** Adding a field
+to `RunConfig` produced no entry in `git status`. `.gitignore` carried a bare
+`runs/` for generated run output, and an unanchored directory pattern matches at
+every depth — so it also matched `backend/cacophony/runs/`, the Conductor. Its
+1,520 lines had never been committed. Every clone since Phase 3 has been unable
+to import `cacophony.runs`, and therefore unable to run `generate`, `resume` or
+`serve`.
+
+The patterns are now anchored, the package is committed, and a fresh clone runs
+all 1,276 tests. The local working tree was fine throughout, which is exactly
+why nobody noticed: a repository can be broken in a way that no amount of local
+testing will reveal.
+
 ---
 
 ## Phase 11 — Reuse
