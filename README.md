@@ -13,13 +13,14 @@ built and how to run it.
 
 ---
 
-## Status: Phase 9 — Distributed
+## Status: Phase 10 — Assurance
 
 Phases 1–7 built the engine, the providers, the run system, the Studio, the
-relational layer, multimodal generation and synthetic worlds. Phase 8 stopped
-writing files and started producing traffic. Phase 9 spreads a run across
-workers — and the output is byte-identical to a single machine's, because a
-record's seed is a hash of its position rather than a point in a stream.
+relational layer, multimodal generation and synthetic worlds. Phase 8 turned
+Cacophony into a workload generator; Phase 9 spread a run across machines, with
+byte-identical output. Phase 10 asks whether what came out is any good:
+repetition, the model that produced it, and what an application does with valid
+but awkward data.
 
 **Working now**
 
@@ -69,6 +70,18 @@ record's seed is a hash of its position rather than a point in a stream.
   to workers that advertise what they can do, reassigning any shard whose
   holder goes quiet; the joined result is byte-identical to a single-machine
   run, verified including after a worker is killed mid-shard
+- Duplicate detection — exact, normalised, n-gram and fuzzy, in bounded memory:
+  18 MB of Bloom filter for ten million values, and a sliding MinHash window,
+  because a model that hands back the same biography with the name changed
+  produces values nothing else in the platform can see are the same
+- A model benchmark — `cacophony benchmark -m a,b,c` generates real records
+  through the real pipeline and reports validity, usability, clipping, speed and
+  repetition, with the cache forced off so nobody is scored on somebody else's
+  answers
+- Edge-case generation — a QA mode that produces *legal* but awkward values:
+  `O'Brien-Smith`, `Ω`, emoji with zero-width joiners, RTL overrides, leap days,
+  DST boundaries, the antimeridian. Every one validated against the field that
+  holds it, because an edge case that fails validation proves nothing
 - Language-model generation against Ollama, llama.cpp and any
   OpenAI-compatible server, addressed by URI
 - The Prompt Compiler — you write what a field *means*, it writes the
@@ -88,7 +101,7 @@ record's seed is a hash of its position rather than a point in a stream.
 - Structured logging with the fields design document section 86 asks for
 - CLI: `validate`, `lint`, `plan`, `prompt`, `propose`, `preview`, `generate`,
   `resume`, `runs`, `run`, `serve`, `stream`, `cluster`, `controller`,
-  `worker`, `worlds`, `generators`, `providers --test`, `models`
+  `worker`, `worlds`, `benchmark`, `generators`, `providers --test`, `models`
 - **Cacophony Studio**: project dashboard, schema editor with live preview,
   distribution and relationship views, a generate screen with cost estimates,
   a live run view fed by the WebSocket, a streaming page with per-entity rate
@@ -110,12 +123,10 @@ Set `on_unavailable: placeholder` on any of them to run the whole pipeline
 today with obviously-marked stand-in values.
 
 **Still to come.** Sections 90–95 of the design document are delivered, and so
-is everything the earlier phases left open. Five slices remain, covering the
-sections that were never assigned to a phase: duplicate detection, a model
-benchmark and an edge-case QA mode (10); recipes, the built-in catalogue and
-`.cacophony` bundles (11); post-generation transforms and record editing (12);
-the plugin protocol and a sandboxed `script` (13); and Tauri desktop packaging
-(14).
+is everything the earlier phases left open. Four slices remain: recipes, the
+built-in catalogue and `.cacophony` bundles (11); post-generation transforms and
+record editing (12); the plugin protocol and a sandboxed `script` (13); and
+Tauri desktop packaging (14).
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the phase plan and what makes each
 one hard.
@@ -406,6 +417,66 @@ scratch — producing exactly the bytes the dead one would have. Tested by
 `kill -9`ing a worker in the middle of a shard: the dataset still matched,
 half-written file and all.
 
+### Is it any good?
+
+Three questions the rest of the platform cannot answer.
+
+**Did the model repeat itself?** It usually does, and nothing else can see it —
+the same biography with the name changed is a unique string, the right type, no
+constraint violated.
+
+```yaml
+quality:
+  duplication:
+    max_near: 0.02
+```
+
+```
+duplication     colleague: 0.33% unique  (0 repeated, 299 near, over 300 values)
+                compared biography by exact, minhash
+                colleague: 99.67% of values are near duplicates, above the 10.00% allowed
+                e.g. biography at record 1: Darryl Vargas is a seasoned engineering manager…
+```
+
+Bounded: 18 MB of Bloom filter for ten million values, and a sliding MinHash
+window. No false negatives, so a report of zero is exact — and the
+false-positive rate is printed beside any non-zero count rather than left
+implied.
+
+**Which model should you use?**
+
+```bash
+cacophony benchmark project.yaml -m gemma4:12b,smollm3 -n 100
+```
+
+```
+MODEL               VALID  FIELDS  USABLE  CLIPPED   SPEED  DUPLICATION  LATENCY
+gemma4:12b         100.0%  100.0%   91.7%        1  11 t/s         0.0%  1760 ms
+smollm3            100.0%  100.0%   70.0%        6  21 t/s         0.0%   806 ms
+```
+
+Real records, real pipeline, same seed for every model, cache forced off. The
+`CLIPPED` column exists because real output demanded it: a provider enforcing the
+JSON Schema stops decoding at `maxLength`, so a value is never *over* length — it
+is cut mid-word, passes every check, and is not a sentence.
+
+**What does your application do with valid but awkward data?**
+
+```bash
+cacophony generate project.yaml --edge-cases 0.05
+```
+
+```
+first_name "O'Brien-Smith"        →  email  "o'brien-smith.smith@example.com"
+first_name 'شركة الاتحاد للتجارة'  →  email  'شركةالاتحادللتجارة.fuller@example.com'
+```
+
+Not chaos. Chaos produces data the schema forbids and asks what your pipeline
+does with garbage; these are real surnames, and an application that cannot store
+them has a bug. Every value is validated against the field that holds it, and
+they are applied *as each field is produced* — so the derived email tests the
+template too.
+
 ### The same people, twice
 
 ```bash
@@ -610,7 +681,7 @@ backend/cacophony/
 ├── core/          types, seeds, records, contexts, the four key interfaces
 ├── schema/        project model, compiler, dependency graph, plan, linter
 ├── generation/    generator registry, built-in generators, recommendation, engine
-├── validation/    structural and constraint validators, the record pipeline
+├── validation/    structural and constraint validators, duplicate detection
 ├── outputs/       CSV, JSON, JSONL and Parquet writers
 ├── runs/          the Conductor: jobs, checkpoints, pause/resume/cancel
 ├── store/         SQLite metadata: projects, schema revisions, runs, jobs

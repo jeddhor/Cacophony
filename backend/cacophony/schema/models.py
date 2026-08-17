@@ -43,12 +43,14 @@ from ..core.types import DataType
 __all__ = [
     "ChaosSpec",
     "ConstraintSpec",
+    "DuplicationSpec",
     "EntitySpec",
     "FieldSpec",
     "GeneratorSpec",
     "OutputProfileSpec",
     "ProjectSpec",
     "ProviderSpec",
+    "QualitySpec",
     "RelationshipSpec",
     "ScenarioSpec",
     "SimulationSpec",
@@ -463,6 +465,57 @@ class ChaosSpec(_Base):
         )
 
 
+class DuplicationSpec(_Base):
+    """Duplicate detection thresholds (design document section 59).
+
+    ``fields`` defaults to the fields where repetition actually happens - the
+    long-form text a model wrote - because comparing every employee id against
+    every other one finds nothing and costs a great deal. ``["*"]`` compares
+    whole records instead.
+    """
+
+    enabled: bool | None = None
+    fields: list[str] = Field(default_factory=list)
+    methods: list[str] = Field(default_factory=lambda: ["exact", "normalized", "minhash"])
+    #: Fractions of values, not of records: a record with three compared fields
+    #: contributes three.
+    max_exact: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_near: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: Jaccard similarity at which two texts count as the same thing.
+    #:
+    #: Calibrated rather than guessed. Measured on a sixty-word biography with
+    #: only the name changed - the canonical way a model repeats itself - word
+    #: trigram Jaccard is 0.82; with a clause rewritten too it is 0.69; two
+    #: biographies sharing an opening sentence and nothing else score 0.13.
+    #: 0.7 therefore catches real repetition with an order of magnitude of
+    #: headroom above the false positives.
+    similarity: float = Field(default=0.7, gt=0.0, lt=1.0)
+    #: Word n-gram width. Larger finds only longer shared phrasing, and drops
+    #: sharply on small edits: the same name-swapped biography scores 0.88 at
+    #: bigrams, 0.82 at trigrams and 0.67 at 8-grams.
+    shingle: int = Field(default=3, ge=1, le=20)
+    signature_size: int = Field(default=64, ge=8, le=512)
+    #: Recent values held for near-duplicate comparison. Model repetition is
+    #: local, so a window catches it at any dataset size; see
+    #: :mod:`cacophony.validation.duplication`.
+    window: int = Field(default=50_000, ge=2)
+    #: Bloom filter false-positive target for the exact and normalised checks.
+    error_rate: float = Field(default=0.001, gt=0.0, lt=0.5)
+
+    def is_enabled(self) -> bool:
+        if self.enabled is not None:
+            return self.enabled
+        # A threshold is a request to measure. Nobody writes `max_near` and
+        # means "but do not check".
+        return self.max_exact is not None or self.max_near is not None or bool(self.fields)
+
+
+class QualitySpec(_Base):
+    """The ``quality:`` block (design document sections 58, 59)."""
+
+    duplication: DuplicationSpec = Field(default_factory=DuplicationSpec)
+
+
 class OutputProfileSpec(_Base):
     """One way of writing the same logical dataset (section 34)."""
 
@@ -496,6 +549,7 @@ class ProjectSpec(_Base):
     scenarios: dict[str, ScenarioSpec] = Field(default_factory=dict)
     timeline: TimelineSpec = Field(default_factory=TimelineSpec)
     chaos: ChaosSpec = Field(default_factory=ChaosSpec)
+    quality: QualitySpec = Field(default_factory=QualitySpec)
     outputs: dict[str, OutputProfileSpec] = Field(default_factory=dict)
 
     @model_validator(mode="after")

@@ -75,6 +75,27 @@ class RecordValidator:
         )
         self._seen: dict[str, set[Any]] = {name: set() for name in self._unique_fields}
 
+    def validate_field(self, name: str, value: Any) -> ValidationResult:
+        """Check one value against one field, with no side effects.
+
+        Deliberately not part of validating a record: nothing is repaired,
+        nothing is remembered for uniqueness, and no distribution is observed.
+        It exists so a caller can ask "would this value be legal here?" without
+        the asking changing what a later record is checked against.
+
+        Edge-case generation (section 79) is the caller: a candidate that would
+        make the record invalid is not an edge case, it is chaos, and the two
+        must not be confused.
+        """
+        result = ValidationResult()
+        for field_name, validator in self._structural:
+            if field_name == name:
+                result.issues.extend(validator.validate_sync(value).issues)
+        for field_name, constraint_validator in self._constraint:
+            if field_name == name:
+                result.issues.extend(constraint_validator.validate_sync(value).issues)
+        return result
+
     def validate(self, record: GeneratedRecord, *, repair: bool = True) -> ValidationResult:
         """Validate one record, optionally applying repairs in place.
 

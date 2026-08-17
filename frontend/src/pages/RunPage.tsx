@@ -22,7 +22,13 @@ import {
   useRunQuality,
   useRunStream,
 } from "../api/hooks";
-import type { DistributionCheck, JobView, RunView, StoredEvent } from "../api/types";
+import type {
+  DistributionCheck,
+  DuplicationReport,
+  JobView,
+  RunView,
+  StoredEvent,
+} from "../api/types";
 import { PageHead } from "../components/Layout";
 import {
   Empty,
@@ -328,8 +334,13 @@ function DataQualityPanel({ runId, active }: { runId: string; active: boolean })
     ([, value]) => value.statistical?.checks ?? [],
   );
   const relations = report.data.relations;
+  const duplication = Object.values(report.data.duplication ?? {}).filter(
+    (entry) => entry.checked_values > 0,
+  );
 
-  if (referential.length === 0 && checks.length === 0) return null;
+  if (referential.length === 0 && checks.length === 0 && duplication.length === 0) {
+    return null;
+  }
 
   return (
     <Panel
@@ -440,7 +451,118 @@ function DataQualityPanel({ runId, active }: { runId: string; active: boolean })
           </p>
         </>
       )}
+
+      {duplication.length > 0 && <DuplicationSection reports={duplication} />}
     </Panel>
+  );
+}
+
+/**
+ * How much of the dataset is the same thing twice (design document section 59).
+ *
+ * Near duplicates are the interesting column and the one nothing else can see.
+ * A model handed back the same biography with the name changed: every string is
+ * unique, every value passes validation, and the dataset is worthless for
+ * anything that depends on variety.
+ *
+ * The false-positive note is not decoration. The exact count comes from a Bloom
+ * filter, which has no false negatives and some false positives, so a zero is
+ * exact and a number is an upper bound.
+ */
+function DuplicationSection({ reports }: { reports: DuplicationReport[] }): ReactNode {
+  return (
+    <>
+      <div className="panel-title" style={{ marginTop: 14 }}>
+        Repetition
+      </div>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Entity</th>
+              <th>Compared</th>
+              <th style={{ textAlign: "right" }}>Values</th>
+              <th style={{ textAlign: "right" }}>Exact</th>
+              <th style={{ textAlign: "right" }}>Near</th>
+              <th style={{ textAlign: "right" }}>Unique</th>
+            </tr>
+          </thead>
+          <tbody>
+            {reports.map((entry) => (
+              <tr key={entry.entity}>
+                <td>{entry.entity}</td>
+                <td className="faint">{entry.fields.join(", ")}</td>
+                <td className="nums" style={{ textAlign: "right" }}>
+                  {formatNumber(entry.checked_values)}
+                </td>
+                <td className="nums" style={{ textAlign: "right" }}>
+                  {formatNumber(entry.exact + entry.normalized)}
+                </td>
+                <td
+                  className="nums"
+                  style={{
+                    textAlign: "right",
+                    color: entry.near > 0 ? "var(--amber)" : undefined,
+                  }}
+                >
+                  {formatNumber(entry.near)}
+                </td>
+                <td
+                  className="nums"
+                  style={{
+                    textAlign: "right",
+                    color: entry.ok ? undefined : "var(--red)",
+                  }}
+                >
+                  {(entry.uniqueness * 100).toFixed(2)}%
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {reports.flatMap((entry) => entry.breaches).length > 0 && (
+        <Notice tone="warn">
+          {reports
+            .flatMap((entry) => entry.breaches)
+            .map((breach) => (
+              <div key={breach}>{breach}</div>
+            ))}
+        </Notice>
+      )}
+
+      {reports.some((entry) => entry.examples.length > 0) && (
+        <div style={{ marginTop: 10 }}>
+          {reports
+            .flatMap((entry) => entry.examples.slice(0, 3))
+            .map((example) => (
+              <div
+                key={`${example.field}-${example.record_index}`}
+                style={{ fontSize: "0.78rem", marginBottom: 6 }}
+              >
+                <span className="faint">
+                  {example.kind} · {example.field} at record {example.record_index}
+                  {example.similarity < 1 && <> · {(example.similarity * 100).toFixed(0)}%</>}
+                </span>
+                <div className="mono" style={{ opacity: 0.85 }}>
+                  {example.excerpt}
+                </div>
+              </div>
+            ))}
+        </div>
+      )}
+
+      <p className="faint" style={{ fontSize: "0.74rem", marginBottom: 0 }}>
+        Exact matches are counted with a Bloom filter: no false negatives, so a zero is
+        exact, and up to{" "}
+        {(
+          Math.max(...reports.map((entry) => entry.bloom?.false_positive_rate ?? 0)) * 100
+        ).toFixed(3)}
+        % of a non-zero count may be the filter rather than the data. Deliberate duplicates
+        from chaos are excluded.
+      </p>
+    </>
   );
 }
 

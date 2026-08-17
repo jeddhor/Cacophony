@@ -447,6 +447,22 @@ def generate(
     no_validate: Annotated[
         bool, typer.Option("--no-validate", help="Skip validation entirely.")
     ] = False,
+    edge_cases: Annotated[
+        float,
+        typer.Option(
+            "--edge-cases",
+            help="Fraction of records given a legal-but-awkward value (section 79).",
+            min=0.0,
+            max=1.0,
+        ),
+    ] = 0.0,
+    edge_categories: Annotated[
+        str | None,
+        typer.Option(
+            "--edge-categories",
+            help="Limit edge cases to these, comma-separated. Default: all of them.",
+        ),
+    ] = None,
     cache: CacheOpt = "disabled",
     cache_path: CachePathOpt = None,
     world: Annotated[
@@ -510,6 +526,8 @@ def generate(
         record_history=not no_history,
         assets_dir=assets_dir,
         overwrite_assets=regenerate_assets,
+        edge_cases=edge_cases,
+        edge_categories=edge_categories,
     )
 
     if world and seed is not None:
@@ -980,6 +998,126 @@ def models(
 
     asyncio.run(runtime.aclose())
     if failures:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def benchmark(
+    project: ProjectArg,
+    models_arg: Annotated[
+        str,
+        typer.Option(
+            "--models",
+            "-m",
+            help="Comma-separated model names to compare, e.g. gemma3:12b,qwen3:8b.",
+        ),
+    ],
+    entity: EntityOpt = None,
+    records: Annotated[
+        int, typer.Option("--records", "-n", help="Records to generate per model.")
+    ] = 100,
+    provider: Annotated[
+        str | None,
+        typer.Option("--provider", "-p", help="Which language-model provider to run them on."),
+    ] = None,
+    sort_by: Annotated[
+        str,
+        typer.Option("--sort-by", help="json_validity, field_validity, usable, tokens_per_second."),
+    ] = "json_validity",
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    seed: SeedOpt = None,
+) -> None:
+    """Test models against this schema (design document section 67).
+
+        cacophony benchmark project.yaml -m gemma3:12b,qwen3:8b -n 100
+
+    Every model generates the same records from the same seed, with the cache
+    forced off, so the comparison is of the models rather than of what happened
+    to be cached. A model that reasons beautifully and cannot reliably return a
+    JSON object with two string fields is the wrong model for this job, and this
+    is what says so.
+    """
+    from ..generation.benchmark import default_entity, render_table, run_benchmark
+
+    compiled = _load(project, seed)
+    wanted = [name.strip() for name in models_arg.split(",") if name.strip()]
+    if not wanted:
+        error_console.print("[cacophony.error]error[/] --models needs at least one model name")
+        raise typer.Exit(code=2)
+
+    try:
+        target = entity or default_entity(compiled)
+    except CacophonyError as exc:
+        error_console.print(f"[cacophony.error]error[/] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    if not as_json:
+        _banner("benchmark", f"{compiled.name} · {target}")
+        console.print(
+            f"[cacophony.muted]models[/] {', '.join(wanted)}   "
+            f"[cacophony.muted]records[/] {records:,} each   "
+            f"[cacophony.muted]seed[/] {compiled.seed}"
+        )
+        console.print(
+            "[cacophony.muted]cache[/] disabled, so nobody is scored on somebody else's answers\n"
+        )
+
+    try:
+        result = run_benchmark(
+            compiled,
+            wanted,
+            entity=target,
+            records=records,
+            provider=provider,
+            on_model=(
+                None
+                if as_json
+                else lambda name: console.print(f"[cacophony.muted]running[/] {name}…")
+            ),
+        )
+    except CacophonyError as exc:
+        error_console.print(f"[cacophony.error]error[/] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    if as_json:
+        console.print_json(json.dumps(result.to_dict()))
+        raise typer.Exit(code=0 if result.ok else 1)
+
+    from rich.table import Table
+
+    rows = render_table(result, by=sort_by)
+    table = Table(box=None, pad_edge=False, header_style="cacophony.muted")
+    for index, heading in enumerate(rows[0]):
+        table.add_column(heading, justify="left" if index == 0 else "right")
+    for row in rows[1:]:
+        table.add_row(*row)
+
+    console.print()
+    console.print(table)
+    console.print(
+        "\n[cacophony.muted]VALID[/] answers that parsed without repair   "
+        "[cacophony.muted]FIELDS[/] records that passed validation   "
+        "[cacophony.muted]USABLE[/] values fit to keep\n"
+        "[cacophony.muted]CLIPPED[/] values cut off mid-word at their length limit   "
+        "[cacophony.muted]DUPLICATION[/] repeated values"
+    )
+    if sum(score.clipped for score in result.scores if score.ok):
+        console.print(
+            "[cacophony.warn]note[/] some values stop dead at their length limit. A provider "
+            "that enforces the schema natively cuts the answer rather than exceeding it, so "
+            "the limit is doing the writing - raise max_length, or ask for less."
+        )
+
+    for score in result.scores:
+        if score.error:
+            error_console.print(f"[cacophony.error]{score.model}[/] {score.error}")
+        elif score.concurrency > 1:
+            console.print(
+                f"[cacophony.muted]{score.model} ran at concurrency {score.concurrency}; "
+                "a throughput compared across different concurrencies is not a comparison[/]"
+            )
+
+    if not result.ok:
         raise typer.Exit(code=1)
 
 

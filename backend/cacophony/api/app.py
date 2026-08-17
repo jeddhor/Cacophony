@@ -448,6 +448,10 @@ def create_app(
             "validation": summary.get("validation") or {},
             "relations": summary.get("relations"),
             "providers": summary.get("providers"),
+            # What the model repeated (section 59). Part of the quality report
+            # rather than a route of its own: "how much of this is the same
+            # thing twice" is the same question as "is this any good".
+            "duplication": summary.get("duplication") or {},
         }
 
     @app.get("/api/runs/{run_id}/assets", tags=["assets"])

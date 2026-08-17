@@ -707,6 +707,58 @@ run time from the environment variable `CACOPHONY_SECRET_<ID>`, from a variable
 named after the id itself, or from the OS keychain under service `cacophony`.
 The loader rejects anything that looks like a literal key.
 
+## `quality`
+
+Design document sections 58, 59.
+
+```yaml
+quality:
+  duplication:
+    max_exact: 0.001        # fraction of compared *values*, not records
+    max_near: 0.02
+    fields: [biography]     # default: the long-form text a model wrote
+    methods: [exact, normalized, minhash]
+    similarity: 0.7         # Jaccard at which two texts are the same thing
+    shingle: 3              # word n-gram width
+    window: 50000           # recent values held for near-duplicate comparison
+    error_rate: 0.001       # Bloom filter false-positive target
+```
+
+Writing a threshold is a request to measure; nothing is checked that nobody
+asked for. `enabled: false` overrides that.
+
+| Method | Catches |
+|---|---|
+| `exact` | Byte-identical values |
+| `normalized` | The same text casefolded, depunctuated, whitespace-collapsed |
+| `minhash` | Shared *phrasing* — a paragraph rewritten around one clause |
+| `fuzzy` | The same candidates, confirmed with a real sequence ratio |
+| `embeddings` | Named in section 59 and **refused**: it needs an embedding provider, and no adapter offers one |
+
+`fields` defaults to model-written fields, declared `text`, and strings whose
+`max_length` is 80 or more. Comparing every employee id against every other one
+finds nothing and costs a great deal; reporting that a weighted choice recurs
+would be reporting what a weighted choice is for. `["*"]` compares whole
+records.
+
+**What to believe.** Exact matching uses a Bloom filter — 18 MB for ten million
+values rather than most of a gigabyte. It has no false negatives, so a report of
+zero is exact, and its false-positive rate at the load it actually reached is
+reported beside the count. Near-duplicate detection holds a sliding window,
+because model repetition is *local*: the same three biographies come back within
+a few hundred calls, and a window catches that at any dataset size where a
+uniform sample would not.
+
+Deliberate duplicates from `chaos` are excluded. Reporting those would be
+reporting the feature.
+
+The defaults are calibrated rather than guessed. On a sixty-word biography with
+only the name changed — the canonical way a model repeats itself — word trigram
+Jaccard is 0.82; with a clause rewritten too it is 0.69; two biographies sharing
+an opening sentence and nothing else score 0.13.
+
+---
+
 ## `outputs`
 
 ```yaml
@@ -761,6 +813,8 @@ cacophony providers  [project.yaml] [--test]
 cacophony models     project.yaml [-p PROVIDER]
 cacophony prompt     project.yaml [-e ENTITY] [--batch-size N] [--schema]
 cacophony worlds     project.yaml [--create NAME] [--show NAME] [--delete NAME]
+cacophony benchmark  project.yaml -m MODEL,MODEL [-e ENTITY] [-n N] [-p PROVIDER]
+                                  [--sort-by FIELD] [--json] [--seed N]
 cacophony stream     project.yaml [-r ENTITY=RATE]... [-t DESTINATION]...
                                   [-s SECONDS] [-n RECORDS] [--from N]
                                   [--batch-size N] [--flush SECONDS]
@@ -791,6 +845,9 @@ cacophony version
 `generate` additionally accepts `--workers N` (entities generated
 concurrently), `--checkpoint-every N`, `--store FILE`, `--no-history`,
 `--log-level LEVEL` and `--log-format text|json`.
+
+`generate` also accepts `--edge-cases FRACTION` and
+`--edge-categories a,b,c` — see [Edge cases](#edge-cases) below.
 
 Exit code `4` means a run was cancelled rather than failed.
 
@@ -837,6 +894,103 @@ so it happens again each cycle.
 Below 95% means generation or a destination could not keep up, which is
 reported rather than hidden — a workload generator that quietly under-delivers
 is measuring the wrong thing.
+
+---
+
+## Edge cases
+
+Section 79. A QA mode that deliberately seeks weird *values*.
+
+```bash
+cacophony generate project.yaml --edge-cases 0.05
+cacophony generate project.yaml --edge-cases 0.2 --edge-categories emoji,rtl_text
+```
+
+**This is not chaos, and the difference is the point.** Entropy injection
+produces data the schema *forbids* — a null in a required column, a mangled
+date — and answers "what does my pipeline do with broken input". Edge cases
+produce data the schema *permits* and naive code mishandles anyway.
+`O'Brien-Smith` is a real surname; an application that cannot store it has a
+bug, not bad input.
+
+Every value is validated against the field that will hold it, and a candidate
+that does not fit is discarded and counted. An edge case that fails validation
+has told you nothing about your application.
+
+| Category | Values |
+|---|---|
+| `boundary_length` | Empty string where legal, exactly `min_length`, exactly `max_length` |
+| `punctuation_names` | `O'Brien-Smith`, `d'Arcy`, `van der Waals`, `Ó Séaghdha` |
+| `unicode_text` | One-character names, `ß`, Turkish dotted/dotless I, ligatures, fullwidth, Cherokee |
+| `emoji` | Zero-width joiner sequences, family groups, flag pairs, skin-tone modifiers |
+| `rtl_text` | Arabic, Hebrew, Persian, and the RLO override that renders reversed |
+| `whitespace` | Leading, trailing, doubled, tab, non-breaking, zero-width, embedded newline |
+| `extreme_numbers` | Declared bounds and one inside them; unbounded fields get 2³¹, 2⁵³, 2⁶³ and their negatives |
+| `temporal_boundaries` | 29 February, year end, the Unix epoch, and both US DST transitions |
+| `extreme_coordinates` | The poles, the antimeridian, null island |
+
+**Never touched:** primary keys, unique fields and references. An emoji primary
+key is a broken fixture, not a robustness test — the joins stop resolving and
+every finding after that is about Cacophony.
+
+**Applied as each field is produced**, not to the finished record, so anything
+derived from an awkward value derives from the awkward value: a first name of
+`O'Brien-Smith` yields `o'brien-smith.smith@example.com`, which tests the
+template too. Doing it the other way round produced a colleague named
+`" leading space"` whose model-written biography still began "Courtney
+specializes in…" — two fields disagreeing is a broken fixture, not a finding.
+
+Which records get a case, and which case, is derived from the record index
+(section 75), so a bug found once is found again.
+
+---
+
+## Model benchmark
+
+Section 67. **Test this model against this schema.**
+
+```bash
+cacophony benchmark project.yaml -m gemma4:12b,qwen3:8b -n 100
+```
+
+```
+MODEL               VALID  FIELDS  USABLE  CLIPPED   SPEED  DUPLICATION  LATENCY
+gemma4:12b         100.0%  100.0%   91.7%        1  11 t/s         0.0%  1760 ms
+smollm3:latest     100.0%  100.0%   70.0%        6  21 t/s         0.0%   806 ms
+```
+
+Records are generated through the real pipeline — the same prompt compiler,
+structured-output enforcement, validators and duplicate detection a run uses —
+so the numbers mean what they say.
+
+| Column | Meaning |
+|---|---|
+| `VALID` | Answers that parsed without the repair stage touching them |
+| `FIELDS` | Records that passed validation |
+| `USABLE` | Values that were not empty, over-length, clipped or a refusal |
+| `CLIPPED` | Values that stop dead at their length limit, mid-word |
+| `SPEED` | Completion tokens per second |
+| `DUPLICATION` | Repeated values, measured with section 59's detector |
+| `LATENCY` | Mean per-call latency |
+
+**Fairness is enforced, not documented as a caveat.** Every model generates the
+same record indices from the same seed. The cache is forced off — with it on the
+second model would be scored on the first model's answers and report an
+impossible speed. Concurrency comes from the provider spec and is stated,
+because 71 tokens/sec at four concurrent requests is not comparable to 42 at
+one.
+
+`CLIPPED` was added after real output showed it. A provider that enforces the
+JSON Schema natively stops decoding at `maxLength`, so the value is never *over*
+length — it is cut: `"...failed to handle queueing mechanism, led 3"` passes
+every check in the platform and is not a sentence. A model needing 140
+characters to answer a question given 90 is the wrong model, or the limit is the
+wrong limit.
+
+Section 67 also lists *semantic quality*, which cannot be measured without a
+judge model — which would make the benchmark depend on the thing it is
+assessing. What is measured instead is named honestly: empty values, broken
+lengths, clipped answers, and boilerplate about being a language model.
 
 ---
 

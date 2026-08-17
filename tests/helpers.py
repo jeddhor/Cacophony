@@ -21,7 +21,15 @@ EXAMPLES = REPO_ROOT / "examples"
 
 
 #: Blocks that sit beside ``project:`` rather than inside it.
-_TOP_LEVEL = ("providers", "scenarios", "timeline", "chaos", "outputs", "relationships")
+_TOP_LEVEL = (
+    "providers",
+    "scenarios",
+    "timeline",
+    "chaos",
+    "quality",
+    "outputs",
+    "relationships",
+)
 
 
 def make_project(

@@ -594,7 +594,7 @@ attention rather than squeezed in beside a feature.
 
 | Phase | Sections | Theme |
 |---|---|---|
-| 10 — Assurance | 59, 67, 79 | Is what came out any good? |
+| 10 — Assurance ✅ | 59, 67, 79 | Is what came out any good? |
 | 11 — Reuse | 80, 106, 72 | Fragments, catalogues and bundles |
 | 12 — Afterwards | 105, 104 | Changing a dataset that already exists |
 | 13 — Extension | 44, and `script` | Third-party code, safely |
@@ -605,59 +605,93 @@ it is headed "Future" and describes a research direction rather than a feature.
 
 ---
 
-## Phase 10 — Assurance
+## Phase 10 — Assurance ✅
 
-*Design document sections 59, 67, 79.*
+**Delivered.** Design document sections 59, 67 and 79.
 
 Three sections that answer the same question from three directions: **is what
 came out any good?** Measuring repetition, measuring the model that produced
 it, and deliberately producing the worst input an application will ever see.
 
-**§59 Duplicate detection.** Exact hashes, normalised hashes (casefold,
-collapse whitespace, strip punctuation), n-gram similarity, optional
-embeddings, and thresholds the schema declares:
+```bash
+cacophony generate project.yaml --edge-cases 0.05
+cacophony benchmark project.yaml -m gemma4:12b,qwen3:8b -n 100
+```
 
 ```yaml
 quality:
   duplication:
     max_exact: 0.001
     max_near: 0.02
-    method: minhash
 ```
 
-*The hard part is doing it in bounded memory.* Comparing ten million records
-pairwise is 10¹⁴ comparisons; the answer is MinHash signatures with LSH
-banding, which is linear and fits in a few hundred megabytes. Embeddings go
-behind the existing provider registry, so a duplicate check that needs a model
-server is configured the way every other model call already is.
+**What was found, rather than what was planned.** Five defects, four of them in
+code that looked finished:
 
-*The trap is already known.* Entropy injection deliberately duplicates records
-(section 24), so the detector must exempt `DUPLICATE_MARK` — exactly the lesson
-Phase 7 learned when validation faithfully reported 21,250 failures that were
-the feature working.
+*`SequenceMatcher`'s autojunk heuristic.* The `fuzzy` method confirms LSH
+candidates with a real sequence ratio. On sequences over 200 characters,
+`difflib` silently treats any character appearing in more than 1% of them as
+noise — for prose, the vowels. Two biographies differing only in the name scored
+**0.014** against a true 0.956, so the confirmation step was throwing away
+exactly the duplicates it existed to confirm. `autojunk=False`.
 
-**§67 Model benchmark.** `cacophony benchmark project.yaml --models a,b,c`,
-producing section 67's table: validity, throughput, duplication, latency.
+*Bounds that are not constraints.* `age: {generator: random, min: 18, max: 90}`
+puts those numbers in the *generator's* options, not in `constraints`. The
+edge-case catalogue read only constraints, saw an unbounded integer, and
+proposed 2⁶³ as an age. Nothing rejected it — no constraint was violated — and
+the dataset would have held a person nine quadrillion years old. Bounds now come
+from the generator when the field declares none.
 
-*The hard part is fairness.* Same seeds, same prompts, same schema, same
-concurrency — and the cache off, or every model after the first scores
-infinitely fast. Duplication reuses §59, which is why they belong in one phase.
+*Edge cases broke cross-field coherence.* Applying them to finished records
+produced a colleague whose name was `" leading space"` and whose model-written
+biography still began "Courtney specializes in…". Two fields disagreeing is a
+broken fixture, not a finding. They are now applied as each field is produced,
+so a first name of `O'Brien-Smith` yields `o'brien-smith.smith@example.com` —
+which tests the derived field too, and is a better test than either half.
 
-**§79 Edge-case generation.** A QA mode that seeks weird *values*: empty
-strings, maximum and minimum lengths, Unicode names, emoji, apostrophes,
-hyphenated names, RTL text, huge integers, negatives, leap days, DST
-boundaries, extreme coordinates.
+*The benchmark could not fail.* Three models scored 100% on everything, which is
+not a benchmark. Real output showed why: a provider enforcing the JSON Schema
+natively stops decoding at `maxLength`, so a value is never *over* length — it
+is cut mid-word. `"...failed to handle queueing mechanism, led 3"` passes every
+check in the platform and is not a sentence. A `CLIPPED` column now measures it,
+and the same schema drops from 100% to 70% usable.
 
-*This is not chaos, and conflating them would waste both.* Chaos produces
-**invalid** data — a null where the schema forbids one. Edge cases produce
-**valid** data that breaks naive code: `O'Brien-Smith` is a real name, and an
-application that cannot store it has a bug. So an edge case must still satisfy
-its field's declared type and constraints, or the feature has merely
-reinvented `chaos: hostile_qa` under a second name.
+*My own sed didn't match.* An intermediate "brutal limits" test was a silent
+no-op that made the benchmark look broken when it was fine. Worth recording
+because the lesson generalises: a test that cannot fail and a test that is not
+running look identical from the outside.
 
-**Ships with:** a `quality.duplication` schema block, `cacophony benchmark`,
-`--edge-cases <fraction>`, a duplication panel on the run inspector, and the
-edge-case catalogue documented field-type by field-type.
+**Bounded, and honest about it.** Exact matching uses a Bloom filter — 18 MB for
+ten million values rather than most of a gigabyte. No false negatives, so a
+report of zero is exact; the false-positive rate at the load actually reached is
+reported beside the count. Near-duplicate detection holds a sliding window
+rather than sampling, because model repetition is *local*: measured recall on
+name-swapped biographies is 9/9 with zero false candidates on unrelated text,
+which a uniform sample of the same size would not achieve.
+
+**The defaults are calibrated, not guessed.** The first pair (`shingle: 5`,
+`similarity: 0.85`) would have missed the exact failure section 59 describes.
+Measured on a sixty-word biography with only the name changed: trigram Jaccard
+0.82; with a clause rewritten too, 0.69; two biographies sharing an opening
+sentence and nothing else, 0.13. So `shingle: 3`, `similarity: 0.7` — an order
+of magnitude of headroom above the false positives. The LSH band layout is
+chosen *below* the target rather than closest to it, because a threshold above
+it is a silent false negative.
+
+**Edge cases are not chaos, and the tests enforce it.** Every value is validated
+against the field that will hold it; a candidate that does not fit is discarded
+and counted. Asserted at a 50% injection rate — five times anything anyone would
+run — with zero validation failures across 4,500 records. Keys, unique fields
+and references are never touched: an emoji primary key is a broken fixture, not
+a robustness test.
+
+**Verified against real servers.** Benchmarked `gemma4:12b`, `gemma4:e4b` and
+`smollm3` on a live Ollama host; generated a 24-record dataset with a real model
+scoring 100% unique and 29% of records carrying edge cases.
+
+**Not in this phase:** embedding-based duplicate detection. Section 59 names it,
+it needs an embedding provider, and no adapter offers one — so declaring the
+method raises with an explanation rather than quietly doing something else.
 
 ---
 

@@ -104,6 +104,9 @@ class GenerationEngine:
         assets: Any | None = None,
         simulate: bool = True,
         chaos: bool = True,
+        detect_duplicates: bool = True,
+        edge_cases: float = 0.0,
+        edge_categories: list[str] | None = None,
     ) -> None:
         if failure_policy not in FailurePolicy.ALL:
             raise ValueError(
@@ -137,6 +140,12 @@ class GenerationEngine:
 
         self.stats: dict[str, EntityStats] = {}
         self._validators: dict[str, RecordValidator] = {}
+        #: Duplicate detectors, one per entity (section 59). Built lazily and
+        #: kept for the whole run: a repeat is only interesting relative to
+        #: everything generated before it, so a per-batch detector would find
+        #: almost nothing.
+        self._detectors: dict[str, Any] = {}
+        self.detect_duplicates = detect_duplicates
         self._enricher: Any = None
         self._group_cache: dict[tuple[str, int, int], list[Any]] = {}
 
@@ -170,6 +179,14 @@ class GenerationEngine:
             )
         self._injectors: dict[str, Any] = {}
         self.inject_chaos = chaos and compiled.spec.chaos.is_enabled()
+
+        # Edge-case generation (section 79). A fraction of records get a legal
+        # but awkward value. Distinct from chaos, which produces illegal ones:
+        # an application that mishandles an edge case has a bug, while one that
+        # rejects chaos is doing its job.
+        self.edge_cases = min(1.0, max(0.0, float(edge_cases)))
+        self.edge_categories = list(edge_categories or [])
+        self._edge_injectors: dict[str, Any] = {}
 
     # -- provider services -------------------------------------------------- #
 
@@ -310,11 +327,21 @@ class GenerationEngine:
                     frame.fold = _folder(simulation, frame, record, replay)
                 context.extras[SIMULATION_KEY] = frame
 
+        # Edge-case generation (section 79). Applied as each field is produced
+        # rather than to the finished record, so anything derived from an
+        # awkward value derives from the awkward value.
+        edges = self._edges_for(entity)
+        if edges is not None:
+            for _record in records:
+                edges.note_record()
+
         for layer in entity.layers():
             enrichable = [compiled for compiled in layer if self._is_enrichable(compiled)]
             direct = [compiled for compiled in layer if compiled not in enrichable]
 
-            for record, context, seeds in zip(records, contexts, record_seeds, strict=True):
+            for record, context, seeds, index in zip(
+                records, contexts, record_seeds, indices, strict=True
+            ):
                 for compiled_field in direct:
                     context.field = compiled_field.spec
                     context.seeds = (
@@ -335,9 +362,19 @@ class GenerationEngine:
                         record.assets.extend(assets)
                     if track_fields and record.provenance is not None:
                         record.provenance.fields[compiled_field.name] = field_provenance
+                    if edges is not None:
+                        edges.apply_to_field(
+                            record, index, compiled_field.name, self._validator_for(entity)
+                        )
 
             if enrichable:
                 await self._enrich_layer(entity, enrichable, records, contexts, stats)
+                if edges is not None:
+                    for record, index in zip(records, indices, strict=True):
+                        for compiled_field in enrichable:
+                            edges.apply_to_field(
+                                record, index, compiled_field.name, self._validator_for(entity)
+                            )
 
         if simulation is not None and self.scenarios is not None:
             self._apply_scenarios(entity, records, contexts)
@@ -514,6 +551,36 @@ class GenerationEngine:
             self._injectors[entity.name] = injector
         return injector
 
+    def _edges_for(self, entity: CompiledEntity) -> Any:
+        """The edge-case injector for an entity, or None (section 79)."""
+        if self.edge_cases <= 0:
+            return None
+        if entity.name in self._edge_injectors:
+            return self._edge_injectors[entity.name]
+
+        from ..simulation.edges import EdgeCaseInjector
+
+        protected = [
+            compiled.name for compiled in entity.fields if compiled.generator.name == "scenario"
+        ]
+        injector = EdgeCaseInjector(
+            entity,
+            fraction=self.edge_cases,
+            seed=self.compiled.seed,
+            categories=self.edge_categories or None,
+            protected=protected,
+        )
+        self._edge_injectors[entity.name] = None if injector.is_noop else injector
+        return self._edge_injectors[entity.name]
+
+    def edge_case_reports(self) -> dict[str, Any]:
+        """What edge-case generation did, per entity."""
+        return {
+            name: injector.describe()
+            for name, injector in self._edge_injectors.items()
+            if injector is not None and injector.stats.records_seen
+        }
+
     def _is_enrichable(self, compiled_field: CompiledField) -> bool:
         """Whether this field should be produced by a grouped model call."""
         return (
@@ -638,6 +705,7 @@ class GenerationEngine:
             if self.inject_chaos:
                 records = self._damage(entity, records, list(indices))
 
+            detector = self._detector_for(entity)
             batch: list[GeneratedRecord] = []
             for record in records:
                 if validator is not None:
@@ -645,6 +713,11 @@ class GenerationEngine:
                     self._apply_result(result, stats)
                     if not result.ok and self.drop_invalid:
                         continue
+                # After the drop, so a dataset's duplication rate describes the
+                # dataset somebody gets rather than one including records that
+                # were thrown away.
+                if detector is not None:
+                    detector.observe(record)
                 batch.append(record)
                 stats.generated += 1
 
@@ -702,6 +775,41 @@ class GenerationEngine:
             stats = EntityStats(entity=entity_name)
             self.stats[entity_name] = stats
         return stats
+
+    def _detector_for(self, entity: CompiledEntity) -> Any:
+        """The duplicate detector for an entity, or None (section 59).
+
+        One per entity per engine, so its Bloom filter and window span the
+        whole run rather than a batch - a duplicate is only interesting
+        relative to everything before it.
+        """
+        if not self.detect_duplicates:
+            return None
+        if entity.name in self._detectors:
+            return self._detectors[entity.name]
+
+        from ..validation.duplication import DuplicateDetector
+
+        spec = self.compiled.spec.quality.duplication
+        detector: Any = None
+        if spec.is_enabled():
+            detector = DuplicateDetector(
+                entity, spec, expected_records=self.counts.get(entity.name, entity.count)
+            )
+            # An entity with no comparable fields is not an error: a table of
+            # ids and timestamps has no prose to repeat.
+            if not detector.fields:
+                detector = None
+        self._detectors[entity.name] = detector
+        return detector
+
+    def duplication_reports(self) -> dict[str, Any]:
+        """Closed reports for every entity that was checked."""
+        return {
+            name: detector.finish().to_dict()
+            for name, detector in self._detectors.items()
+            if detector is not None
+        }
 
     def _validator_for(self, entity: CompiledEntity) -> RecordValidator:
         validator = self._validators.get(entity.name)

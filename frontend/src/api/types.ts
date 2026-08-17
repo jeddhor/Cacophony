@@ -335,6 +335,46 @@ export interface QualityReport {
   validation: Record<string, EntityValidation>;
   relations: ResolverStats | null;
   providers: Record<string, unknown> | null;
+  /** What the model repeated, per entity (design document section 59). */
+  duplication: Record<string, DuplicationReport>;
+}
+
+/** One repeated value, kept so a report can show rather than assert. */
+export interface DuplicateExample {
+  kind: string;
+  field: string;
+  record_index: number;
+  matched_index: number | null;
+  similarity: number;
+  excerpt: string;
+}
+
+/**
+ * Duplicate detection for one entity (design document section 59).
+ *
+ * `bloom.false_positive_rate` is how much of `exact` to believe: the filter has
+ * no false negatives, so a zero is exact, but a non-zero count may include a
+ * few values that were never actually repeated.
+ */
+export interface DuplicationReport {
+  entity: string;
+  checked_records: number;
+  checked_values: number;
+  fields: string[];
+  methods: string[];
+  exact: number;
+  normalized: number;
+  near: number;
+  exempt_duplicates: number;
+  exact_rate: number;
+  normalized_rate: number;
+  near_rate: number;
+  uniqueness: number;
+  ok: boolean;
+  breaches: string[];
+  examples: DuplicateExample[];
+  bloom: { false_positive_rate?: number; size_bytes?: number; added?: number };
+  index: { window?: number; held?: number; similarity?: number };
 }
 
 /** One generated file, as the manifest records it (section 81). */

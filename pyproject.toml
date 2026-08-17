@@ -82,6 +82,13 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E501"]
+# The edge-case catalogue (design document section 79) is a deliberate
+# collection of characters that look like other characters: fullwidth Latin,
+# dotless I, mathematical alphanumerics, non-breaking spaces. Ambiguity is the
+# feature under test, so the ambiguity check has nothing useful to say here.
+"backend/cacophony/simulation/edges.py" = ["RUF001", "RUF003"]
+# And the tests that exercise it, for the same reason.
+"tests/test_assurance.py" = ["E501", "RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
 python_version = "3.12"

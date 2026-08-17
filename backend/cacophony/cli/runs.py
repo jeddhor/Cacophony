@@ -80,6 +80,8 @@ def build_run_config(
     record_history: bool,
     assets_dir: Path | None = None,
     overwrite_assets: bool = False,
+    edge_cases: float = 0.0,
+    edge_categories: str | None = None,
 ) -> RunConfig:
     """Turn command-line options into a run configuration, or exit clearly."""
     try:
@@ -109,6 +111,8 @@ def build_run_config(
         seed=seed,
         validate=not no_validate,
         drop_invalid=drop_invalid,
+        edge_cases=edge_cases,
+        edge_categories=_edge_categories(edge_categories),
         provenance=provenance_mode,
         failure_policy=on_failure,
         cache_mode=cache_mode,
@@ -121,6 +125,23 @@ def build_run_config(
             llm_batch_size=max(1, llm_batch_size),
         ),
     )
+
+
+def _edge_categories(value: str | None) -> list[str]:
+    """Parse ``--edge-categories emoji,rtl_text``, refusing an unknown name.
+
+    Refused rather than ignored: a typo that silently produced no edge cases
+    would look exactly like an application with no bugs.
+    """
+    from ..simulation.edges import CATEGORIES
+
+    if not value:
+        return []
+    wanted = [name.strip() for name in value.split(",") if name.strip()]
+    unknown = [name for name in wanted if name not in CATEGORIES]
+    if unknown:
+        raise _bad_choice("edge-case category", ", ".join(unknown), CATEGORIES)
+    return wanted
 
 
 def open_repository(store: Path | None, project: Path | None = None) -> Repository | None:
@@ -396,6 +417,95 @@ def _report_world(summary: dict[str, Any]) -> None:
         )
 
 
+def _report_duplication(summary: dict[str, Any]) -> None:
+    """What the model repeated (design document section 59).
+
+    The rate, what it was measured over, and - when the news is bad - one of
+    the repeated values, because "2.4% near duplicates" is an argument and a
+    quoted paragraph is evidence.
+    """
+    reports = summary.get("duplication") or {}
+    if not reports:
+        return
+
+    for name, report in reports.items():
+        values = int(report.get("checked_values", 0))
+        if not values:
+            continue
+        exact = int(report.get("exact", 0)) + int(report.get("normalized", 0))
+        near = int(report.get("near", 0))
+        unique = float(report.get("uniqueness", 1.0))
+        style = "cacophony.ok" if report.get("ok", True) and unique >= 0.98 else "cacophony.warn"
+
+        console.print(
+            f"  [{style}]duplication     {name}: {unique:.2%} unique[/]"
+            f"  [cacophony.muted]({exact:,} repeated, {near:,} near, "
+            f"over {values:,} values)[/]"
+        )
+        fields = report.get("fields") or []
+        if fields:
+            console.print(
+                f"  [cacophony.muted]                compared {', '.join(fields)}"
+                f" by {', '.join(report.get('methods') or [])}[/]"
+            )
+
+        # A Bloom filter has false positives, and a figure computed from one
+        # has to say so rather than presenting an estimate as a count.
+        bloom = report.get("bloom") or {}
+        rate = float(bloom.get("false_positive_rate", 0.0))
+        if exact and rate > 0:
+            console.print(
+                f"  [cacophony.muted]                up to {rate:.3%} of the exact matches "
+                "may be filter false positives[/]"
+            )
+
+        for breach in report.get("breaches") or []:
+            error_console.print(f"  [cacophony.error]                {breach}[/]")
+
+        examples = report.get("examples") or []
+        if examples and not report.get("ok", True):
+            first = examples[0]
+            console.print(
+                f"  [cacophony.muted]                e.g. {first['field']} at record "
+                f"{first['record_index']}: {first['excerpt']}[/]"
+            )
+
+
+def _report_edge_cases(summary: dict[str, Any]) -> None:
+    """What was made deliberately awkward (design document section 79).
+
+    Reported separately from chaos, and worded differently, because the two
+    findings mean opposite things. A pipeline that chokes on chaos is working;
+    a pipeline that chokes on one of these has a bug.
+    """
+    reports = summary.get("edge_cases") or {}
+    if not reports:
+        return
+
+    for name, report in reports.items():
+        marked = int(report.get("records_marked", 0))
+        if not marked:
+            continue
+        categories = report.get("by_category") or {}
+        console.print(
+            f"  edge cases      {name}: {marked:,} records carry a legal but awkward value "
+            f"[cacophony.muted]({report.get('rate', 0):.1%})[/]"
+        )
+        if categories:
+            console.print(
+                "  [cacophony.muted]                "
+                + ", ".join(f"{kind} {count:,}" for kind, count in sorted(categories.items()))
+                + "[/]"
+            )
+        rejected = int(report.get("rejected_as_invalid", 0))
+        if rejected:
+            # An edge case the schema would not accept is not an edge case.
+            console.print(
+                f"  [cacophony.muted]                {rejected:,} candidates were dropped: "
+                "the field could not legally hold them[/]"
+            )
+
+
 def report_outcome(outcome: RunOutcome, *, on_provider_activity: Any = None) -> None:
     """Print what happened, and exit non-zero if it was not what was asked."""
     console.rule(style="cacophony.rule")
@@ -424,8 +534,10 @@ def report_outcome(outcome: RunOutcome, *, on_provider_activity: Any = None) -> 
         console.print(f"  [cacophony.warn]validation failures  {failures:,}[/]")
 
     _report_relations(summary)
+    _report_duplication(summary)
     _report_assets(summary)
     _report_world(summary)
+    _report_edge_cases(summary)
 
     if on_provider_activity is not None:
         on_provider_activity()
