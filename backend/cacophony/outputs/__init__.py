@@ -63,11 +63,12 @@ def create_writer(fmt: str, path: str | Path, **options: Any) -> OutputWriter:
         known = ", ".join(sorted(OUTPUT_FORMATS))
         raise OutputError(f"Unknown output format '{fmt}'. Available formats: {known}")
 
-    # Only the database writers know what to do with a compiled entity; the
-    # rest would reject the keyword.
+    # Only the database writers know what to do with a compiled entity, or
+    # care that the run is injecting damage; the rest would reject the keyword.
     if not issubclass(writer_class, (SqliteWriter, SqlScriptWriter)):
         options.pop("entity", None)
         options.pop("entities", None)
+        options.pop("chaos", None)
     return writer_class(path, **options)
 
 

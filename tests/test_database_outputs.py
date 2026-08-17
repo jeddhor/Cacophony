@@ -297,3 +297,142 @@ class TestSqlScript:
     def test_not_appendable_so_a_resume_starts_a_part(self) -> None:
         assert SqlScriptWriter.appendable is False
         assert SqliteWriter.appendable is True
+
+
+class TestChaosAndConstraints:
+    """A corrupted database, on purpose (sections 24, 33).
+
+    Entropy injection nulls required fields, mangles keys, and re-emits whole
+    records the way a retried insert does. Every one of those is a constraint
+    violation, so a chaotic run and an enforced schema cannot both be had - and
+    an enforced schema wins by default, which means the run aborts on its first
+    damaged row. The database therefore drops the constraints the damage is
+    designed to violate, and the CLI says so.
+    """
+
+    def _ddl(self, tmp_path: Path, **options: Any) -> str:
+        # The parent first: a REFERENCES clause needs a table to point at.
+        write("team", tmp_path / "p.db", "sqlite", 4, **options)
+        write("player", tmp_path / "p.db", "sqlite", 5, **options)
+        connection = sqlite3.connect(tmp_path / "p.db")
+        try:
+            row = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='player'"
+            ).fetchone()
+            return str(row[0])
+        finally:
+            connection.close()
+
+    def test_a_clean_run_keeps_every_constraint(self, tmp_path: Path) -> None:
+        ddl = self._ddl(tmp_path)
+        assert "PRIMARY KEY" in ddl
+        assert "NOT NULL" in ddl
+        assert "FOREIGN KEY" in ddl
+
+    def test_a_chaotic_run_declares_none_of_them(self, tmp_path: Path) -> None:
+        ddl = self._ddl(tmp_path, chaos=True)
+        assert "PRIMARY KEY" not in ddl
+        assert "NOT NULL" not in ddl
+        assert "UNIQUE" not in ddl
+        # A REFERENCES clause pointing at a table with no key is malformed,
+        # not merely unenforced.
+        assert "FOREIGN KEY" not in ddl
+
+    def test_the_joins_still_work(self, tmp_path: Path) -> None:
+        """Constraints go; indexes stay. A corrupt database is still queried."""
+        write("team", tmp_path / "p.db", "sqlite", 4, chaos=True)
+        write("player", tmp_path / "p.db", "sqlite", 5, chaos=True)
+        connection = sqlite3.connect(tmp_path / "p.db")
+        try:
+            indexes = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='player'"
+                )
+            }
+        finally:
+            connection.close()
+        assert "ix_player_player_id" in indexes
+        assert "ix_player_team" in indexes
+
+    def test_duplicate_keys_load_instead_of_aborting_the_run(self, tmp_path: Path) -> None:
+        """The case that found this: chaos re-emits a record with its own key.
+
+        Without the relaxation the second copy raises `UNIQUE constraint
+        failed` and the whole run dies - the database rejecting precisely the
+        defect it was asked to contain.
+        """
+        compiled = compile_from(ENTITIES)
+        engine = GenerationEngine(compiled)
+        entity = compiled.entity("player")
+        records = asyncio.run(engine.generate_batch("player", 5))
+        records.append(records[0])  # what a retried insert looks like
+
+        write("team", tmp_path / "dup.db", "sqlite", 4, chaos=True)
+        writer = create_writer(
+            "sqlite",
+            tmp_path / "dup.db",
+            columns=entity.spec.field_names(),
+            entity=entity,
+            entities=compiled.entities,
+            chaos=True,
+        )
+
+        async def run() -> None:
+            await writer.open()
+            await writer.write_batch(records)
+            await writer.close()
+
+        asyncio.run(run())
+
+        connection = sqlite3.connect(tmp_path / "dup.db")
+        try:
+            assert connection.execute("SELECT COUNT(*) FROM player").fetchone()[0] == 6
+            assert (
+                connection.execute(
+                    "SELECT COUNT(*) FROM player GROUP BY player_id ORDER BY 1 DESC LIMIT 1"
+                ).fetchone()[0]
+                == 2
+            )
+        finally:
+            connection.close()
+
+    def test_a_null_in_a_required_column_loads(self, tmp_path: Path) -> None:
+        compiled = compile_from(ENTITIES)
+        engine = GenerationEngine(compiled)
+        entity = compiled.entity("player")
+        records = asyncio.run(engine.generate_batch("player", 4))
+        records[0].values["shirt_number"] = None  # what missing_data does
+
+        write("team", tmp_path / "null.db", "sqlite", 4, chaos=True)
+        writer = create_writer(
+            "sqlite",
+            tmp_path / "null.db",
+            columns=entity.spec.field_names(),
+            entity=entity,
+            entities=compiled.entities,
+            chaos=True,
+        )
+
+        async def run() -> None:
+            await writer.open()
+            await writer.write_batch(records)
+            await writer.close()
+
+        asyncio.run(run())
+
+        connection = sqlite3.connect(tmp_path / "null.db")
+        try:
+            nulls = connection.execute(
+                "SELECT COUNT(*) FROM player WHERE shirt_number IS NULL"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        assert nulls == 1
+
+    def test_the_sql_script_agrees_with_the_database(self, tmp_path: Path) -> None:
+        write("player", tmp_path / "p.sql", "sql", 5, chaos=True)
+        text = (tmp_path / "p.sql").read_text()
+        assert "PRIMARY KEY" not in text
+        assert "NOT NULL" not in text
+        assert "INSERT INTO" in text

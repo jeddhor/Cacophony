@@ -534,7 +534,18 @@ def generate(
     if chosen_world is not None:
         console.print(f"[cacophony.muted]world[/] {chosen_world.name}")
     console.print(f"[cacophony.muted]seed[/] {compiled.seed}   [cacophony.muted]format[/] {output}")
-    console.print(f"[cacophony.muted]output[/] {out_dir.resolve()}\n")
+    console.print(f"[cacophony.muted]output[/] {out_dir.resolve()}")
+
+    # Deliberate damage and an enforced schema cannot both be had. Say which
+    # one gave way, here, rather than leaving it to be discovered later from a
+    # constraint that is not in the database.
+    if output.lower() in ("sqlite", "sql") and compiled.spec.chaos.is_enabled():
+        console.print(
+            "[cacophony.warn]note[/] chaos is enabled, so the tables carry no keys, "
+            "uniqueness or NOT NULL - the damage would be rejected by the constraints "
+            "it is designed to violate. Indexes are still created."
+        )
+    console.print()
 
     conductor = Conductor(
         compiled,

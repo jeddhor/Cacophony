@@ -732,6 +732,16 @@ cacophony generate project.yaml -o sqlite -d out/
 sqlite3 out/retail-commerce.db "PRAGMA foreign_key_check"   # silent
 ```
 
+**Chaos and a database schema cannot both be had.** Entropy injection (section
+24) nulls required fields, mangles keys and re-emits whole records the way a
+retried insert does — every one of which a declared constraint would reject,
+aborting the run on its first damaged row. A run with `chaos` enabled therefore
+writes its tables without primary keys, uniqueness, `NOT NULL` or
+`FOREIGN KEY`, creates indexes on the key and reference columns instead so the
+joins still work, and says so when it starts. Generate without chaos for a
+database whose constraints hold; generate with it for a corrupted one to test a
+loader against.
+
 ---
 
 ## Commands

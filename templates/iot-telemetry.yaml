@@ -1,0 +1,421 @@
+# IoT Telemetry
+# Design document section 70: devices, sensors and time-series readings.
+#
+#     site 1--N device 1--N sensor 1--N reading
+#
+# The time-series template, and the one where section 26's stateful simulation
+# earns its keep. A temperature reading is not drawn from a distribution: it is
+# the previous reading plus a small step, so a plot of one sensor's day is a
+# line rather than static. That is the difference between telemetry and noise,
+# and it costs nothing - the fold runs over one sensor's contiguous block and a
+# resumed run replays that block rather than the dataset (section 26).
+#
+#     cacophony generate templates/iot-telemetry.yaml -n 40000 -d out/
+#
+#     jq -r 'select(.sensor == "SEN-000001") | [.recorded_at, .value] | @tsv' \
+#         out/reading.jsonl | head -40
+#
+# Two things are worth watching for. Readings follow the timeline's shape, so
+# there are more of them when the site is busy. And a small fraction of the
+# fleet is in trouble: the `drifting_sensor` and `failing_battery` scenarios
+# pick the same devices on every run, which is what a monitoring rule is
+# supposed to catch.
+#
+# Deterministic throughout - no model server involved.
+
+project:
+  name: IoT Telemetry
+  description: >
+    A fictional industrial estate: sites, the gateways and controllers
+    installed at them, the sensors attached to those, and a month of readings.
+    Addresses come from documentation ranges, so nothing here points at a real
+    device.
+  seed: 8086
+  locale: en_US
+  profile: balanced
+
+# A month at ten-minute resolution, weighted towards the working day: plant
+# runs harder when people are in it (section 25).
+timeline:
+  start: "2026-03-01"
+  end: "2026-04-01"
+  shape: business_hours
+
+# Telemetry is the messiest data most organisations have: sensors drop
+# packets, gateways truncate payloads, and the same reading arrives twice
+# because the device retried. `realistic` is a light touch; every defect is
+# recorded in provenance so a pipeline test can tell it from its own bugs.
+chaos:
+  preset: realistic
+
+entities:
+
+  # ------------------------------------------------------------------ #
+  # Where the hardware is. Small, and referenced constantly.
+  # ------------------------------------------------------------------ #
+  site:
+    count: 24
+    description: A physical location with equipment in it.
+    primary_key: site_id
+
+    fields:
+      site_id:
+        type: string
+        generator: sequence
+        format: "SITE-{000}"
+        unique: true
+
+      name:
+        type: string
+        generator: faker
+        provider: city
+
+      region:
+        type: enum
+        generator: weighted
+        choices:
+          us-east: 26
+          us-west: 19
+          eu-west: 18
+          eu-central: 14
+          ap-southeast: 12
+          ap-northeast: 11
+
+      kind:
+        type: enum
+        generator: weighted
+        choices:
+          warehouse: 34
+          factory: 27
+          data_centre: 18
+          office: 13
+          cold_store: 8
+
+      # RFC 5737 documentation space (section 62). Nothing generated here
+      # can be dialled, pinged or reached.
+      subnet:
+        type: cidr
+        generator: ip
+        network: "198.51.100.0/24"
+
+  # ------------------------------------------------------------------ #
+  device:
+    count: 900
+    description: A gateway or controller installed at a site.
+    primary_key: device_id
+
+    fields:
+      device_id:
+        type: string
+        generator: sequence
+        format: "DEV-{00000}"
+        unique: true
+
+      site:
+        generator: reference
+        entity: site
+        field: site_id
+        # Sites are not equal: the big warehouses hold most of the fleet.
+        distribution: skewed
+        skew: 1.6
+
+      region:
+        type: string
+        generator: expression
+        expression: "site.region"
+
+      model:
+        type: enum
+        generator: weighted
+        choices:
+          EdgeGate 200: 31
+          EdgeGate 400: 24
+          FieldNode S1: 19
+          FieldNode S2: 14
+          LegacyBridge 90: 12
+
+      firmware:
+        type: string
+        generator: pattern
+        pattern: "{1-4}.{0-9}.{0-9}"
+
+      mac_address:
+        type: mac_address
+        generator: mac
+        # RFC 7042's documentation OUI.
+        oui: "00:00:5E"
+
+      ip_address:
+        type: ip_address
+        generator: ip
+        network: "198.51.100.0/24"
+
+      installed_at:
+        type: date
+        generator: datetime
+        start: "2021-06-01"
+        end: "2026-01-31"
+
+      # Most of the fleet is fine. The ones that are not are what anybody
+      # generating this dataset is actually going to test against.
+      status:
+        type: enum
+        generator: weighted
+        choices:
+          online: 91
+          degraded: 5
+          offline: 3
+          decommissioned: 1
+
+  # ------------------------------------------------------------------ #
+  sensor:
+    count: 3200
+    description: One measured quantity on one device.
+    primary_key: sensor_id
+
+    fields:
+      sensor_id:
+        type: string
+        generator: sequence
+        format: "SEN-{000000}"
+        unique: true
+
+      device:
+        generator: reference
+        entity: device
+        field: device_id
+        distribution: skewed
+        skew: 1.3
+
+      site:
+        type: string
+        generator: expression
+        expression: "device.site"
+
+      metric:
+        type: enum
+        generator: weighted
+        choices:
+          temperature_c: 30
+          humidity_pct: 19
+          pressure_kpa: 14
+          vibration_mm_s: 12
+          power_w: 11
+          door_state: 8
+          co2_ppm: 6
+
+      # Read from the metric this row actually has, so the unit is never
+      # the wrong one for the quantity. `iif` rather than a lookup: a
+      # lookup would draw a unit at random and cheerfully report humidity
+      # in kilopascals.
+      unit:
+        type: string
+        generator: expression
+        expression: >
+          iif(metric == 'temperature_c', 'degC',
+          iif(metric == 'humidity_pct', '%',
+          iif(metric == 'pressure_kpa', 'kPa',
+          iif(metric == 'vibration_mm_s', 'mm/s',
+          iif(metric == 'power_w', 'W',
+          iif(metric == 'co2_ppm', 'ppm', 'state'))))))
+
+      # What "normal" is for this sensor. The readings below wander around
+      # it rather than jumping about at random.
+      baseline:
+        type: float
+        generator: distribution
+        distribution: normal
+        mean: 21.0
+        stddev: 6.0
+        min: -18.0
+        max: 92.0
+        precision: 2
+
+      sample_interval_seconds:
+        type: integer
+        generator: weighted
+        choices:
+          60: 44
+          300: 31
+          600: 18
+          1800: 7
+
+      calibrated_at:
+        type: date
+        generator: datetime
+        start: "2025-01-01"
+        end: "2026-02-28"
+
+  # ------------------------------------------------------------------ #
+  # The time series. This is the entity the template exists for.
+  #
+  # `simulation` turns these rows into a *history*: each sensor's readings
+  # belong to that sensor, arrive in chronological order, and follow the
+  # timeline's shape. `state` then makes each reading depend on the one
+  # before it, which is what makes the series a series.
+  # ------------------------------------------------------------------ #
+  reading:
+    count: 400000
+    description: One measurement, by one sensor, at one moment.
+    primary_key: reading_id
+
+    simulation:
+      subject: sensor
+      # A handful of sensors are sampled far more often than the rest -
+      # which is what a fleet with mixed sample intervals looks like.
+      distribution: skewed
+      skew: 1.7
+      minimum: 12
+      state:
+        # A random walk, not a random number. Each reading steps a little
+        # from the last one, and the clamp keeps a month of steps from
+        # wandering somewhere physically impossible.
+        drift:
+          initial: "0"
+          update: "drift + step"
+          min: -14.0
+          max: 14.0
+          precision: 3
+        # How many readings this sensor has produced so far. Cheap, and it
+        # is what a gap-detection rule wants to compare against.
+        sequence_number:
+          initial: "0"
+          update: "sequence_number + 1"
+
+    fields:
+      reading_id:
+        type: uuid
+
+      # The k-th of this sensor's n readings, placed where the k-th reading
+      # would fall. No sorting, and the same answer on a resumed run.
+      recorded_at:
+        type: datetime
+        generator: event_time
+
+      sensor:
+        generator: subject
+        expose: true
+
+      device:
+        type: string
+        generator: expression
+        expression: "sensor.device"
+
+      site:
+        type: string
+        generator: expression
+        expression: "sensor.site"
+
+      metric:
+        type: string
+        generator: expression
+        expression: "sensor.metric"
+
+      # The step this reading takes away from the last one. Small and
+      # centred on zero, so the walk drifts rather than jumps.
+      step:
+        type: float
+        generator: distribution
+        distribution: normal
+        mean: 0.0
+        stddev: 0.35
+        precision: 3
+
+      drift:
+        type: float
+        generator: state
+
+      sequence_number:
+        type: integer
+        generator: state
+
+      # What the sensor actually reported: its baseline plus wherever the
+      # walk has got to.
+      value:
+        type: float
+        generator: expression
+        expression: "round(sensor.baseline + drift, 2)"
+
+      quality:
+        type: enum
+        generator: weighted
+        choices:
+          good: 94
+          suspect: 4
+          bad: 2
+
+      # Which fleet problem, if any, this reading belongs to. Nullable
+      # because most readings belong to none, and a scenario field that
+      # cannot be null makes every ordinary record a validation failure.
+      anomaly:
+        type: string
+        nullable: true
+        generator: scenario
+        report: name
+
+      phase:
+        type: string
+        nullable: true
+        generator: scenario
+        report: phase
+
+# ------------------------------------------------------------------ #
+# What is going wrong out there (design document section 17).
+#
+# Both pick their sensors by hashing the subject, so the same sensors are
+# in trouble on every run - which is what makes this dataset something a
+# detection rule can be graded against.
+# ------------------------------------------------------------------ #
+scenarios:
+
+  drifting_sensor:
+    description: >
+      A sensor whose calibration is going. Readings wander further and
+      further from the baseline and the quality flag stops saying `good`.
+    applies_to: [reading]
+    affects_fraction: 0.012
+    parameters:
+      subject: sensor
+      window: {at: 0.35, duration: 0.6}
+      phases:
+        - name: within_tolerance
+          effects:
+            quality: suspect
+        - name: out_of_tolerance
+          effects:
+            quality: {suspect: 30, bad: 70}
+        - name: flatlined
+          effects:
+            quality: bad
+            value: 0.0
+
+  failing_battery:
+    description: >
+      A field node running out of power: readings arrive in bursts, then
+      stop. The gap is the signal.
+    applies_to: [reading]
+    affects_fraction: 0.006
+    parameters:
+      subject: sensor
+      window: {at: 0.72, duration: 0.2}
+      phases:
+        - name: low_power
+          effects:
+            quality: {good: 40, suspect: 60}
+        - name: brownout
+          effects:
+            quality: bad
+
+# ------------------------------------------------------------------ #
+# Time series belong in something that can query them by time. Parquet
+# for analytics, SQLite when the joins matter more than the volume.
+# ------------------------------------------------------------------ #
+outputs:
+  analytics:
+    format: parquet
+    path: out/telemetry
+    partition_by: [year, month, day]
+
+  fixture:
+    format: sqlite
+    path: out/telemetry

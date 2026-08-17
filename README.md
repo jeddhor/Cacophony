@@ -508,7 +508,25 @@ GET  /api/runs/{id}                POST /api/runs/{id}/pause
 POST /api/runs/{id}/resume         POST /api/runs/{id}/cancel
 GET  /api/runs/{id}/quality        GET  /api/projects/{id}/schema
 WS   /api/runs/{id}/stream         GET  /api/providers/{id}/models
+POST /api/projects/{id}/streams    POST /api/streams/{id}/retarget
+GET  /api/streams/{id}/records     WS   /api/streams/{id}/feed
 ```
+
+## Templates
+
+Design document section 70's eight starter projects. Every one compiles, lints
+and generates with no model server.
+
+| Template | Shape | What it shows |
+|---|---|---|
+| `corporate-directory` | employees, devices, locations | The basics, and semantic annotation |
+| `retail-commerce` | customer → order → order_item → product | Foreign keys that resolve; a line item with two parents |
+| `helpdesk` | users, devices, tickets | Model-written fields degrading to marked placeholders |
+| `security-operations` | users, devices, authentication, findings | Timelines, per-subject histories and executing scenarios |
+| `saas-application` | tenant → account → activity, subscriptions | Multi-tenancy carried through a join; money folded per account |
+| `iot-telemetry` | site → device → sensor → reading | A time series that is a random walk rather than noise |
+| `conversational-ai` | users, conversations, labelled intents | The prompt compiler and structured output |
+| `multimodal-support` | employees with portraits and badges, calls with audio | Images, speech and documents hanging off records |
 
 ## A schema
 

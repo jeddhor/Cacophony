@@ -1,0 +1,505 @@
+# SaaS Application
+# Design document section 70: tenants, accounts, subscriptions and activity.
+#
+#     tenant 1--N account 1--N activity
+#          1--N subscription
+#
+# The multi-tenancy template. Two things make it worth generating rather than
+# faking with random rows.
+#
+# **Tenancy is carried, not invented.** An activity row belongs to an account,
+# and that account belongs to a tenant - so the `tenant` column on an activity
+# row is the tenant of the account that row actually chose (section 15). This
+# is the shape every tenant-isolation bug hides in, and a dataset where the
+# column is drawn independently cannot find one.
+#
+# **Money accumulates.** `mrr_to_date` is folded over each account's own
+# history rather than drawn (section 26): the tenth invoice knows what the nine
+# before it came to. A resumed run replays that account's block and agrees to
+# the penny.
+#
+#     cacophony generate templates/saas-application.yaml -o sqlite -d out/
+#
+#     sqlite3 out/saas-application.db "
+#       SELECT t.plan, COUNT(DISTINCT a.account_id) AS seats,
+#              ROUND(SUM(s.mrr), 2) AS mrr
+#       FROM subscription s
+#       JOIN tenant t ON s.tenant = t.tenant_id
+#       JOIN account a ON a.tenant = t.tenant_id
+#       GROUP BY t.plan ORDER BY mrr DESC"
+#
+# A small fraction of tenants are on their way out - the `churn_spiral`
+# scenario - and they are the same tenants on every run. Which is the point: a
+# churn model you can grade needs a ground truth.
+#
+# Deterministic throughout - no model server involved.
+
+project:
+  name: SaaS Application
+  description: >
+    A fictional B2B product: the companies that pay for it, the people inside
+    them who use it, what they are paying, and what they did last quarter.
+  seed: 42424
+  locale: en_US
+  profile: balanced
+
+# A quarter of activity, following the working week. Product usage has the
+# same shape as an office, because it is one (section 25).
+timeline:
+  start: "2026-01-01"
+  end: "2026-04-01"
+  shape: business_hours
+  holidays: ["2026-01-01", "2026-02-16"]
+  holiday_weight: 0.08
+
+chaos:
+  preset: realistic
+
+entities:
+
+  # ------------------------------------------------------------------ #
+  # Who pays. Small, and the root of every tenancy question.
+  # ------------------------------------------------------------------ #
+  tenant:
+    count: 600
+    description: A company with a contract.
+    primary_key: tenant_id
+
+    fields:
+      tenant_id:
+        type: string
+        generator: sequence
+        format: "TEN-{00000}"
+        unique: true
+
+      name:
+        type: string
+        generator: faker
+        provider: company
+
+      # The customer-visible subdomain, derived from the name so the two
+      # agree. Reserved domains only (section 62).
+      slug:
+        type: string
+        generator: template
+        template: "{name|slug}"
+
+      plan:
+        type: enum
+        generator: weighted
+        choices:
+          free: 41
+          starter: 27
+          growth: 19
+          business: 10
+          enterprise: 3
+
+      # Seats bought, which is what the plan is priced on. Lognormal: most
+      # customers are small and a few are enormous, which is what a SaaS
+      # revenue curve looks like and what a uniform draw never produces.
+      seats:
+        type: integer
+        generator: distribution
+        distribution: lognormal
+        mean: 2.4
+        sigma: 1.1
+        min: 1
+        max: 4000
+
+      industry:
+        type: enum
+        generator: weighted
+        choices:
+          Software: 21
+          Financial Services: 16
+          Healthcare: 13
+          Retail: 12
+          Manufacturing: 11
+          Education: 9
+          Public Sector: 8
+          Logistics: 6
+          Media: 4
+
+      region:
+        type: enum
+        generator: weighted
+        choices:
+          NA: 47
+          EMEA: 29
+          APAC: 17
+          LATAM: 7
+
+      signed_at:
+        type: date
+        generator: datetime
+        start: "2021-01-01"
+        end: "2026-01-15"
+
+      # Trial customers who never converted are a real and awkward part of
+      # any SaaS dataset; leaving them out makes every funnel query wrong.
+      status:
+        type: enum
+        generator: weighted
+        choices:
+          active: 72
+          trialing: 12
+          past_due: 7
+          cancelled: 6
+          suspended: 3
+
+  # ------------------------------------------------------------------ #
+  # What they are paying. One row per billing period per tenant, so the
+  # dataset carries upgrades, downgrades and the month somebody churned.
+  # ------------------------------------------------------------------ #
+  subscription:
+    count: 4200
+    description: One tenant's billing arrangement for one period.
+    primary_key: subscription_id
+
+    fields:
+      subscription_id:
+        type: string
+        generator: sequence
+        format: "SUB-{000000}"
+        unique: true
+
+      tenant:
+        generator: reference
+        entity: tenant
+        field: tenant_id
+        distribution: skewed
+        skew: 1.4
+
+      plan:
+        type: string
+        generator: expression
+        expression: "tenant.plan"
+
+      seats:
+        type: integer
+        generator: expression
+        expression: "tenant.seats"
+
+      billing_period:
+        type: enum
+        generator: weighted
+        choices:
+          monthly: 68
+          annual: 32
+
+      # Price per seat, by plan. Derived rather than drawn, so two tenants
+      # on the same plan are never quietly charged different rates.
+      unit_price:
+        type: decimal
+        generator: expression
+        expression: >
+          iif(plan == 'free', 0,
+          iif(plan == 'starter', 12,
+          iif(plan == 'growth', 29,
+          iif(plan == 'business', 65, 140))))
+
+      mrr:
+        type: decimal
+        generator: expression
+        expression: "round(unit_price * seats, 2)"
+
+      started_on:
+        type: date
+        generator: datetime
+        start: "2024-01-01"
+        end: "2026-03-01"
+
+      auto_renew:
+        type: boolean
+        generator: boolean
+        probability: 0.87
+
+  # ------------------------------------------------------------------ #
+  # Who logs in. The middle of the hierarchy, and where tenancy has to
+  # stay straight.
+  # ------------------------------------------------------------------ #
+  account:
+    count: 12000
+    description: A person with a login inside a tenant.
+    primary_key: account_id
+
+    fields:
+      account_id:
+        type: string
+        generator: sequence
+        format: "ACC-{000000}"
+        unique: true
+
+      tenant:
+        generator: reference
+        entity: tenant
+        field: tenant_id
+        # Big customers have most of the users, so most accounts belong to
+        # a few tenants. Uniform here would make every tenant the same
+        # size and every per-tenant query uninteresting.
+        distribution: skewed
+        skew: 2.2
+
+      first_name:
+        type: string
+        semantic: "Person's given name"
+
+      last_name:
+        type: string
+        semantic: "Person's family name"
+
+      # The tenant this row actually chose, not a different one. `slug`
+      # keeps the address inside a reserved domain (section 62).
+      email:
+        type: string
+        generator: template
+        template: "{first_name|lower}.{last_name|lower}@{tenant.slug}.example"
+
+      role:
+        type: enum
+        generator: weighted
+        choices:
+          member: 71
+          admin: 16
+          viewer: 9
+          owner: 4
+
+      sso:
+        type: boolean
+        generator: boolean
+        probability: 0.34
+
+      created_at:
+        type: datetime
+        generator: datetime
+        start: "2021-03-01"
+        end: "2026-02-28"
+
+      last_seen_at:
+        type: datetime
+        generator: datetime
+        start: "2026-01-01"
+        end: "2026-04-01"
+        business_hours: true
+
+  # ------------------------------------------------------------------ #
+  # What they did. A history per account, in order, with a running total
+  # of what that account has cost to serve.
+  # ------------------------------------------------------------------ #
+  activity:
+    count: 250000
+    description: One thing one account did at one moment.
+    primary_key: event_id
+
+    simulation:
+      subject: account
+      # Power users generate most of the events. Same shape as everywhere
+      # else in this file, for the same reason.
+      distribution: skewed
+      skew: 2.0
+      minimum: 2
+      state:
+        # Compute this account has consumed so far, folded over its own
+        # history. The hundredth event knows what the ninety-nine before
+        # it came to; nothing is stored to make that true.
+        credits_used:
+          initial: "0"
+          update: "credits_used + credits"
+          min: 0
+          precision: 2
+        session_number:
+          initial: "0"
+          update: "session_number + 1"
+
+    fields:
+      event_id:
+        type: uuid
+
+      # The k-th of this account's n events, placed where the k-th event
+      # would fall. Chronological without a sort, and identical after a
+      # resume.
+      occurred_at:
+        type: datetime
+        generator: event_time
+
+      account:
+        generator: subject
+        expose: true
+
+      # The tenancy column every isolation test needs: the tenant of the
+      # account *this row* belongs to.
+      tenant:
+        type: string
+        generator: expression
+        expression: "account.tenant"
+
+      action:
+        type: enum
+        generator: weighted
+        choices:
+          view_dashboard: 26
+          run_report: 18
+          export_data: 12
+          edit_record: 11
+          api_call: 10
+          invite_user: 7
+          change_settings: 6
+          upload_file: 5
+          delete_record: 3
+          rotate_key: 2
+
+      surface:
+        type: enum
+        generator: weighted
+        choices:
+          web: 62
+          api: 26
+          mobile: 9
+          cli: 3
+
+      # RFC 5737 documentation space: nothing here is a real address.
+      source_ip:
+        type: ip_address
+        generator: ip
+        network: "192.0.2.0/24"
+
+      # What this action cost to serve. Long-tailed, because one export
+      # can cost more than a thousand page views.
+      credits:
+        type: decimal
+        generator: distribution
+        distribution: lognormal
+        mean: 0.2
+        sigma: 1.0
+        min: 0.01
+        max: 500.0
+        precision: 2
+
+      credits_used:
+        type: decimal
+        generator: state
+
+      session_number:
+        type: integer
+        generator: state
+
+      duration_ms:
+        type: integer
+        generator: distribution
+        distribution: lognormal
+        mean: 5.6
+        sigma: 0.9
+        min: 8
+        max: 120000
+
+      status_code:
+        type: integer
+        generator: weighted
+        choices:
+          200: 91
+          201: 4
+          400: 2
+          403: 1
+          429: 1
+          500: 1
+
+      # Which storyline, if any, this row belongs to. Nullable, because
+      # most rows belong to none.
+      scenario:
+        type: string
+        nullable: true
+        generator: scenario
+        report: name
+
+      phase:
+        type: string
+        nullable: true
+        generator: scenario
+        report: phase
+
+# ------------------------------------------------------------------ #
+# The storylines (design document section 17).
+#
+# Subjects are picked by hashing, so the same accounts are in each story
+# on every run, at any scale, in any order - which is what turns this from
+# a pile of rows into something a model can be graded against.
+# ------------------------------------------------------------------ #
+scenarios:
+
+  churn_spiral:
+    description: >
+      An account on its way out: usage thins, exports get pulled, and then
+      it stops. The ground truth a churn model wants to be scored on.
+    applies_to: [activity]
+    affects_fraction: 0.03
+    parameters:
+      subject: account
+      window: {at: 0.55, duration: 0.45}
+      rate_multiplier: 0.4
+      phases:
+        - name: disengaging
+          effects:
+            action: {view_dashboard: 70, run_report: 30}
+        - name: extracting
+          effects:
+            action: {export_data: 80, api_call: 20}
+            surface: api
+        - name: gone
+          effects:
+            action: view_dashboard
+            status_code: {200: 50, 403: 50}
+
+  power_user_onboarding:
+    description: >
+      A new team ramping up: heavy setup, lots of invitations, then a
+      settled pattern of real use. The other end of the same curve.
+    applies_to: [activity]
+    affects_fraction: 0.05
+    parameters:
+      subject: account
+      window: {at: 0.05, duration: 0.25}
+      rate_multiplier: 2.5
+      phases:
+        - name: setup
+          effects:
+            action: {change_settings: 50, invite_user: 50}
+        - name: importing
+          effects:
+            action: {upload_file: 60, edit_record: 40}
+        - name: settled
+          effects:
+            action: {run_report: 45, view_dashboard: 55}
+
+  credential_stuffing:
+    description: >
+      Someone else's password list, tried against this tenant. Bursts of
+      failures from one address, which is what a rate limiter should see.
+    applies_to: [activity]
+    affects_fraction: 0.004
+    parameters:
+      subject: account
+      window: {at: 0.78, duration: 0.06}
+      rate_multiplier: 8.0
+      phases:
+        - name: probing
+          effects:
+            status_code: {403: 85, 429: 15}
+            surface: api
+        - name: throttled
+          effects:
+            status_code: 429
+            surface: api
+
+# ------------------------------------------------------------------ #
+# A SaaS dataset is usually wanted two ways at once: as a warehouse table
+# to aggregate, and as a database whose tenancy joins actually resolve.
+# ------------------------------------------------------------------ #
+outputs:
+  warehouse:
+    format: parquet
+    path: out/saas
+    partition_by: [year, month]
+
+  fixture:
+    format: sqlite
+    path: out/saas

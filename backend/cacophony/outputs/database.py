@@ -114,11 +114,27 @@ class _SchemaAware:
         if entity is None:
             return [f"{_quote(column)} TEXT" for column in (self.columns or [])]  # type: ignore[attr-defined]
 
+        # A chaotic run deliberately produces records the schema forbids
+        # (section 24): it nulls required fields, mangles keys, and re-emits
+        # whole records the way a retried insert does. Every constraint below
+        # is one that entropy injection is *designed* to violate, so declaring
+        # them would make the database reject exactly the defects it was asked
+        # to contain - and the run would abort on its first damaged row rather
+        # than producing the corrupted dataset somebody asked for.
+        #
+        # So a chaotic database is written without them, and ``cacophony
+        # generate`` says so rather than leaving anyone to discover it from a
+        # missing constraint. Indexes are still created, so the joins work.
+        damaged = bool(getattr(self, "chaos", False))
+
         definitions: list[str] = []
         primary = entity.spec.resolved_primary_key()
         for name in entity.spec.field_names():
             spec = entity.spec.fields[name]
             parts = [_quote(name), sql_type_for(spec, dialect=dialect)]
+            if damaged:
+                definitions.append(" ".join(parts))
+                continue
             if name == primary:
                 parts.append("PRIMARY KEY")
             elif spec.unique:
@@ -128,15 +144,45 @@ class _SchemaAware:
             definitions.append(" ".join(parts))
         return definitions
 
+    def _indexes(self) -> list[str]:
+        """Indexes for a chaotic table, which has no key constraints.
+
+        The constraints are gone; the joins are not. An index on the key and
+        on every reference column keeps a corrupted database queryable, which
+        is the entire reason for loading one into a database rather than
+        leaving it as files.
+        """
+        entity = self.entity  # type: ignore[attr-defined]
+        if entity is None or not getattr(self, "chaos", False):
+            return []
+
+        table = self.table  # type: ignore[attr-defined]
+        columns = {entity.spec.resolved_primary_key()}
+        columns |= {
+            compiled.name
+            for compiled in entity.fields
+            if isinstance(getattr(compiled.generator, "target", None), str)
+        }
+        return [
+            f"CREATE INDEX IF NOT EXISTS {_quote(f'ix_{table}_{column}')} "
+            f"ON {_quote(table)} ({_quote(column)})"
+            for column in sorted(name for name in columns if name)
+        ]
+
     def _foreign_keys(self) -> list[str]:
         """``REFERENCES`` clauses for the entity's reference fields.
 
         This is the point of a database output: the relationship the schema
         declared becomes a constraint the database enforces, so a broken key
         is an error rather than a string nobody checked.
+
+        Except under chaos, where the parent tables carry no key for a
+        reference to point at - SQLite requires the referenced column to be a
+        primary key or unique, and a chaotic table has neither. A ``REFERENCES``
+        clause there is not a weaker constraint, it is a malformed one.
         """
         entity = self.entity  # type: ignore[attr-defined]
-        if entity is None:
+        if entity is None or getattr(self, "chaos", False):
             return []
 
         clauses: list[str] = []
@@ -181,11 +227,15 @@ class SqliteWriter(FileWriter, _SchemaAware):
         entity: Any = None,
         entities: dict[str, Any] | None = None,
         table: str | None = None,
+        chaos: bool = False,
         **options: Any,
     ) -> None:
         super().__init__(path, **options)
         self.entity = entity
         self.entities = entities or {}
+        #: Whether this run injects deliberate damage. Relaxes the constraints
+        #: the damage is designed to violate; see ``_column_definitions``.
+        self.chaos = chaos
         self.table = table or (entity.name if entity is not None else self.path.stem)
         self._connection: sqlite3.Connection | None = None
         self._insert = ""
@@ -205,7 +255,11 @@ class SqliteWriter(FileWriter, _SchemaAware):
             # definition, so paying for fsync on every batch buys nothing.
             connection.execute("PRAGMA journal_mode=MEMORY")
             connection.execute("PRAGMA synchronous=OFF")
-            connection.execute("PRAGMA foreign_keys=ON")
+            # Enforcement is off for a chaotic run, and only for a chaotic
+            # run - which is also the only run whose tables carry no key
+            # constraints for a reference to point at.
+            enforce = "OFF" if getattr(self, "chaos", False) else "ON"
+            connection.execute(f"PRAGMA foreign_keys={enforce}")
             self._connections[key] = connection
             self._users[key] = 0
         self._users[key] += 1
@@ -224,6 +278,8 @@ class SqliteWriter(FileWriter, _SchemaAware):
             if not self.append:
                 self._connection.execute(f"DROP TABLE IF EXISTS {_quote(self.table)}")
             self._connection.execute(statement)
+            for index in self._indexes():
+                self._connection.execute(index)
             self._connection.commit()
         except sqlite3.Error as exc:
             raise OutputError(f"could not create table {self.table}: {exc}") from exc
@@ -336,11 +392,13 @@ class SqlScriptWriter(FileWriter, _SchemaAware):
         table: str | None = None,
         dialect: str = "ansi",
         rows_per_statement: int = 500,
+        chaos: bool = False,
         **options: Any,
     ) -> None:
         super().__init__(path, **options)
         self.entity = entity
         self.entities = entities or {}
+        self.chaos = chaos
         self.table = table or (entity.name if entity is not None else self.path.stem)
         self.dialect = dialect
         self.rows_per_statement = max(1, rows_per_statement)

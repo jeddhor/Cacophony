@@ -547,6 +547,40 @@ exactly the "measuring the wrong thing" failure attainment exists to prevent.
 
 ---
 
+## Template library, completed ✅
+
+**Delivered.** Design document section 70 names eight starter templates; six
+shipped with the earlier phases. The last two:
+
+- **`saas-application`** — tenant → account → activity, plus subscriptions.
+  The multi-tenancy template: an activity row's `tenant` is the tenant of the
+  account *that row chose*, which is the shape every tenant-isolation bug hides
+  in. Verified exact — 0 of 4,000 rows disagree with their account's tenant
+  when chaos is off. `credits_used` is folded per account, so the hundredth
+  event knows what the ninety-nine before it came to
+- **`iot-telemetry`** — site → device → sensor → reading. The time-series
+  template, and the one where the stateful fold earns its keep: a reading is
+  the previous reading plus a small step, not a fresh draw. Measured on one
+  sensor's month — mean step between consecutive readings 0.31, mean step if
+  the same values are shuffled 1.08. That ratio is the difference between a
+  series and noise
+
+**Chaos and a database schema cannot both be had.** Writing the SaaS template
+to SQLite failed three times in a row, each time on a different constraint:
+`NOT NULL`, then `FOREIGN KEY`, then `UNIQUE` on the primary key. Every one was
+entropy injection doing exactly what it was configured to do, and the database
+rejecting exactly the defect it had been asked to contain.
+
+The resolution is to write the DDL the data actually satisfies. A chaotic run's
+tables carry no keys, uniqueness, `NOT NULL` or `REFERENCES` — a `REFERENCES`
+clause pointing at a table with no key is malformed rather than merely
+unenforced — and get indexes on the key and reference columns instead, so a
+corrupted database is still queryable. `cacophony generate` says so on the way
+in, rather than leaving it to be discovered from a constraint that is not
+there.
+
+---
+
 ## Interpretations recorded during development
 
 Where the design document left room, these are the readings taken and why.
