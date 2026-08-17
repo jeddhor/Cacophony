@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-__all__ = ["JobState", "JobType", "RunState", "TERMINAL_JOB_STATES", "TERMINAL_RUN_STATES"]
+__all__ = ["TERMINAL_JOB_STATES", "TERMINAL_RUN_STATES", "JobState", "JobType", "RunState"]
 
 
 class JobState(StrEnum):
@@ -33,8 +33,13 @@ class JobState(StrEnum):
     @property
     def is_resumable(self) -> bool:
         """Whether a job in this state still has work that can be picked up."""
-        return self in {JobState.QUEUED, JobState.RUNNING, JobState.PAUSED, JobState.RETRYING,
-                        JobState.FAILED}
+        return self in {
+            JobState.QUEUED,
+            JobState.RUNNING,
+            JobState.PAUSED,
+            JobState.RETRYING,
+            JobState.FAILED,
+        }
 
     def can_move_to(self, target: JobState) -> bool:
         return target in _JOB_TRANSITIONS.get(self, frozenset())

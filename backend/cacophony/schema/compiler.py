@@ -321,7 +321,11 @@ def _compile_field(
 
     try:
         generator = registry.create(  # type: ignore[attr-defined]
-            generator_name, options, field=field_spec, entity=entity
+            generator_name,
+            options,
+            field=field_spec,
+            entity=entity,
+            base_dir=getattr(project, "base_dir", None),
         )
     except GeneratorConfigError as exc:
         raise GeneratorConfigError(

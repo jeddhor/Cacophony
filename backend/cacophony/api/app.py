@@ -342,6 +342,10 @@ def create_app(
                             ),
                             "distribution": _distribution_of(field),
                             "reference": _reference_of(compiled, field),
+                            # Which recipe contributed this field (section 80).
+                            # The Studio badges it, so nobody wonders where a
+                            # field they did not write came from.
+                            "recipe": field.spec.recipe,
                         }
                         for field in entity.fields
                     },

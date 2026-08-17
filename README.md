@@ -13,14 +13,15 @@ built and how to run it.
 
 ---
 
-## Status: Phase 10 — Assurance
+## Status: Phase 11 — Reuse
 
 Phases 1–7 built the engine, the providers, the run system, the Studio, the
 relational layer, multimodal generation and synthetic worlds. Phase 8 turned
 Cacophony into a workload generator; Phase 9 spread a run across machines, with
-byte-identical output. Phase 10 asks whether what came out is any good:
+byte-identical output. Phase 10 asked whether what came out is any good:
 repetition, the model that produced it, and what an application does with valid
-but awkward data.
+but awkward data. Phase 11 makes schemas reusable — a catalogue of fragments, and
+projects that can be sent to somebody else.
 
 **Working now**
 
@@ -78,6 +79,15 @@ but awkward data.
   through the real pipeline and reports validity, usability, clipping, speed and
   repetition, with the cache forced off so nobody is scored on somebody else's
   answers
+- Generation recipes — `recipes: [employee]` expands to the twelve fields
+  everybody writes the same way, with attribution on every one so expansion is
+  never invisible; override a field without forking the recipe
+- A catalogue of 31 recipes across identity, computing, security, commerce and
+  operational, every one asserted to compile, generate and validate
+- Portable `.cacophony` bundles — a project, its recipes, its templates and the
+  files its schema references, with hashes; import refuses path traversal,
+  absolute paths and symlinks, and writes nothing until the whole archive checks
+  out
 - Edge-case generation — a QA mode that produces *legal* but awkward values:
   `O'Brien-Smith`, `Ω`, emoji with zero-width joiners, RTL overrides, leap days,
   DST boundaries, the antimeridian. Every one validated against the field that
@@ -101,7 +111,8 @@ but awkward data.
 - Structured logging with the fields design document section 86 asks for
 - CLI: `validate`, `lint`, `plan`, `prompt`, `propose`, `preview`, `generate`,
   `resume`, `runs`, `run`, `serve`, `stream`, `cluster`, `controller`,
-  `worker`, `worlds`, `benchmark`, `generators`, `providers --test`, `models`
+  `worker`, `worlds`, `benchmark`, `recipes`, `bundle`, `generators`,
+  `providers --test`, `models`
 - **Cacophony Studio**: project dashboard, schema editor with live preview,
   distribution and relationship views, a generate screen with cost estimates,
   a live run view fed by the WebSocket, a streaming page with per-entity rate
@@ -123,10 +134,9 @@ Set `on_unavailable: placeholder` on any of them to run the whole pipeline
 today with obviously-marked stand-in values.
 
 **Still to come.** Sections 90–95 of the design document are delivered, and so
-is everything the earlier phases left open. Four slices remain: recipes, the
-built-in catalogue and `.cacophony` bundles (11); post-generation transforms and
-record editing (12); the plugin protocol and a sandboxed `script` (13); and
-Tauri desktop packaging (14).
+is everything the earlier phases left open. Three slices remain:
+post-generation transforms and record editing (12); the plugin protocol and a
+sandboxed `script` (13); and Tauri desktop packaging (14).
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the phase plan and what makes each
 one hard.
@@ -417,6 +427,55 @@ scratch — producing exactly the bytes the dead one would have. Tested by
 `kill -9`ing a worker in the middle of a shard: the dataset still matched,
 half-written file and all.
 
+### One line instead of forty
+
+```yaml
+entities:
+  employee:
+    count: 5000
+    recipes: [employee]          # section 80's example, as one line
+    fields:
+      email:                     # override one without restating the rest
+        template: "{first_name|lower}.{last_name|lower}@acme.example"
+```
+
+```
+$ cacophony plan project.yaml
+   Generate 5000 employee
+     first_name       faker(first_name)                        via name
+     last_name        faker(last_name)                         via name
+     full_name        template({first_name} {last_name})        via person
+     email            template(…@acme.example)                  via email
+     username         expression(lower(substr(first_name…)))    via username
+     employee_id      sequence(EMP-{000000})                    via employee
+     manager          reference(employee.employee_id, skewed)   via employee
+```
+
+`via` is not decoration. A schema that silently gains twelve fields is a schema
+nobody can debug, so every expanded field says where it came from — in the plan,
+in the API, and in the Studio's field editor.
+
+`cacophony recipes` lists the 31 in the catalogue: identity, computing, security,
+commerce, operational. Every one is asserted to compile, generate and pass its
+own validation, because a catalogue is a promise.
+
+### Send it to somebody
+
+```bash
+cacophony bundle export project.yaml -o team.cacophony
+cacophony bundle inspect team.cacophony     # verifies hashes, compiles, writes nothing
+cacophony bundle import team.cacophony -d ./team
+```
+
+A bundle carries what *makes* a dataset, never the dataset — section 72 is
+explicit, and a project is kilobytes while a dataset is gigabytes. It follows
+the paths your schema references, so a lookup table in `data/` travels too; a
+path outside the project directory is refused rather than silently dropped.
+
+Import treats the archive as untrusted input: traversal, absolute paths, drive
+letters and symlink entries are refused, and nothing is written until the whole
+archive checks out.
+
 ### Is it any good?
 
 Three questions the rest of the platform cannot answer.
@@ -679,7 +738,7 @@ Follows design document section 96.
 ```
 backend/cacophony/
 ├── core/          types, seeds, records, contexts, the four key interfaces
-├── schema/        project model, compiler, dependency graph, plan, linter
+├── schema/        project model, compiler, graph, plan, linter, recipes, bundles
 ├── generation/    generator registry, built-in generators, recommendation, engine
 ├── validation/    structural and constraint validators, duplicate detection
 ├── outputs/       CSV, JSON, JSONL and Parquet writers

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -108,11 +109,38 @@ class Generator(ABC):
         *,
         field: FieldSpec | None = None,
         entity: EntitySpec | None = None,
+        base_dir: Path | None = None,
     ) -> None:
         self.options: dict[str, Any] = dict(options or {})
         self.field = field
         self.entity = entity
+        #: The directory the project file lives in, when it came from one.
+        #:
+        #: A relative path in a schema means "relative to the schema", not "to
+        #: whatever directory somebody happened to run from". Without this,
+        #: `cacophony validate ../other/project.yaml` cannot find that project's
+        #: own lookup tables, and a portable bundle (section 72) is impossible
+        #: because the only paths that work are absolute ones - which are
+        #: exactly the paths that do not travel.
+        self.base_dir = base_dir
         self.prepare()
+
+    def resolve_path(self, value: str | Path) -> Path:
+        """Turn a schema-relative path into one that can be opened.
+
+        An absolute path is taken as given. A relative one is tried against the
+        project directory first and the working directory second, so a project
+        keeps working when it is opened from somewhere else and a path that only
+        ever worked from the working directory keeps working too.
+        """
+        candidate = Path(value)
+        if candidate.is_absolute():
+            return candidate
+        if self.base_dir is not None:
+            beside = Path(self.base_dir) / candidate
+            if beside.exists():
+                return beside
+        return candidate
 
     def prepare(self) -> None:  # noqa: B027 - an optional hook, not an abstract method
         """Validate and normalise options once, at compile time.

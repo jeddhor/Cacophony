@@ -70,7 +70,7 @@ class RunEvent:
 
     def to_store_row(self) -> dict[str, Any]:
         """The shape :class:`cacophony.store.models.RunEvent` expects."""
-        from datetime import datetime, timezone
+        from datetime import UTC, datetime
 
         return {
             "run_id": self.run_id,
@@ -80,7 +80,7 @@ class RunEvent:
             "entity": self.entity,
             "message": self.message,
             "data": self.data,
-            "timestamp": datetime.fromtimestamp(self.timestamp, tz=timezone.utc),
+            "timestamp": datetime.fromtimestamp(self.timestamp, tz=UTC),
         }
 
 

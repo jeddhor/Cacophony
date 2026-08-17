@@ -250,9 +250,14 @@ def plan(
         for compiled_field in entity.fields:
             marker = "~" if compiled_field.inferred_generator else " "
             style = style_for_generator(compiled_field.generator_name)
+            # Which recipe contributed this field (section 80). A schema that
+            # silently gains eight fields is a schema nobody can debug, so the
+            # plan says where each one came from.
+            origin = compiled_field.spec.recipe
             console.print(
                 f"   {marker} {compiled_field.name:<26}"
                 f"[{style}]{compiled_field.generator.describe()}[/]"
+                + (f"  [cacophony.muted]via {origin}[/]" if origin else "")
             )
         console.print()
 
@@ -266,7 +271,8 @@ def plan(
     console.print(f"  storage (approx)   {_human_bytes(estimate.estimated_bytes)}")
     console.print(
         "\n[cacophony.muted]Estimates are order-of-magnitude only "
-        "(design document section 69). '~' marks an inferred generator.[/]"
+        "(design document section 69). '~' marks an inferred generator; "
+        "'via' names the recipe a field came from.[/]"
     )
 
 
@@ -1002,6 +1008,117 @@ def models(
 
 
 @app.command()
+def recipes(
+    project: Annotated[
+        Path | None,
+        typer.Option("--project", "-p", help="Include a project's own recipes and recipes/ dir."),
+    ] = None,
+    show: Annotated[
+        str | None, typer.Option("--show", "-s", help="Print one recipe's fields in full.")
+    ] = None,
+    group: Annotated[str | None, typer.Option("--group", "-g", help="Only this group.")] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+) -> None:
+    """List the reusable schema fragments (design document sections 80, 106).
+
+        cacophony recipes
+        cacophony recipes --show employee
+
+    A recipe is a named group of fields. ``recipes: [employee]`` on an entity
+    expands to the twelve fields section 80 lists, and naming one of them again
+    overrides it without restating the rest.
+    """
+    import yaml
+
+    from ..schema.recipes import load_library
+
+    inline: dict[str, Any] = {}
+    project_dir: Path | None = None
+    if project is not None:
+        # Read the document rather than the compiled project: expansion has
+        # already consumed `recipes:` by the time a ProjectSpec exists.
+        try:
+            raw = yaml.safe_load(Path(project).read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            error_console.print(f"[cacophony.error]error[/] {exc}")
+            raise typer.Exit(code=2) from exc
+        inline = raw.get("recipes") or {}
+        project_dir = Path(project).parent
+
+    try:
+        library = load_library(project_dir=project_dir, inline=inline)
+    except CacophonyError as exc:
+        error_console.print(f"[cacophony.error]error[/] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    if show:
+        try:
+            recipe = library.get(show)
+            fields = library.resolve(show)
+        except CacophonyError as exc:
+            error_console.print(f"[cacophony.error]error[/] {exc}")
+            raise typer.Exit(code=2) from exc
+
+        if as_json:
+            console.print_json(json.dumps({**recipe.to_dict(), "expanded": fields}))
+            return
+
+        _banner("recipe", recipe.name)
+        if recipe.description:
+            console.print(recipe.description)
+        console.print(f"[cacophony.muted]group   [/] {recipe.group}")
+        console.print(f"[cacophony.muted]source  [/] {recipe.source}")
+        if recipe.includes:
+            console.print(f"[cacophony.muted]includes[/] {', '.join(recipe.includes)}")
+        if recipe.requires:
+            console.print(f"[cacophony.muted]requires[/] {recipe.requires}")
+        console.print()
+        console.print(f"[cacophony.accent]{len(fields)} field(s)[/]")
+        for name, spec in fields.items():
+            origin = spec.get("recipe", recipe.name)
+            generator = spec.get("generator") or "inferred"
+            note = f"  [cacophony.muted]via {origin}[/]" if origin != recipe.name else ""
+            console.print(f"  {name:<24} [cacophony.accent]{generator}[/]{note}")
+        console.print()
+        console.print("[cacophony.muted]use it with:[/]")
+        console.print("  entities:")
+        console.print("    thing:")
+        # Escaped: rich would read the brackets as a style tag.
+        console.print(f"      recipes: \\[{recipe.name}]")
+        return
+
+    grouped = library.groups()
+    if group:
+        if group not in grouped:
+            error_console.print(
+                f"[cacophony.error]error[/] no group '{group}'. Available: {', '.join(grouped)}"
+            )
+            raise typer.Exit(code=2)
+        grouped = {group: grouped[group]}
+
+    if as_json:
+        console.print_json(json.dumps(library.describe()))
+        return
+
+    _banner("recipes", f"{len(library)} available")
+    for name, entries in grouped.items():
+        console.print(f"[cacophony.highlight]{name}[/]")
+        for recipe in entries:
+            summary = " ".join(recipe.description.split())
+            # The expanded count, not the recipe's own: `employee` declares five
+            # fields and includes three recipes, and somebody choosing between
+            # them wants to know they are about to gain thirteen.
+            total = len(library.resolve(recipe.name))
+            console.print(
+                f"  {recipe.name:<18} "
+                f"[cacophony.muted]{total} field{'' if total == 1 else 's'}[/]  "
+                f"{_truncate(summary, 52)}"
+            )
+        console.print()
+    console.print("[cacophony.muted]cacophony recipes --show NAME  to see a recipe's fields[/]")
+
+
+@app.command()
 def benchmark(
     project: ProjectArg,
     models_arg: Annotated[
@@ -1488,11 +1605,13 @@ def _human_bytes(count: int) -> str:
     return f"{size:,.1f} TB"
 
 
+from .bundles import register as _register_bundles  # noqa: E402
 from .distributed import register as _register_distributed  # noqa: E402
 from .stream import register as _register_stream  # noqa: E402
 
 _register_stream(app)
 _register_distributed(app)
+_register_bundles(app)
 
 
 def run() -> None:

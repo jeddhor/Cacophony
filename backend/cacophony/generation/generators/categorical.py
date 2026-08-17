@@ -105,7 +105,7 @@ class LookupGenerator(OptionsMixin, SyncGenerator):
         if values is not None:
             self.values = list(values)
         elif path is not None:
-            self.values = _load_table(self, Path(path), self.column)
+            self.values = _load_table(self, self.resolve_path(path), self.column)
         else:
             raise self._fail("either 'values' or 'path' is required")
 

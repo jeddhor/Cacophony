@@ -74,9 +74,10 @@ class GeneratorRegistry:
         *,
         field: FieldSpec | None = None,
         entity: EntitySpec | None = None,
+        base_dir: Any = None,
     ) -> Generator:
         """Instantiate a generator, running its option validation immediately."""
-        return self.get(name)(options or {}, field=field, entity=entity)
+        return self.get(name)(options or {}, field=field, entity=entity, base_dir=base_dir)
 
     def names(self) -> list[str]:
         return sorted(self._generators)

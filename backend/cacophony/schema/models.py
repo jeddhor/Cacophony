@@ -33,6 +33,7 @@ explicit form is also accepted::
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
@@ -77,6 +78,11 @@ _FIELD_KEYS = frozenset(
         "tone",
         "locale",
         "primary_key",
+        # Which recipe this field came from (section 80). A field key rather
+        # than a generator option, so it round-trips through `dump_project` and
+        # shows up wherever a field is described - expansion that cannot be
+        # seen is a trap.
+        "recipe",
     }
 )
 
@@ -199,6 +205,9 @@ class FieldSpec(_Base):
     privacy: str | None = None
     tone: str | None = None
     locale: str | None = None
+    #: The recipe that contributed this field (section 80). Set by expansion,
+    #: never by hand - though writing it by hand is harmless.
+    recipe: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -356,6 +365,12 @@ class EntitySpec(_Base):
     name: str = ""
     count: int = Field(default=100, ge=0)
     description: str | None = None
+    #: Recipes to expand into this entity's fields (section 80). Consumed by
+    #: :func:`cacophony.schema.recipes.expand_recipes` before this model is
+    #: built, so a validated `EntitySpec` normally has none - it is declared
+    #: here so that a project loaded without expansion still validates rather
+    #: than rejecting a key it should understand.
+    recipes: list[str] = Field(default_factory=list)
     fields: dict[str, FieldSpec] = Field(default_factory=dict)
     primary_key: str | None = None
     seed: int | None = None
@@ -542,6 +557,15 @@ class ProjectMeta(_Base):
 class ProjectSpec(_Base):
     """A complete generation workspace (section 6)."""
 
+    #: Where the file this was loaded from lives, when it came from one.
+    #:
+    #: Excluded from serialisation, deliberately: it describes *this machine*,
+    #: and writing it into a schema would put a local absolute path in a
+    #: document meant to be reviewed in Git (section 74) and shared in a bundle
+    #: (section 72). It exists so a relative path in the schema can be resolved
+    #: against the schema rather than against the working directory.
+    base_dir: Path | None = Field(default=None, exclude=True, repr=False)
+
     project: ProjectMeta
     entities: dict[str, EntitySpec] = Field(default_factory=dict)
     relationships: list[RelationshipSpec] = Field(default_factory=list)
@@ -550,6 +574,8 @@ class ProjectSpec(_Base):
     timeline: TimelineSpec = Field(default_factory=TimelineSpec)
     chaos: ChaosSpec = Field(default_factory=ChaosSpec)
     quality: QualitySpec = Field(default_factory=QualitySpec)
+    #: Project-local recipe definitions (section 80). Consumed by expansion.
+    recipes: dict[str, Any] = Field(default_factory=dict)
     outputs: dict[str, OutputProfileSpec] = Field(default_factory=dict)
 
     @model_validator(mode="after")

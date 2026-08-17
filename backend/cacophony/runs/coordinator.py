@@ -1,4 +1,4 @@
-"""The generation Conductor (design document sections 27–32, 55, 56, 65, 108).
+"""The generation Conductor (design document sections 27-32, 55, 56, 65, 108).
 
 Section 108 offers "Conductor" as the branded name for the generation
 planner/scheduler, and this is it: the thing that turns a compiled project into
@@ -58,7 +58,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = ["Conductor", "PlannedJob", "RunHandle", "RunOutcome"]
 
 
-class RunAborted(CacophonyError):
+class RunAbortedError(CacophonyError):
     """Raised internally to unwind a cancelled run."""
 
 
@@ -158,11 +158,11 @@ class RunHandle:
     async def checkpoint_gate(self) -> None:
         """Await here at safe points: between batches, never mid-record."""
         if self._cancelled:
-            raise RunAborted("run cancelled")
+            raise RunAbortedError("run cancelled")
         if self.is_paused:
             await self._pause.wait()
             if self._cancelled:
-                raise RunAborted("run cancelled")
+                raise RunAbortedError("run cancelled")
 
 
 class Conductor:
@@ -251,9 +251,7 @@ class Conductor:
         unknown = [name for name in selected if name not in self.compiled.entities]
         if unknown:
             known = ", ".join(self.compiled.entity_order)
-            raise GenerationError(
-                f"No entity named {', '.join(unknown)}. Known entities: {known}"
-            )
+            raise GenerationError(f"No entity named {', '.join(unknown)}. Known entities: {known}")
         # Keep the compiler's topological order whatever order the user listed.
         return [name for name in self.compiled.entity_order if name in set(selected)]
 
@@ -352,7 +350,9 @@ class Conductor:
             return
         try:
             self.repository.add_events([event.to_store_row()])
-        except Exception as exc:  # noqa: BLE001 - logging must never break a run
+        except Exception as exc:
+            # Recording history must never break a run. Generation is the
+            # point; the event log is bookkeeping about it.
             self.log.warning(f"could not record run event: {exc}", status="store_error")
 
     def _set_run_state(self, state: RunState, **fields: Any) -> None:
@@ -411,12 +411,14 @@ class Conductor:
         started = time.perf_counter()
         try:
             await self._run_jobs()
-        except RunAborted:
+        except RunAbortedError:
             self._finish(RunState.CANCELLED, "cancelled by request")
         except CacophonyError as exc:
             self.error = str(exc)
             self._finish(RunState.FAILED, self.error)
-        except Exception as exc:  # noqa: BLE001 - surfaced in the outcome
+        except Exception as exc:
+            # Surfaced in the outcome rather than raised: the caller gets a
+            # RunOutcome describing the failure, with the files written so far.
             self.error = f"{type(exc).__name__}: {exc}"
             self._finish(RunState.FAILED, self.error)
         else:
@@ -435,9 +437,7 @@ class Conductor:
     async def _run_jobs(self) -> None:
         """Execute jobs, overlapping the ones that do not depend on each other."""
         remaining = [job for job in self.jobs if job.state is not JobState.COMPLETED]
-        done: set[str] = {
-            job.entity for job in self.jobs if job.state is JobState.COMPLETED
-        }
+        done: set[str] = {job.entity for job in self.jobs if job.state is JobState.COMPLETED}
         limit = asyncio.Semaphore(max(1, self.config.limits.max_workers))
 
         while remaining:
@@ -446,9 +446,7 @@ class Conductor:
                 # The compiler proves the graph is acyclic, so this can only
                 # mean a dependency was excluded by --entity.
                 blocked = ", ".join(sorted(job.entity for job in remaining))
-                missing = sorted(
-                    {dep for job in remaining for dep in job.depends_on} - done
-                )
+                missing = sorted({dep for job in remaining for dep in job.depends_on} - done)
                 raise GenerationError(
                     f"Cannot generate {blocked}: {', '.join(missing)} was not selected "
                     "but is depended upon. Include it, or generate the whole project."
@@ -551,14 +549,17 @@ class Conductor:
                 self._checkpoint(job, announce=announce)
                 if announce:
                     since_checkpoint = 0
-        except RunAborted:
+        except RunAbortedError:
             self._checkpoint(job)
             self._set_job_state(job, JobState.PAUSED, completed=job.completed)
             raise
         except Exception as exc:
             self._checkpoint(job)
             self._set_job_state(
-                job, JobState.FAILED, completed=job.completed, error=str(exc),
+                job,
+                JobState.FAILED,
+                completed=job.completed,
+                error=str(exc),
                 finished_at=utcnow(),
             )
             self.bus.emit(
@@ -578,9 +579,7 @@ class Conductor:
 
         self._absorb_engine_stats(engine, job.entity)
         self._checkpoint(job)
-        self._set_job_state(
-            job, JobState.COMPLETED, completed=job.completed, finished_at=utcnow()
-        )
+        self._set_job_state(job, JobState.COMPLETED, completed=job.completed, finished_at=utcnow())
         self.bus.emit(
             EventKind.JOB_COMPLETED,
             self.run_id,
@@ -683,9 +682,7 @@ class Conductor:
         if path is None:
             return job.offset + job.completed, job.requested - job.completed
 
-        actual = align_to_records(
-            path, job.completed, self.config.output_format, table=job.entity
-        )
+        actual = align_to_records(path, job.completed, self.config.output_format, table=job.entity)
         if actual != job.completed:
             self.log.warning(
                 "checkpoint disagreed with the file on disk; trusting the file",
@@ -751,9 +748,7 @@ class Conductor:
             metrics.rejected = stats.rejected
             metrics.repaired = stats.repaired
             metrics.field_failures = stats.field_failures
-            self.metrics.validation_failures = sum(
-                item.rejected for item in engine.stats.values()
-            )
+            self.metrics.validation_failures = sum(item.rejected for item in engine.stats.values())
         if self.runtime is not None:
             self.metrics.absorb_provider_stats(self.runtime.stats)
             self.metrics.cache_hits = self.runtime.cache.stats.hits
@@ -837,8 +832,7 @@ class Conductor:
                 data["scenarios"] = engine.scenarios.describe()
             if engine.simulations:
                 data["simulation"] = {
-                    name: simulation.describe()
-                    for name, simulation in engine.simulations.items()
+                    name: simulation.describe() for name, simulation in engine.simulations.items()
                 }
             damage = {
                 name: injector.describe()

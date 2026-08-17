@@ -55,6 +55,19 @@ class ReferenceGenerator(OptionsMixin, PlaceholderMixin, SyncGenerator):
 
     ``on_unavailable`` still applies, for the case where the referenced entity
     is not part of the current run.
+
+    **A self-reference points backwards.** A field referencing its own entity -
+    a manager, a parent comment, a superseded ticket - may only choose a record
+    with a lower index. Two reasons, and either would be sufficient.
+
+    A management chain that can point forwards is a management chain with cycles
+    in it, and no query over it terminates. And an enforced foreign key is
+    checked on insert, so a row pointing at a row that does not exist yet fails
+    immediately - which is exactly what happened the first time a recipe in the
+    catalogue used one.
+
+    Record zero has nobody to point at, so it gets null. That is correct: the
+    top of a hierarchy has no parent.
     """
 
     deterministic = True
@@ -118,6 +131,12 @@ class ReferenceGenerator(OptionsMixin, PlaceholderMixin, SyncGenerator):
             return self._unavailable(
                 context, f"entity '{self.target}' generates no records to reference"
             )
+
+        # A self-reference may only look backwards; see the class docstring.
+        if self.target == context.entity.name:
+            count = min(count, context.record_index)
+            if count <= 0:
+                return None
 
         index = pick_index(
             context.rng(),

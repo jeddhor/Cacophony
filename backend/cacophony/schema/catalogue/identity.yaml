@@ -1,0 +1,174 @@
+# Identity recipes (design document sections 80, 106).
+#
+# Section 106 lists: person, employee, customer, username, email, address.
+#
+# Everything here is deterministic and needs no model server. Addresses use
+# reserved domains and 555-01xx telephone numbers (section 62), so nothing a
+# recipe produces can reach a real inbox or ring a real phone.
+group: identity
+
+name:
+  description: A given name and a family name.
+  fields:
+    first_name:
+      type: string
+      semantic: "Person's given name"
+      generator: faker
+      provider: first_name
+    last_name:
+      type: string
+      semantic: "Person's family name"
+      generator: faker
+      provider: last_name
+
+person:
+  description: A human being - name, date of birth, contact details.
+  includes: [name]
+  fields:
+    full_name:
+      type: string
+      generator: template
+      template: "{first_name} {last_name}"
+    date_of_birth:
+      type: date
+      generator: datetime
+      start: "1955-01-01"
+      end: "2007-12-31"
+    # 555-01xx is reserved for fiction (section 62).
+    phone:
+      type: phone
+      generator: phone
+      safe: true
+
+username:
+  description: A login name derived from a person's name.
+  # Includes the two fields it reads. A recipe that depends on fields it does
+  # not provide is a recipe that cannot be used on its own - and section 106
+  # lists this as something you can reach for, so it has to work when you do.
+  includes: [name]
+  fields:
+    # Deliberately not `unique: true`. Two J. Smiths really do collide, in this
+    # dataset and in every real corporate directory, and a recipe that claimed
+    # uniqueness it cannot deliver would fail validation the first time a
+    # project generated more than a few thousand people. The employee id is the
+    # unique key; this is the login name.
+    username:
+      type: string
+      generator: expression
+      expression: "lower(substr(first_name, 0, 1) + last_name)"
+
+email:
+  description: A work address on a reserved domain, derived from the name.
+  includes: [name]
+  fields:
+    email:
+      type: email
+      generator: template
+      # example.com is reserved by RFC 2606 and cannot receive mail.
+      template: "{first_name|lower}.{last_name|lower}@example.com"
+
+address:
+  description: A postal address, in documentation-safe form.
+  fields:
+    street:
+      type: string
+      generator: faker
+      provider: street_address
+    city:
+      type: string
+      generator: faker
+      provider: city
+    postcode:
+      type: string
+      generator: faker
+      provider: postcode
+    country:
+      type: enum
+      generator: weighted
+      choices:
+        US: 44
+        GB: 14
+        DE: 11
+        CA: 9
+        FR: 7
+        AU: 6
+        JP: 5
+        BR: 4
+
+employee:
+  description: >
+    Section 80's "US Corporate Employee Identity": name, employee id, email,
+    username, department, and the manager relationship.
+  requires: "nothing - the manager reference points at this entity"
+  includes: [person, email, username]
+  fields:
+    employee_id:
+      type: string
+      generator: sequence
+      format: "EMP-{000000}"
+      unique: true
+      primary_key: true
+    department:
+      type: enum
+      generator: weighted
+      choices:
+        Engineering: 30
+        Sales: 18
+        Operations: 14
+        Support: 12
+        Finance: 9
+        Marketing: 8
+        Legal: 5
+        People: 4
+    seniority:
+      type: enum
+      generator: weighted
+      choices:
+        Junior: 24
+        Mid: 38
+        Senior: 26
+        Staff: 8
+        Principal: 4
+    hire_date:
+      type: date
+      generator: datetime
+      start: "2012-01-01"
+      end: "2026-06-30"
+    # A reference from this entity to itself. `$self` is the only substitution
+    # recipes perform: a recipe cannot know the name of the entity it lands in,
+    # and section 80's example needs exactly this.
+    manager:
+      generator: reference
+      entity: $self
+      field: employee_id
+      distribution: skewed
+      skew: 1.6
+      nullable: true
+      null_probability: 0.04
+
+customer:
+  description: Someone who has bought something - name, contact, tier, signup.
+  includes: [person, email, address]
+  fields:
+    customer_id:
+      type: string
+      generator: sequence
+      format: "CUS-{000000}"
+      unique: true
+      primary_key: true
+    tier:
+      type: enum
+      generator: weighted
+      choices:
+        standard: 76
+        plus: 19
+        premier: 5
+    signed_up_at:
+      type: datetime
+      generator: datetime
+      start: "2019-01-01"
+      end: "2026-06-30"
+    marketing_opt_in:
+      type: boolean
+      generator: boolean
+      probability: 0.31

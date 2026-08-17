@@ -595,7 +595,7 @@ attention rather than squeezed in beside a feature.
 | Phase | Sections | Theme |
 |---|---|---|
 | 10 — Assurance ✅ | 59, 67, 79 | Is what came out any good? |
-| 11 — Reuse | 80, 106, 72 | Fragments, catalogues and bundles |
+| 11 — Reuse ✅ | 80, 106, 72 | Fragments, catalogues and bundles |
 | 12 — Afterwards | 105, 104 | Changing a dataset that already exists |
 | 13 — Extension | 44, and `script` | Third-party code, safely |
 | 14 — Desktop | 41 | Tauri, without giving up the web |
@@ -708,9 +708,93 @@ testing will reveal.
 
 ---
 
-## Phase 11 — Reuse
+## Phase 11 — Reuse ✅
 
-*Design document sections 80, 106, 72.*
+**Delivered.** Design document sections 80, 106 and 72.
+
+```bash
+cacophony recipes --show employee
+cacophony bundle export project.yaml -o team.cacophony
+```
+
+```yaml
+entities:
+  employee:
+    count: 5000
+    recipes: [employee]     # twelve fields, one line
+```
+
+**Recipes expand before validation.** A recipe's fields become ordinary fields,
+so the compiler, linter, Studio, patcher and every writer see a normal project
+and none of them learns what a recipe is. Attribution is recorded on each field,
+`cacophony plan` prints `via employee` beside it, and the Studio badges it —
+expansion that cannot be seen is a trap. Overriding one field keeps the rest of
+the recipe and its position; naming a different generator drops the old options
+wholesale, because merging `llm` onto `template` leaves junk behind. `$self` is
+the only substitution, and section 80's manager relationship is what needs it.
+
+**The catalogue is 31 recipes across section 106's five groups**, and every one
+is asserted to compile, generate and pass its own validation. A catalogue is a
+promise; a recipe that does not work is worse than no recipe.
+
+**Bundles are a trust boundary.** Export follows the paths in the *expanded*
+project so a recipe's own lookup table travels with it; a path outside the
+project directory is refused rather than dropped. `inspect` verifies every hash
+and compiles the bundle without writing anything. Import refuses traversal,
+absolute paths, Windows drive letters and symlink entries, checks the whole
+archive before writing a byte, and enforces size ceilings. All five hostile
+cases are tested, and nothing is left behind.
+
+**Six defects, five of them found by using the thing.** Recipes are the first
+feature where writing the content *is* the test, and the content kept finding
+bugs:
+
+*Two catalogue recipes could not be used at all.* `email` and `username` read
+`first_name` and `last_name` and did not provide them, so `recipes: [email]`
+failed to compile. Section 106 lists them as things you reach for, so they now
+include a small `name` recipe. Found by the "every recipe compiles" test, which
+is exactly why it exists.
+
+*A recipe claimed a uniqueness it could not deliver.* `username` was written
+`unique: true`, and two J. Smiths collide — in this dataset and in every real
+corporate directory. It would have failed validation on the first run of any
+size. It is now honestly non-unique, and the employee id is the key.
+
+*Pattern tokens that do not exist.* `{10000-99999}` is not a token, and three
+recipes used one. `cve_identifier` also needed `sequence` rather than a random
+pattern: five random digits with `unique: true` collide at better than even odds
+over 800 records.
+
+*A self-reference pointed forwards.* Section 80's manager relationship failed
+the first time it met an enforced foreign key — a row pointed at a row that did
+not exist yet. Self-references now look backwards only, which is also what makes
+a management chain acyclic; record zero gets null, because the top of a
+hierarchy has no parent. Verified on 300 records: zero forward references.
+
+*A relative path meant "relative to the shell".* A project's own lookup table
+was unfindable from any other directory, which makes a portable bundle
+impossible: the only paths that would work are absolute, and those are exactly
+the paths that cannot travel. Generators now resolve against the schema's
+directory, threaded through as `base_dir` and deliberately excluded from
+serialisation.
+
+*The first bundle went out without its own CSV*, and `inspect` then reported it
+as broken when it was fine. The path lived in the recipe file, not the project,
+so collecting references from the authored document missed it; and compiling
+`project.yaml` alone could not see the sibling recipe. Export now walks the
+expanded project, and `inspect` extracts to a temporary directory and compiles
+the bundle as a whole.
+
+**Also found:** the never-linted `runs/` package. `.gitignore` had hidden it
+from `ruff` and `mypy` as well as from `git`, so committing it in Phase 10
+surfaced seven lint findings in code that had been running in production paths
+for eight phases.
+
+---
+
+## Phase 11 — Reuse, as planned
+
+*The plan this replaced, kept because the reasoning still reads true.*
 
 **§80 Generation recipes.** A named schema fragment — "US Corporate Employee
 Identity" expands to first name, last name, email, username, employee id and a

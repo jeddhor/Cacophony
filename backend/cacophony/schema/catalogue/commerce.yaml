@@ -1,0 +1,166 @@
+# Commerce recipes (design document sections 80, 106).
+#
+# Section 106 lists: product, SKU, transaction, invoice, price, currency.
+#
+# Money is `decimal` throughout, never float. A dataset that computes a total by
+# adding floats is a dataset whose totals are wrong in the last penny, which is
+# exactly the bug a financial fixture exists to catch.
+group: commerce
+
+sku:
+  description: A stock-keeping unit, unique per record.
+  fields:
+    sku:
+      type: string
+      generator: sequence
+      format: "SKU-{00000}"
+      unique: true
+      primary_key: true
+
+currency:
+  description: An ISO-4217 currency code, weighted towards the major ones.
+  fields:
+    currency:
+      type: enum
+      generator: weighted
+      choices:
+        USD: 47
+        EUR: 21
+        GBP: 12
+        JPY: 6
+        CAD: 5
+        AUD: 4
+        CHF: 3
+        SEK: 2
+
+price:
+  description: A price with a long tail, as a decimal.
+  fields:
+    # Lognormal rather than uniform: catalogue prices cluster low with a long
+    # tail, and a flat spread between 5 and 500 looks like nothing anybody has
+    # ever sold.
+    price:
+      type: decimal
+      generator: distribution
+      distribution: lognormal
+      mean: 3.4
+      sigma: 0.7
+      min: 1.99
+      max: 4999.0
+      precision: 2
+
+product:
+  description: A catalogue item - identifier, name, category, price, stock.
+  includes: [sku, price, currency]
+  fields:
+    name:
+      type: string
+      generator: faker
+      provider: catch_phrase
+    category:
+      type: enum
+      generator: weighted
+      choices:
+        Home: 22
+        Apparel: 20
+        Electronics: 17
+        Outdoors: 13
+        Kitchen: 12
+        Beauty: 9
+        Toys: 7
+    stock_on_hand:
+      type: integer
+      generator: distribution
+      distribution: lognormal
+      mean: 3.9
+      sigma: 1.4
+      min: 0
+      max: 25000
+    discontinued:
+      type: boolean
+      generator: boolean
+      probability: 0.06
+
+transaction:
+  description: A payment - amount, method, status, authorisation code.
+  includes: [currency]
+  fields:
+    transaction_id:
+      type: uuid
+      primary_key: true
+    occurred_at:
+      type: datetime
+      generator: datetime
+      start: "2025-01-01"
+      end: "2026-08-01"
+    amount:
+      type: decimal
+      generator: distribution
+      distribution: lognormal
+      mean: 3.7
+      sigma: 1.1
+      min: 0.5
+      max: 50000.0
+      precision: 2
+    method:
+      type: enum
+      generator: weighted
+      choices:
+        card: 62
+        wallet: 18
+        bank_transfer: 12
+        direct_debit: 6
+        voucher: 2
+    status:
+      type: enum
+      generator: weighted
+      choices:
+        captured: 88
+        authorised: 5
+        refunded: 4
+        declined: 2
+        chargeback: 1
+    authorisation_code:
+      type: string
+      generator: pattern
+      pattern: "{A-Z}{A-Z}{00000}"
+
+invoice:
+  description: An invoice - number, dates, net, tax and gross, all decimal.
+  includes: [currency]
+  fields:
+    invoice_number:
+      type: string
+      generator: sequence
+      format: "INV-2026-{000000}"
+      unique: true
+      primary_key: true
+    issued_on:
+      type: date
+      generator: datetime
+      start: "2026-01-01"
+      end: "2026-08-01"
+    net_amount:
+      type: decimal
+      generator: distribution
+      distribution: lognormal
+      mean: 5.6
+      sigma: 1.2
+      min: 10.0
+      max: 500000.0
+      precision: 2
+    # Derived rather than drawn, so the arithmetic on an invoice adds up.
+    # `* 20 / 100` rather than `* 0.2` because a decimal will not multiply by a
+    # float - which is the same reason money is a decimal in the first place.
+    tax_amount:
+      type: decimal
+      generator: expression
+      expression: "round(net_amount * 20 / 100, 2)"
+    gross_amount:
+      type: decimal
+      generator: expression
+      expression: "round(net_amount + tax_amount, 2)"
+    paid:
+      type: boolean
+      generator: boolean
+      probability: 0.83

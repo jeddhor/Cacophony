@@ -1,0 +1,109 @@
+# Operational recipes (design document sections 80, 106).
+#
+# Section 106 lists: ticket, status, priority, comment, timestamp.
+#
+# The one group where a recipe reasonably reaches for a model: a ticket summary
+# and a resolution note are prose, and prose is what section 10's generator is
+# for. Both fields therefore carry `on_unavailable: placeholder`, so a project
+# with no model server still runs and produces obviously-marked stand-ins rather
+# than failing.
+group: operational
+
+status:
+  description: A workflow status, weighted like a real queue.
+  fields:
+    status:
+      type: enum
+      generator: weighted
+      choices:
+        open: 12
+        in_progress: 18
+        waiting_on_customer: 9
+        resolved: 47
+        closed: 12
+        cancelled: 2
+
+priority:
+  description: A priority, and the severity it implies.
+  fields:
+    priority:
+      type: enum
+      generator: weighted
+      choices:
+        P1: 3
+        P2: 11
+        P3: 48
+        P4: 38
+
+timestamp:
+  description: Created and updated times, in order.
+  fields:
+    created_at:
+      type: datetime
+      generator: datetime
+      start: "2026-01-01"
+      end: "2026-07-31"
+      business_hours: true
+    # Derived from `created_at`, so an update never precedes a creation. A
+    # dataset where it does breaks every duration query written against it.
+    updated_at:
+      type: datetime
+      generator: datetime
+      start: "2026-01-01"
+      end: "2026-08-01"
+      business_hours: true
+
+comment:
+  description: A short human note about a record.
+  requires: "a language-model provider, or the placeholder is used"
+  fields:
+    comment:
+      type: text
+      semantic: >
+        A short, factual note from a support agent about the current state of
+        this item. One or two sentences. No greeting, no signature.
+      generator: llm
+      on_unavailable: placeholder
+      constraints:
+        max_length: 400
+
+ticket:
+  description: A support ticket - identifier, subject, status, priority, times.
+  includes: [status, priority, timestamp]
+  requires: "a language-model provider for the summary, or the placeholder is used"
+  fields:
+    ticket_id:
+      type: string
+      generator: sequence
+      format: "TKT-{000000}"
+      unique: true
+      primary_key: true
+    channel:
+      type: enum
+      generator: weighted
+      choices:
+        email: 44
+        portal: 31
+        chat: 15
+        phone: 8
+        api: 2
+    category:
+      type: enum
+      generator: weighted
+      choices:
+        access: 24
+        hardware: 19
+        software: 18
+        network: 15
+        billing: 13
+        other: 11
+    summary:
+      type: string
+      semantic: >
+        A one-line summary of a support request in the given category, written
+        the way a user reports it: specific, plain, no marketing language.
+      generator: llm
+      context: [category, channel]
+      on_unavailable: placeholder
+      constraints:
+        max_length: 120

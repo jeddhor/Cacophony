@@ -85,6 +85,8 @@ export interface FieldView {
   distribution: Record<string, number> | null;
   /** Where this field points, if it is a foreign key (section 15). */
   reference: FieldReference | null;
+  /** The recipe that contributed this field (design document section 80). */
+  recipe?: string | null;
 }
 
 export interface FieldReference {

@@ -160,6 +160,13 @@ export function FieldEditor({
             names no generator. Choosing one here makes it explicit.
           </div>
         )}
+        {field.recipe && (
+          <div className="hint">
+            Came from the <strong>{field.recipe}</strong> recipe (section 80).
+            Editing it here overrides the recipe for this project without
+            forking it; the other fields the recipe contributed are unaffected.
+          </div>
+        )}
       </div>
 
       <GeneratorOptions

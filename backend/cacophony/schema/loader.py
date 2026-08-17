@@ -24,16 +24,39 @@ _YAML_SUFFIXES = {".yaml", ".yml"}
 _JSON_SUFFIXES = {".json"}
 
 
-def load_project_data(data: dict[str, Any], *, source: str = "<memory>") -> ProjectSpec:
-    """Build a :class:`ProjectSpec` from an already-parsed mapping."""
+def load_project_data(
+    data: dict[str, Any],
+    *,
+    source: str = "<memory>",
+    project_dir: Path | None = None,
+    expand: bool = True,
+) -> ProjectSpec:
+    """Build a :class:`ProjectSpec` from an already-parsed mapping.
+
+    Recipes are expanded first (section 80), so what the models validate is an
+    ordinary project. Everything downstream - compiler, linter, Studio, patcher,
+    writers - therefore never learns what a recipe is.
+
+    ``expand=False`` is for the schema editor, which patches the document a
+    person wrote rather than the one expansion produced.
+    """
+    if expand:
+        from .recipes import expand_recipes
+
+        data = expand_recipes(data, project_dir=project_dir)
+
     try:
         return ProjectSpec.model_validate(data)
     except ValidationError as exc:
         raise SchemaError(_format_validation_error(exc, source)) from exc
 
 
-def load_project(path: str | Path) -> ProjectSpec:
-    """Load a project schema from a YAML or JSON file."""
+def load_project(path: str | Path, *, expand: bool = True) -> ProjectSpec:
+    """Load a project schema from a YAML or JSON file.
+
+    A ``recipes/`` directory beside the file is part of the project (section
+    72's bundle layout), so recipe resolution is told where the file lives.
+    """
     file_path = Path(path)
     if not file_path.exists():
         raise SchemaError(f"Project file not found: {file_path}")
@@ -62,7 +85,12 @@ def load_project(path: str | Path) -> ProjectSpec:
             f"{file_path}: expected a mapping at the top level, got {type(data).__name__}."
         )
 
-    return load_project_data(data, source=str(file_path))
+    project = load_project_data(
+        data, source=str(file_path), project_dir=file_path.parent, expand=expand
+    )
+    # So a relative path in the schema resolves against the schema.
+    project.base_dir = file_path.parent.resolve()
+    return project
 
 
 def dump_project(project: ProjectSpec, *, fmt: str = "yaml") -> str:

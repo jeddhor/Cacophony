@@ -1,0 +1,177 @@
+# Security recipes (design document sections 80, 106).
+#
+# Section 106 lists: CVSS-like score, CVE-shaped identifier, alert severity,
+# logon event, network event, hash-like value.
+#
+# "-like" and "-shaped" are the operative words, and they are section 62's rule
+# applied to security data: a CVE identifier generated here is *shaped* like a
+# real one and is not one. CVE-2026-* falls in a year with no published
+# identifiers, addresses come from documentation ranges, and hashes are drawn
+# rather than computed - so nothing here can be mistaken for a real
+# vulnerability, a real host, or a real file.
+group: security
+
+cvss_score:
+  description: A CVSS-like base score, distributed the way real ones are.
+  fields:
+    # Real CVSS scores are not uniform on 0-10: they pile up in the 7-9 band
+    # because that is where the vulnerabilities people bother to report sit. A
+    # uniform draw produces a dataset that is valid and behaves like nothing.
+    cvss_score:
+      type: float
+      generator: distribution
+      distribution: normal
+      mean: 6.8
+      stddev: 1.9
+      min: 0.1
+      max: 10.0
+      precision: 1
+    cvss_severity:
+      type: enum
+      generator: expression
+      expression: >
+        iif(cvss_score >= 9.0, 'critical',
+        iif(cvss_score >= 7.0, 'high',
+        iif(cvss_score >= 4.0, 'medium', 'low')))
+
+cve_identifier:
+  description: A CVE-shaped identifier in a year that has none published.
+  fields:
+    # `sequence` rather than a random pattern, because this is declared unique
+    # and five random digits collide: at 800 records the birthday bound puts a
+    # collision at better than even odds, and the run would fail validation.
+    # Derived from the record index, so it is unique by construction.
+    #
+    # 2026 is deliberate: an identifier here cannot collide with a real
+    # advisory, so nobody can mistake this dataset for threat intelligence.
+    cve_id:
+      type: string
+      generator: sequence
+      format: "CVE-2026-{00000}"
+      start: 10000
+      unique: true
+
+alert_severity:
+  description: An alert severity and priority, weighted like a real queue.
+  fields:
+    severity:
+      type: enum
+      generator: weighted
+      choices:
+        informational: 44
+        low: 27
+        medium: 18
+        high: 8
+        critical: 3
+    priority:
+      type: enum
+      generator: expression
+      expression: >
+        iif(severity == 'critical', 'P1',
+        iif(severity == 'high', 'P2',
+        iif(severity == 'medium', 'P3', 'P4')))
+
+hash_value:
+  description: SHA-256-shaped and MD5-shaped digests, drawn rather than computed.
+  fields:
+    sha256:
+      type: string
+      generator: random
+      charset: hex
+      length: 64
+    md5:
+      type: string
+      generator: random
+      charset: hex
+      length: 32
+
+logon_event:
+  description: An authentication attempt - who, from where, and how it went.
+  requires: "a timeline, and a `user` entity if the subject should be a reference"
+  fields:
+    event_id:
+      type: uuid
+      primary_key: true
+    timestamp:
+      type: datetime
+      generator: datetime
+      business_hours: true
+    logon_type:
+      type: enum
+      generator: weighted
+      choices:
+        interactive: 38
+        network: 27
+        service: 14
+        remote_interactive: 12
+        unlock: 7
+        batch: 2
+    source_ip:
+      type: ip_address
+      generator: ip
+      network: "192.0.2.0/24"
+    # Most sign-ins succeed. A dataset where they do not is a dataset where
+    # every detection rule fires, which tests nothing.
+    result:
+      type: enum
+      generator: weighted
+      choices:
+        success: 91
+        failure_bad_password: 5
+        failure_locked: 2
+        failure_mfa: 1
+        failure_disabled: 1
+    mfa_used:
+      type: boolean
+      generator: boolean
+      probability: 0.78
+
+network_event:
+  description: A connection record - endpoints, protocol, bytes, verdict.
+  fields:
+    flow_id:
+      type: uuid
+      primary_key: true
+    source_ip:
+      type: ip_address
+      generator: ip
+      network: "192.0.2.0/24"
+    destination_ip:
+      type: ip_address
+      generator: ip
+      network: "198.51.100.0/24"
+    destination_port:
+      type: integer
+      generator: weighted
+      choices:
+        443: 58
+        80: 14
+        22: 8
+        3389: 6
+        53: 5
+        445: 4
+        1433: 3
+        8080: 2
+    protocol:
+      type: enum
+      generator: weighted
+      choices:
+        tcp: 84
+        udp: 15
+        icmp: 1
+    # Lognormal, because a handful of transfers are enormous and most are not.
+    bytes_sent:
+      type: integer
+      generator: distribution
+      distribution: lognormal
+      mean: 7.4
+      sigma: 2.1
+      min: 64
+      max: 4000000000
+    action:
+      type: enum
+      generator: weighted
+      choices:
+        allow: 93
+        block: 6
+        reset: 1

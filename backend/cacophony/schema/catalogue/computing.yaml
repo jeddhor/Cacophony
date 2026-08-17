@@ -1,0 +1,128 @@
+# Computing recipes (design document sections 80, 106).
+#
+# Section 106 lists: hostname, IP, MAC, OS, browser, device, software version.
+#
+# Every address here comes from a documentation range (section 62): RFC 5737
+# for IPv4, RFC 3849 for IPv6, RFC 7042's 00:00:5E for MAC. Nothing generated
+# from these recipes can be pinged, routed to, or mistaken for real
+# infrastructure.
+group: computing
+
+hostname:
+  description: A machine name in a documentation domain.
+  fields:
+    hostname:
+      type: hostname
+      generator: pattern
+      # .example is reserved by RFC 2606.
+      pattern: "{a-z:3}-{a-z:4}-{0000}.corp.example"
+      lower: true
+
+ip:
+  description: An IPv4 address from RFC 5737 documentation space.
+  fields:
+    ip_address:
+      type: ip_address
+      generator: ip
+      network: "192.0.2.0/24"
+
+mac:
+  description: A hardware address from RFC 7042's documentation OUI.
+  fields:
+    mac_address:
+      type: mac_address
+      generator: mac
+      oui: "00:00:5E"
+
+os:
+  description: An operating system and its version, weighted like a real fleet.
+  fields:
+    operating_system:
+      type: enum
+      generator: weighted
+      choices:
+        Windows 11: 41
+        Windows 10: 18
+        macOS 15: 16
+        macOS 14: 7
+        Ubuntu 24.04: 9
+        Ubuntu 22.04: 5
+        RHEL 9: 3
+        Other: 1
+
+browser:
+  description: A browser and a plausible major version.
+  fields:
+    browser:
+      type: enum
+      generator: weighted
+      choices:
+        Chrome: 63
+        Safari: 18
+        Edge: 10
+        Firefox: 7
+        Other: 2
+    browser_version:
+      type: string
+      generator: pattern
+      # Chrome-shaped: a three-digit major, a zero, a build and a patch.
+      pattern: "1{0-4}{0-9}.0.{0000}.{000}"
+
+device:
+  description: A managed endpoint - name, hardware, addresses, compliance.
+  includes: [hostname, ip, mac, os]
+  fields:
+    device_id:
+      type: string
+      generator: sequence
+      format: "DEV-{000000}"
+      unique: true
+      primary_key: true
+    device_type:
+      type: enum
+      generator: weighted
+      choices:
+        laptop: 58
+        desktop: 19
+        virtual_machine: 12
+        mobile: 8
+        server: 3
+    manufacturer:
+      type: enum
+      generator: weighted
+      choices:
+        Dell: 32
+        Lenovo: 24
+        Apple: 23
+        HP: 14
+        Other: 7
+    serial_number:
+      type: string
+      generator: pattern
+      pattern: "{A-Z}{A-Z}{0000000}"
+      unique: true
+    last_seen_at:
+      type: datetime
+      generator: datetime
+      start: "2026-01-01"
+      end: "2026-08-01"
+      business_hours: true
+    encrypted:
+      type: boolean
+      generator: boolean
+      probability: 0.94
+
+software_version:
+  description: A semantic version, weighted so most installs are current.
+  fields:
+    version:
+      type: string
+      generator: pattern
+      pattern: "{1-9}.{0-9}{0-9}.{0-9}"
+    release_channel:
+      type: enum
+      generator: weighted
+      choices:
+        stable: 82
+        beta: 13
+        canary: 5

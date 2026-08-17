@@ -320,7 +320,12 @@ class TestReferences:
             }
         )
         records = generate(GenerationEngine(compiled), "orphan", 3)
-        assert all(record.values["parent"] in (1, 2, 3) for record in records)
+        # This example happens to be a self-reference, and a self-reference
+        # points backwards (see `ReferenceGenerator`): record 0 has nobody to
+        # point at and gets null, which is what the top of a hierarchy looks
+        # like. The rest point at a record that already exists.
+        assert records[0].values["parent"] is None
+        assert all(record.values["parent"] in (1, 2) for record in records[1:])
 
     def test_the_compiler_orders_a_derived_field_after_its_reference(self) -> None:
         compiled = compile_from(relational_entities())

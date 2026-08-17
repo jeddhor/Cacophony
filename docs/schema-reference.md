@@ -707,6 +707,92 @@ run time from the environment variable `CACOPHONY_SECRET_<ID>`, from a variable
 named after the id itself, or from the OS keychain under service `cacophony`.
 The loader rejects anything that looks like a literal key.
 
+## `recipes`
+
+Design document sections 80, 106. A reusable fragment of schema.
+
+```yaml
+entities:
+  employee:
+    count: 5000
+    recipes: [employee]        # twelve fields, one line
+    fields:
+      email:                   # override one without restating the rest
+        template: "{first_name|lower}.{last_name|lower}@acme.example"
+      cost_centre:             # and add your own
+        type: string
+        generator: pattern
+        pattern: "CC-{0000}"
+```
+
+```bash
+cacophony recipes                    # every recipe, by group
+cacophony recipes --show employee    # its fields, and where each came from
+```
+
+**Expansion is visible.** Every expanded field records the recipe it came from
+in `recipe:`, `cacophony plan` prints `via employee` beside it, and the Studio
+badges it in the field editor. A schema that silently gains eight fields is a
+schema nobody can debug.
+
+**Overriding does not require forking.** Naming a field the recipe defines
+overrides it key by key, *in the place the recipe put it*, so the record does
+not reorder. Naming a different `generator` replaces the generator and its
+options wholesale — merging `generator: llm` onto `generator: template` would
+leave the template's options behind as junk.
+
+`$self` is the only substitution: it becomes the name of the entity being
+expanded into, which is what section 80's manager relationship needs.
+
+### Where recipes come from
+
+In increasing precedence: the built-in catalogue, a `recipes/` directory beside
+the project file, then the project's own `recipes:` block. A project may
+therefore replace a built-in by defining one with the same name.
+
+```yaml
+recipes:
+  cost_centre:
+    description: Our own coding.
+    fields:
+      cost_centre: {type: string, generator: pattern, pattern: "CC-{0000}"}
+```
+
+A recipe may `includes:` others; cycles are refused by name.
+
+### The built-in catalogue
+
+Section 106's five groups, 31 recipes. Every one compiles, generates and passes
+its own validation — asserted per recipe in the test suite, because a catalogue
+is a promise and a recipe that does not work is worse than no recipe.
+
+| Group | Recipes |
+|---|---|
+| `identity` | `name` `person` `employee` `customer` `username` `email` `address` |
+| `computing` | `hostname` `ip` `mac` `os` `browser` `device` `software_version` |
+| `security` | `cvss_score` `cve_identifier` `alert_severity` `logon_event` `network_event` `hash_value` |
+| `commerce` | `product` `sku` `transaction` `invoice` `price` `currency` |
+| `operational` | `ticket` `status` `priority` `comment` `timestamp` |
+
+Everything is deterministic except `comment` and `ticket`, whose prose fields
+use a language model and carry `on_unavailable: placeholder` so a project with
+no model server still runs.
+
+Section 62 holds throughout: addresses come from RFC 5737/3849 documentation
+ranges, MAC addresses from RFC 7042's OUI, email from RFC 2606 reserved domains,
+telephone numbers from the 555-01xx fiction block. CVE identifiers are shaped
+like real ones and use a year with none published, so nothing here can be
+mistaken for threat intelligence.
+
+### Paths are relative to the schema
+
+A relative `path:` in a project or recipe resolves against the **schema file**,
+not the working directory. Without that, a project only works from the directory
+it lives in, and a portable bundle is impossible — the only paths that would
+work are absolute ones, which are exactly the paths that cannot travel.
+
+---
+
 ## `quality`
 
 Design document sections 58, 59.
@@ -837,6 +923,11 @@ cacophony run        RUN_ID [-p PROJECT] [--events N] [--json]
 cacophony resume     [RUN_ID] [-p PROJECT] [--store FILE]
 cacophony serve      [--host H] [--port P] [--store FILE]
 cacophony version
+
+cacophony recipes    [-p project.yaml] [--show NAME] [--group NAME] [--json]
+cacophony bundle export  project.yaml [-o FILE] [--force]
+cacophony bundle inspect FILE [--json]
+cacophony bundle import  FILE -d DIR [--force]
 ```
 
 `generate` and `preview` also accept `--cache MODE` (`disabled`, `read_only`,
@@ -942,6 +1033,44 @@ specializes in…" — two fields disagreeing is a broken fixture, not a finding
 
 Which records get a case, and which case, is derived from the record index
 (section 75), so a bug found once is found again.
+
+---
+
+## Bundles
+
+Section 72. A project that can be sent to somebody else.
+
+```bash
+cacophony bundle export project.yaml -o team.cacophony
+cacophony bundle inspect team.cacophony
+cacophony bundle import team.cacophony -d ./team
+```
+
+A `.cacophony` file is a zip holding `project.yaml`, a manifest, and the
+supporting directories section 72 lists — `recipes/`, `schemas/`, `templates/`,
+`workflows/`, `scripts/`, `assets/` — plus `worlds/`, since a named world is
+part of what reproduces a dataset.
+
+**Generated data is never included.** Section 72 is explicit, and `.jsonl`,
+`.parquet`, `.db` and friends are excluded wherever they sit.
+
+**Files the schema references are packed, wherever they live.** A lookup table in
+`data/` is as much part of the project as one in `templates/`, so export follows
+the paths in the *expanded* project rather than guessing at directory names.
+
+**A path outside the project directory is refused, not dropped.** It cannot
+travel, and a bundle that quietly lost its lookup table would import cleanly and
+fail on its first record.
+
+`inspect` writes nothing. It verifies every file against the SHA-256 in the
+manifest, then extracts to a temporary directory and *compiles the project* — so
+"will this work" is answerable before deciding to unpack it.
+
+**Import treats the archive as untrusted input.** Path traversal, absolute paths,
+Windows drive letters and symlink entries are all refused, and the whole archive
+is checked before a byte is written, so one bad entry leaves nothing behind
+rather than half a project. Size and entry-count ceilings apply: a zip that
+expands to a terabyte is not a project.
 
 ---
 
