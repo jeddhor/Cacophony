@@ -581,6 +581,237 @@ there.
 
 ---
 
+# The remaining work
+
+Sections 90–95 of the design document are delivered, and so is everything the
+earlier phases left open. What is left is the material that was never assigned
+to a phase: nine sections that each add a capability rather than complete one.
+
+They group into five slices. The ordering is by dependency and by risk — the
+first improves data people are already generating, the last packages everything
+else, and the security-sensitive work sits where it can be given proper
+attention rather than squeezed in beside a feature.
+
+| Phase | Sections | Theme |
+|---|---|---|
+| 10 — Assurance | 59, 67, 79 | Is what came out any good? |
+| 11 — Reuse | 80, 106, 72 | Fragments, catalogues and bundles |
+| 12 — Afterwards | 105, 104 | Changing a dataset that already exists |
+| 13 — Extension | 44, and `script` | Third-party code, safely |
+| 14 — Desktop | 41 | Tauri, without giving up the web |
+
+Section 83 (agentic generation) is out of scope by the document's own framing —
+it is headed "Future" and describes a research direction rather than a feature.
+
+---
+
+## Phase 10 — Assurance
+
+*Design document sections 59, 67, 79.*
+
+Three sections that answer the same question from three directions: **is what
+came out any good?** Measuring repetition, measuring the model that produced
+it, and deliberately producing the worst input an application will ever see.
+
+**§59 Duplicate detection.** Exact hashes, normalised hashes (casefold,
+collapse whitespace, strip punctuation), n-gram similarity, optional
+embeddings, and thresholds the schema declares:
+
+```yaml
+quality:
+  duplication:
+    max_exact: 0.001
+    max_near: 0.02
+    method: minhash
+```
+
+*The hard part is doing it in bounded memory.* Comparing ten million records
+pairwise is 10¹⁴ comparisons; the answer is MinHash signatures with LSH
+banding, which is linear and fits in a few hundred megabytes. Embeddings go
+behind the existing provider registry, so a duplicate check that needs a model
+server is configured the way every other model call already is.
+
+*The trap is already known.* Entropy injection deliberately duplicates records
+(section 24), so the detector must exempt `DUPLICATE_MARK` — exactly the lesson
+Phase 7 learned when validation faithfully reported 21,250 failures that were
+the feature working.
+
+**§67 Model benchmark.** `cacophony benchmark project.yaml --models a,b,c`,
+producing section 67's table: validity, throughput, duplication, latency.
+
+*The hard part is fairness.* Same seeds, same prompts, same schema, same
+concurrency — and the cache off, or every model after the first scores
+infinitely fast. Duplication reuses §59, which is why they belong in one phase.
+
+**§79 Edge-case generation.** A QA mode that seeks weird *values*: empty
+strings, maximum and minimum lengths, Unicode names, emoji, apostrophes,
+hyphenated names, RTL text, huge integers, negatives, leap days, DST
+boundaries, extreme coordinates.
+
+*This is not chaos, and conflating them would waste both.* Chaos produces
+**invalid** data — a null where the schema forbids one. Edge cases produce
+**valid** data that breaks naive code: `O'Brien-Smith` is a real name, and an
+application that cannot store it has a bug. So an edge case must still satisfy
+its field's declared type and constraints, or the feature has merely
+reinvented `chaos: hostile_qa` under a second name.
+
+**Ships with:** a `quality.duplication` schema block, `cacophony benchmark`,
+`--edge-cases <fraction>`, a duplication panel on the run inspector, and the
+edge-case catalogue documented field-type by field-type.
+
+---
+
+## Phase 11 — Reuse
+
+*Design document sections 80, 106, 72.*
+
+**§80 Generation recipes.** A named schema fragment — "US Corporate Employee
+Identity" expands to first name, last name, email, username, employee id and a
+manager reference:
+
+```yaml
+employee:
+  count: 5000
+  recipes: [us_corporate_identity]
+  fields:
+    email: {template: "{first_name|lower}@{company}.example"}   # override one
+```
+
+**§106 The catalogue.** Section 106's five groups shipped as built-in recipes:
+identity, computing, security, commerce, operational. Most of the underlying
+generators exist; what is missing is the packaging that lets somebody write one
+line instead of forty.
+
+*The hard part is that expansion must be visible.* A schema that silently gains
+eight fields is a schema nobody can debug, so `cacophony plan` has to attribute
+every field to the recipe that produced it, and the Studio has to render a
+recipe as a group that can be expanded in place. Overriding one field of a
+recipe must not require forking it.
+
+**§72 Project portability.** A `.cacophony` bundle: `project.yaml`, `recipes/`,
+`templates/`, `workflows/`, `scripts/`, `assets/`, plus a manifest carrying a
+version and a content hash. Generated datasets stay outside, as the document
+specifies.
+
+*Two hard parts.* Absolute paths — a project referencing `/home/me/names.csv`
+or an `--assets-dir` does not survive being sent to somebody else, so export
+has to rewrite what it can and refuse loudly about what it cannot. And import
+is unpacking an archive somebody sent you: path traversal has to be rejected
+rather than trusted.
+
+**Ships with:** `recipes:` on entities, the §106 catalogue, `cacophony recipes`
+to list and show them, `cacophony bundle export|import|inspect`, and recipe
+attribution through the plan, the API and the Studio.
+
+---
+
+## Phase 12 — Afterwards
+
+*Design document sections 105, 104.*
+
+These are one feature. Section 104 says that for enormous datasets, editing
+rows is inappropriate and the answer is "regeneration, transformations,
+filtering, patch rules" — which is section 105.
+
+```bash
+cacophony transform out/employee.jsonl \
+    --set 'email = mask(email)' \
+    --where 'department == "Finance"' \
+    --out out/employee.masked.jsonl
+
+cacophony regenerate <run-id> --entity employee --records 4823913-4823920
+```
+
+Transforms: lowercase, uppercase, truncate, hash, format date, encode, mask,
+normalize, add noise, round, compress. Several exist inside the `transform`
+generator already and need lifting out to work on a file rather than a record.
+
+*Regeneration is nearly free* and worth having for that reason alone: record
+4,823,913's seed is a hash of its position, so reproducing exactly that record
+requires no state, no run and no file — which makes "this one row looks wrong"
+a question with a cheap answer.
+
+*The hard part is reproducibility.* A dataset is currently a pure function of
+its schema and seed, and an edited row breaks that. So an edit must be recorded
+as a **rule in the project** rather than a mutation of the output — the Studio
+offers "apply as a patch rule" instead of "save this row" — and a transformed
+dataset carries provenance saying which rules were applied to it. Otherwise the
+platform's central promise quietly stops being true.
+
+*The second hard part is the usual one:* a transform over forty gigabytes must
+stream, not materialise.
+
+**Ships with:** `cacophony transform`, `cacophony regenerate`, a `patches:`
+schema block, record editing in the Studio's preview that writes rules, and
+transform provenance in the output.
+
+---
+
+## Phase 13 — Extension
+
+*Design document section 44, and the `script` generator from section 8.*
+
+Section 44's eight plugin categories — `GeneratorPlugin`, `ValidatorPlugin`,
+`TransformPlugin`, `OutputPlugin`, `LanguageModelPlugin`, `ImagePlugin`,
+`SpeechPlugin`, `ScenarioPlugin` — each already have a registry to hook into.
+The `script` generator has been declared and refused since Phase 1 for exactly
+the reason this phase exists.
+
+**The whole phase is one question: a project file is something people share.**
+Loading Python from a project directory makes opening a schema somebody sent
+you equivalent to running their code. Everything else here is straightforward;
+this is not, and it is why this work sits late rather than early.
+
+The plan is to answer it in two steps, in this order:
+
+1. **A trust boundary for plugins.** Plugins are discovered from installed
+   entry points — packages somebody chose to `pip install` — and never
+   auto-loaded from a project directory. A manifest declares what a plugin
+   provides; the registry refuses anything it did not declare. A project may
+   *require* a plugin by name and version, which fails loudly if it is absent,
+   rather than carrying its code.
+2. **A real sandbox for `script`.** A WebAssembly runtime is the honest option:
+   no filesystem, no network, no host imports, a memory ceiling and a fuel
+   limit, all enforced by the runtime rather than by a denylist. A subprocess
+   with seccomp is cheaper and platform-specific; a restricted-`exec` sandbox
+   is not a sandbox and will not be built.
+
+*If the sandbox turns out not to be affordable, `script` stays declared and
+refused.* That is a better outcome than a `script` field which is unsafe to
+open, and the `expression` generator already covers derived values safely.
+
+**Ships with:** plugin manifests and discovery, `cacophony plugins list|info`,
+a `requires:` block in the schema, the Studio's Plugins page (currently a
+placeholder), and either a sandboxed `script` or a documented decision not to
+ship one yet.
+
+---
+
+## Phase 14 — Desktop
+
+*Design document section 41.*
+
+A Tauri shell hosting the built Studio, with the Python backend as a sidecar
+process. Section 41 prefers Tauri to Electron because the application mainly
+needs to host a web UI while Python does the generation — which is exactly the
+architecture that already exists.
+
+*The hard part is not the shell, it is the runtime.* Shipping a Python
+interpreter per platform (PyInstaller or PyOxidizer), signing and notarising on
+macOS, signing on Windows, and keeping the sidecar's lifetime tied to the
+window so closing the app does not leave a generator running.
+
+*The constraint the document sets is the one to hold onto:* "web deployment
+should remain possible". `cacophony serve` has to keep working identically, so
+the desktop build must be a shell around the same server rather than a fork of
+it.
+
+**Ships with:** a Tauri application, bundled backends for macOS, Windows and
+Linux, a first-run experience that does not mention Python, and `cacophony
+serve` behaving exactly as it does today.
+
+---
+
 ## Interpretations recorded during development
 
 Where the design document left room, these are the readings taken and why.

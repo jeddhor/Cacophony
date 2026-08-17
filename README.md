@@ -109,7 +109,16 @@ requires. Fields using these compile, lint, plan and estimate correctly:
 Set `on_unavailable: placeholder` on any of them to run the whole pipeline
 today with obviously-marked stand-in values.
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) for the phase plan.
+**Still to come.** Sections 90–95 of the design document are delivered, and so
+is everything the earlier phases left open. Five slices remain, covering the
+sections that were never assigned to a phase: duplicate detection, a model
+benchmark and an edge-case QA mode (10); recipes, the built-in catalogue and
+`.cacophony` bundles (11); post-generation transforms and record editing (12);
+the plugin protocol and a sandboxed `script` (13); and Tauri desktop packaging
+(14).
+
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the phase plan and what makes each
+one hard.
 
 ---
 
