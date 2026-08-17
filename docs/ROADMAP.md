@@ -425,12 +425,84 @@ HTTP.
 
 ---
 
-## Phase 9 — Distributed
+## Phase 9 — Distributed ✅
 
-*Design document section 95.*
+**Delivered.** Design document sections 84, 95.
 
-Remote workers, capability discovery, job leasing, distributed generation,
-worker health, shared artifact storage.
+A run is cut into shards, handed out as leases, and reassembled. Workers
+advertise what they can do; the scheduler gives them only shards they can do.
+
+```bash
+# One machine, several workers
+cacophony cluster templates/security-operations.yaml -o out/ --workers 8
+
+# Several machines
+cacophony controller templates/security-operations.yaml --port 8787
+cacophony worker templates/security-operations.yaml \
+    -c http://controller:8787 -o /mnt/shared
+```
+
+- **Shards are index ranges** (`entity`, `offset`, `count`) that tile each
+  entity exactly once
+- **Capability routing** (section 84): a shard's requirements are read off its
+  compiled generators, a worker's from its configured providers, and the
+  scheduler hands over the first shard the worker can actually run
+- **Leases with generation counters**: a worker renews while it works; a lease
+  that expires is reassigned, and the original holder is told its lease is
+  stale rather than allowed to double-write
+- **Worker health**: last-seen, throughput, what each node is holding, and a
+  `stalled` flag when the remaining work needs a capability nobody alive has
+- **Shared artifact storage**: assets are content-addressed (section 81) so two
+  nodes writing the same file agree; each node appends to its own manifest and
+  a reader reads them all back as one run
+- **Assembly**: parts are named after their offset, and `jsonl`, `csv` and
+  `json` join back into one file; `parquet` stays a directory of parts, which
+  every reader for that format accepts
+
+**The claim the phase rests on.** A dataset produced by many workers is
+*byte-identical* to the same dataset produced by one. This is not a goal that
+was worked towards; it falls out of section 75. A record's seed is a hash of
+its position, so record 4,823,913 is the same record on any machine, in any
+order, at any time. There is no RNG state to partition, no ordering to restore
+and no merge step.
+
+Verified rather than asserted, at every level:
+
+- 4 workers, shard size 137, against a single-machine reference: identical
+- The same with the security-operations template — timelines, per-subject state
+  folds, executing scenarios and deliberate chaos — identical
+- 1 worker, 2 workers and 7 workers all produce the same bytes
+- Two real worker *processes* over HTTP, against a controller in a third:
+  identical
+- A worker `kill -9`'d mid-shard, its lease reclaimed and reassigned: still
+  identical, including the half-written file the dying process left behind
+
+**Retry is regeneration.** The usual hard part of a lease protocol — recovering
+partial work from a dead worker — costs nothing here, so it is not attempted. A
+reassigned shard is redone from scratch, and because a shard is a pure function
+of its index range the second attempt produces exactly the bytes the first one
+would have. The replacement writes to the same offset-named path, so the dead
+worker's truncated file is overwritten rather than left to corrupt the dataset.
+
+**Two failure modes worth naming.** A worker holding a *different schema* is
+refused at registration: two schemas make a dataset that is neither, and the
+failure would otherwise surface as data nobody could explain. And a resent
+`complete` — because the network lost an acknowledgement, not because anything
+went wrong — is refused rather than counted twice; the HTTP tests found that
+one, which the in-process tests had not.
+
+**Local and distributed are one code path.** `cluster` runs a real controller
+and real workers over `LocalTransport`; `controller`/`worker` run the same
+objects with JSON in between. A lease protocol that only ever runs across
+machines is a lease protocol nobody tests.
+
+**Not in this phase:** the in-process workers are asyncio tasks, not processes,
+so `cluster` overlaps waiting rather than multiplying cores. It is a real
+speed-up for a run that calls a model, a disk or a socket, and roughly a wash
+for one that is pure arithmetic. `generate` remains the single-node path with
+run records, checkpoints and resume; the distributed commands trade that
+bookkeeping for parallelism, which is honest because a shard needs no
+checkpoint.
 
 ---
 

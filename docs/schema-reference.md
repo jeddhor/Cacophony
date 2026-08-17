@@ -756,6 +756,14 @@ cacophony stream     project.yaml [-r ENTITY=RATE]... [-t DESTINATION]...
                                   [--batch-size N] [--flush SECONDS]
                                   [--follow-shape] [--historical]
                                   [--scenario-cycle SECONDS] [--on-error POLICY]
+cacophony cluster    project.yaml [-o DIR] [-w WORKERS] [-f FORMAT] [-n N]
+                                  [--shard-size N] [--batch-size N]
+                                  [--join/--no-join] [--assets-dir DIR] [--seed N]
+cacophony controller project.yaml [--host H] [--port P] [--shard-size N]
+                                  [--lease-seconds S] [--max-attempts N] [-n N]
+cacophony worker     project.yaml -c URL [-o DIR] [-f FORMAT] [--name ID]
+                                  [--capabilities LIST] [--concurrency N]
+                                  [-n N] [--assets-dir DIR] [--idle-timeout S]
 cacophony propose    "a description" [--out FILE] [--providers project.yaml]
                                      [--adapter NAME] [--url URL] [-m MODEL]
                                      [--scale N] [--seed N] [--force]
@@ -818,6 +826,83 @@ so it happens again each cycle.
 Below 95% means generation or a destination could not keep up, which is
 reported rather than hidden — a workload generator that quietly under-delivers
 is measuring the wrong thing.
+
+---
+
+## Distributed generation
+
+Sections 84 and 95. A run is cut into shards — contiguous index ranges — and
+handed out as leases.
+
+```bash
+# One machine, several workers
+cacophony cluster templates/security-operations.yaml -o out/ --workers 8
+
+# Several machines
+cacophony controller templates/security-operations.yaml --port 8787
+cacophony worker templates/security-operations.yaml \
+    -c http://controller:8787 -o /mnt/shared
+```
+
+Every worker must run the **same project file**, and the same `--seed`,
+`--records` and `--format` as the controller. A worker whose schema hashes
+differently is refused at registration rather than allowed to contribute
+records from a different world.
+
+**Capabilities.** A shard's requirements are read off its compiled generators;
+a worker's are read off its configured providers. Neither is declared.
+
+| Capability | A shard needs it when | A worker has it when |
+|---|---|---|
+| `deterministic` | always | always |
+| `language_model` | a field uses the `llm` generator | a `language_model` provider is configured |
+| `image` | a field uses the `image` generator | an `image` provider is configured |
+| `speech` | a field uses the `tts` generator | a `speech` provider is configured |
+| `document` | a field uses the `document` generator | always — rendering is in-process |
+
+`--capabilities deterministic,image` overrides detection, for a node whose
+provider is reachable but which you want kept off model work.
+
+**Leases.** A shard is granted for `--lease-seconds` (default 30). The worker
+renews halfway through each interval while it generates. If a lease expires the
+shard is offered to somebody else, and the original holder is told its lease is
+stale and discards what it wrote. After `--max-attempts` failures (default 3) a
+shard is marked failed and the run reports it rather than retrying forever.
+
+**Output.** Each shard writes `entity.part<offset>.<ext>` — zero-padded, so an
+ordinary directory listing is already in dataset order. `jsonl`, `csv` and
+`json` parts join back into one file (`cluster` does it automatically; pass
+`--no-join` to keep the parts). `parquet` parts are left as a directory, which
+every reader for that format accepts. `sqlite` and `sql` are refused: a
+relational output split across shards is not a relational output, because its
+foreign keys would not resolve. Generate parts and load them, or use
+`cacophony generate`.
+
+**Shared artifacts.** Point every worker's `--assets-dir` at one mounted
+directory. Assets are content-addressed (section 81), so two nodes producing
+the same file produce the same name with the same bytes. Each node appends to
+its own `manifest.<node>.jsonl`; readers read all of them as one run.
+
+**Authentication.** Set `CACOPHONY_CONTROLLER_TOKEN` on the controller to
+require it, and the same variable on each worker to send it. It is read from
+the environment rather than taken as a flag, so it never lands in a shell
+history or a process listing (section 63).
+
+**Controller routes.** `POST /register`, `/lease`, `/renew`, `/complete`,
+`/fail`; `GET /status`, `/shards?state=…`, `/health`. `/status` reports
+progress, per-worker health and throughput, reassignment counts, and a
+`stalled` flag when the remaining work needs a capability no live worker has.
+
+**The output is byte-identical to a single-machine run.** A record's seed is a
+hash of its position (section 75), so a shard's records are a pure function of
+its index range. That is also why a reassigned shard is regenerated rather than
+resumed: the second attempt produces exactly the bytes the first one would
+have, so a dead worker's partial file is simply overwritten.
+
+`generate` remains the single-node path, and is the one with run records,
+checkpoints and resume. The distributed commands trade that bookkeeping for
+parallelism — a shard needs no checkpoint, because if it does not finish it is
+simply done again.
 
 ---
 

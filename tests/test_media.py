@@ -283,6 +283,26 @@ class TestAssetStore:
         lines = (tmp_path / "manifest.jsonl").read_text().strip().split("\n")
         assert all(json.loads(line)["entity"] == "employee" for line in lines)
 
+    def test_each_node_writes_its_own_manifest(self, tmp_path: Path) -> None:
+        """Shared artifact storage, without two machines interleaving a line.
+
+        The files are content-addressed and so cannot conflict; the manifest is
+        the one part that is appended to, so a distributed run (section 95)
+        gives each node its own and reads them all back as one.
+        """
+        for node in ("alpha", "beta"):
+            store = AssetStore(tmp_path, manifest_name=f"manifest.{node}.jsonl")
+            self._write(store, 0 if node == "alpha" else 1, node.encode())
+            store.close()
+
+        assert (tmp_path / "manifest.alpha.jsonl").exists()
+        assert (tmp_path / "manifest.beta.jsonl").exists()
+        assert not (tmp_path / "manifest.jsonl").exists()
+
+        # A reader cannot tell the run was distributed.
+        rows = list(AssetStore(tmp_path).manifest())
+        assert sorted(row["record_index"] for row in rows) == [0, 1]
+
     def test_reuse_is_counted_so_the_saving_is_visible(self, tmp_path: Path) -> None:
         from cacophony.assets.store import StoredAsset
 

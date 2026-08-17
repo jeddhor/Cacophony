@@ -13,12 +13,13 @@ built and how to run it.
 
 ---
 
-## Status: Phase 8 — Live
+## Status: Phase 9 — Distributed
 
 Phases 1–7 built the engine, the providers, the run system, the Studio, the
-relational layer, multimodal generation and synthetic worlds. Phase 8 stops
-writing files and starts producing traffic: a rate per entity, a destination,
-and a stream that runs until you stop it.
+relational layer, multimodal generation and synthetic worlds. Phase 8 stopped
+writing files and started producing traffic. Phase 9 spreads a run across
+workers — and the output is byte-identical to a single machine's, because a
+record's seed is a hash of its position rather than a point in a stream.
 
 **Working now**
 
@@ -64,6 +65,10 @@ and a stream that runs until you stop it.
   every dataset you make from it
 - Continuous streaming to stdout, a rotating file, syslog, HTTP or Kafka, at a
   rate you set and can change while it runs
+- Distributed generation — a controller cuts a run into shards and leases them
+  to workers that advertise what they can do, reassigning any shard whose
+  holder goes quiet; the joined result is byte-identical to a single-machine
+  run, verified including after a worker is killed mid-shard
 - Language-model generation against Ollama, llama.cpp and any
   OpenAI-compatible server, addressed by URI
 - The Prompt Compiler — you write what a field *means*, it writes the
@@ -80,7 +85,8 @@ and a stream that runs until you stop it.
 - REST API and a WebSocket feed of live progress
 - Structured logging with the fields design document section 86 asks for
 - CLI: `validate`, `lint`, `plan`, `prompt`, `propose`, `preview`, `generate`,
-  `resume`, `runs`, `run`, `serve`, `generators`, `providers --test`, `models`
+  `resume`, `runs`, `run`, `serve`, `stream`, `cluster`, `controller`,
+  `worker`, `worlds`, `generators`, `providers --test`, `models`
 - **Cacophony Studio**: project dashboard, schema editor with live preview,
   distribution and relationship views, a generate screen with cost estimates,
   a live run view fed by the WebSocket, and an asset browser that shows the
@@ -332,6 +338,46 @@ requested, and warns below 95%. A workload generator that reports "18,204
 delivered" while quietly running at sixty per cent of the rate you asked for is
 measuring the wrong thing.
 
+### Many machines, the same bytes
+
+```bash
+# One machine, several workers
+cacophony cluster templates/security-operations.yaml -o out/ --workers 8
+
+# Or across a cluster: one controller, any number of workers
+cacophony controller templates/security-operations.yaml --port 8787
+cacophony worker templates/security-operations.yaml \
+    -c http://controller:8787 -o /mnt/shared
+```
+
+```
+progress  100.0%  24,022 / 24,000
+    rate  8,410/s
+  shards  completed 12
+ workers  worker    capabilities             shards  records     rate  state
+          gpu-node  deterministic, image          4    8,000  2,904/s  working
+          cpu-1     deterministic                 4    8,011  2,752/s  working
+          cpu-2     deterministic                 4    8,011  2,754/s  working
+```
+
+A shard is an index range. A worker leases one, generates it, writes
+`entity.part000050000.jsonl`, and says how many records it made. Shards needing
+a GPU are only ever offered to nodes that have one — a shard's requirements are
+read off its compiled generators, and a worker's off its configured providers,
+so nobody declares either.
+
+**The joined output is byte-identical to a single-machine run.** Not by
+careful merging — by construction. Record *n*'s seed is a hash of *n*
+(design document section 75), so record 4,823,913 is the same record on any
+machine, in any order, at any time. Shards tile the entity exactly once, and
+concatenating them in offset order reproduces the same byte stream.
+
+Which makes failure cheap. If a worker dies mid-shard its lease expires, the
+shard is handed to somebody else, and that worker regenerates it from
+scratch — producing exactly the bytes the dead one would have. Tested by
+`kill -9`ing a worker in the middle of a shard: the dataset still matched,
+half-written file and all.
+
 ### The same people, twice
 
 ```bash
@@ -524,6 +570,10 @@ backend/cacophony/
 ├── store/         SQLite metadata: projects, schema revisions, runs, jobs
 ├── observability/ structured logging and run metrics
 ├── providers/     language-model adapters, cache, secrets, provider registry
+├── assets/        the asset store, imaging, audio and document rendering
+├── simulation/    timelines, subject allocation, state folds, scenarios, chaos
+├── live/          rates, sinks and the continuous stream
+├── distributed/   controller, workers, leases, capabilities, assembly
 ├── scenarios/     scenario engine (later phase)
 ├── plugins/       plugin protocol (later phase)
 ├── api/           REST API, the live run feed, and the built Studio

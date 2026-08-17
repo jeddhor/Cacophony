@@ -939,3 +939,117 @@ class TestPropose:
         assert result.exit_code == 2
         # Errors go to stderr, so a piped proposal stays machine-readable.
         assert "no language model" in result.stderr
+
+
+class TestDistributedCommands:
+    """``cluster``, ``controller`` and ``worker`` (sections 84, 95)."""
+
+    def test_cluster_generates_and_joins(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        result = invoke(
+            "cluster",
+            str(TEMPLATES / "corporate-directory.yaml"),
+            "-o",
+            str(out),
+            "-w",
+            "3",
+            "--shard-size",
+            "37",
+            "-n",
+            "150",
+        )
+        assert result.exit_code == 0, result.stdout
+        for entity in ("employee", "device", "location"):
+            lines = (out / f"{entity}.jsonl").read_text(encoding="utf-8").strip().splitlines()
+            assert len(lines) == 150
+        # The parts are gone once they have been joined.
+        assert not list(out.glob("*.part*.jsonl"))
+
+    def test_cluster_output_matches_generate(self, tmp_path: Path) -> None:
+        """The claim, through the two commands a user would actually compare."""
+        single, many = tmp_path / "single", tmp_path / "many"
+        template = str(TEMPLATES / "corporate-directory.yaml")
+
+        assert invoke("generate", template, "-n", "120", "-d", str(single)).exit_code == 0
+        assert (
+            invoke(
+                "cluster", template, "-n", "120", "-o", str(many), "-w", "4", "--shard-size", "29"
+            )
+        ).exit_code == 0
+
+        for entity in ("employee", "device", "location"):
+            assert (single / f"{entity}.jsonl").read_bytes() == (
+                many / f"{entity}.jsonl"
+            ).read_bytes(), entity
+
+    def test_cluster_keeps_parts_when_asked(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        result = invoke(
+            "cluster",
+            str(TEMPLATES / "corporate-directory.yaml"),
+            "-o",
+            str(out),
+            "-f",
+            "parquet",
+            "--no-join",
+            "-n",
+            "60",
+            "--shard-size",
+            "25",
+        )
+        assert result.exit_code == 0, result.stdout
+        assert len(list(out.glob("employee.part*.parquet"))) == 3
+
+    def test_parquet_cannot_be_joined(self, tmp_path: Path) -> None:
+        result = invoke(
+            "cluster",
+            str(TEMPLATES / "corporate-directory.yaml"),
+            "-o",
+            str(tmp_path / "out"),
+            "-f",
+            "parquet",
+            "-n",
+            "10",
+        )
+        assert result.exit_code == 2
+        assert "per-file footer" in result.stderr
+
+    def test_a_database_cannot_be_sharded(self, tmp_path: Path) -> None:
+        result = invoke(
+            "cluster",
+            str(TEMPLATES / "corporate-directory.yaml"),
+            "-o",
+            str(tmp_path / "out"),
+            "-f",
+            "sqlite",
+            "-n",
+            "10",
+        )
+        assert result.exit_code == 2
+        assert "foreign keys would not resolve" in result.stderr
+
+    def test_a_worker_needs_a_reachable_controller(self, tmp_path: Path) -> None:
+        result = invoke(
+            "worker",
+            str(TEMPLATES / "corporate-directory.yaml"),
+            "-c",
+            "http://127.0.0.1:1",  # nothing listens here
+            "-o",
+            str(tmp_path / "out"),
+        )
+        assert result.exit_code == 1
+        assert "unreachable" in result.stderr
+
+    def test_an_unknown_capability_is_refused(self, tmp_path: Path) -> None:
+        result = invoke(
+            "worker",
+            str(TEMPLATES / "corporate-directory.yaml"),
+            "-c",
+            "http://127.0.0.1:1",
+            "-o",
+            str(tmp_path / "out"),
+            "--capabilities",
+            "deterministic,telepathy",
+        )
+        assert result.exit_code == 2
+        assert "telepathy" in result.stderr

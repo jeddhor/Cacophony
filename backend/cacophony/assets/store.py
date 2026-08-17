@@ -170,9 +170,17 @@ class AssetStore:
         *,
         deduplicate: bool = True,
         manifest: bool = True,
+        manifest_name: str | None = None,
         overwrite: bool = False,
     ) -> None:
         self.root = Path(root)
+        #: Which manifest file *this* store appends to. A distributed run
+        #: (section 95) points several nodes at one shared directory, and two
+        #: machines appending to one file over a network filesystem can
+        #: interleave a line. Each node writes ``manifest.<node>.jsonl``
+        #: instead; :meth:`manifest` reads all of them, so a reader cannot tell
+        #: whether the run was distributed.
+        self.manifest_name = manifest_name or MANIFEST_NAME
         #: Identical bytes are stored once. Placeholder portraits and silent
         #: audio are common enough that this is worth doing by default.
         self.deduplicate = deduplicate
@@ -325,7 +333,7 @@ class AssetStore:
             return
         if self._manifest is None:
             try:
-                self._manifest = (self.root / MANIFEST_NAME).open("a", encoding="utf-8")
+                self._manifest = (self.root / self.manifest_name).open("a", encoding="utf-8")
             except OSError as exc:
                 raise OutputError(f"could not open the asset manifest: {exc}") from exc
         self._manifest.write(json.dumps(stored.to_dict(), ensure_ascii=False) + "\n")
@@ -334,15 +342,19 @@ class AssetStore:
     # -- reading ------------------------------------------------------------ #
 
     def manifest(self) -> Iterator[dict[str, Any]]:
-        """Every asset this store has recorded."""
-        path = self.root / MANIFEST_NAME
-        if not path.exists():
-            return
-        with path.open(encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if line:
-                    yield json.loads(line)
+        """Every asset this store has recorded.
+
+        Reads every manifest in the directory, not only this store's, so a
+        directory several nodes wrote into reads back as one run.
+        """
+        stem = Path(MANIFEST_NAME).stem
+        paths = sorted({*self.root.glob(f"{stem}.jsonl"), *self.root.glob(f"{stem}.*.jsonl")})
+        for path in paths:
+            with path.open(encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if line:
+                        yield json.loads(line)
 
     def assets_of(self, entity: str, record_index: int) -> list[dict[str, Any]]:
         """Section 81's question: what belongs to this record?"""
