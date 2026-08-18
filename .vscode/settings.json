@@ -1,0 +1,59 @@
+{
+  // This repository contains, after a full build, roughly five gigabytes of
+  // generated output: `desktop/src-tauri/target` alone is 4.5 GB of Rust
+  // artifacts. VS Code's file watcher does *not* respect .gitignore - only
+  // search does - so without these exclusions it watches every one of those
+  // files, which is a reliable way to have the editor grow until the kernel
+  // kills it.
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/desktop/src-tauri/target/**": true,
+    "**/desktop/.build/**": true,
+    "**/node_modules/**": true,
+    "**/.venv/**": true,
+    "**/__pycache__/**": true,
+    "**/.mypy_cache/**": true,
+    "**/.ruff_cache/**": true,
+    "**/.pytest_cache/**": true,
+    "**/.cacophony/**": true,
+    "**/out/**": true
+  },
+
+  // The same directories are noise in search results. Generated datasets in
+  // particular: a search for "employee" should not match four million records.
+  "search.exclude": {
+    "**/desktop/src-tauri/target": true,
+    "**/desktop/.build": true,
+    "**/node_modules": true,
+    "**/.venv": true,
+    "**/__pycache__": true,
+    "**/.mypy_cache": true,
+    "**/.ruff_cache": true,
+    "**/.pytest_cache": true,
+    "**/.cacophony": true,
+    "**/out": true,
+    "**/frontend/dist": true,
+    "**/backend/cacophony/api/static": true
+  },
+
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.egg-info": true
+  },
+
+  // The interpreter is the project's own virtualenv. Stated explicitly because
+  // this project has a way of ending up with more than one.
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["tests"],
+  "python.analysis.exclude": [
+    "**/desktop/src-tauri/target/**",
+    "**/node_modules/**",
+    "**/out/**"
+  ],
+
+  "[python]": {
+    "editor.rulers": [100]
+  }
+}

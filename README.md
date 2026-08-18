@@ -487,8 +487,13 @@ half-written file and all.
 ### On the desktop
 
 ```bash
-./desktop/build.sh --bundle
+./desktop/build.sh --bundle                              # an installer
+./desktop/src-tauri/target/release/cacophony-desktop     # the window itself
 ```
+
+`cacophony desktop` is the *backend* the window spawns, not the window: run on
+its own it prints a handshake and serves until stdin closes. It says so when a
+person runs it.
 
 A Tauri window hosting the Studio, with the backend as a child process. Section
 41 prefers Tauri to Electron because the application mainly needs to host a web

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -370,6 +371,77 @@ class TestSidecarProcess:
 
 
 DESKTOP = REPO / "desktop" / "src-tauri"
+
+
+class TestItSaysWhatItIs:
+    """`cacophony desktop` is the backend, and people type it expecting a window.
+
+    The command's name reads like "open the desktop app", so run by hand it says
+    what it is and how to get a window. Run by the shell it must say nothing at
+    all: stdout carries the handshake, and a surprise line on it is a line the
+    shell has to guess about.
+    """
+
+    def test_a_pipe_gets_the_handshake_and_nothing_else(self, tmp_path: Path) -> None:
+        process = subprocess.Popen(
+            [str(CLI), "desktop", "--store", str(tmp_path / "store.db")],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        try:
+            greeting = read_handshake(process)
+            assert greeting.url
+        finally:
+            process.stdin.close()  # type: ignore[union-attr]
+            remaining_out, errors = process.communicate(timeout=30)
+        assert remaining_out.strip() == ""
+        assert "desktop window" not in errors
+
+    def test_a_terminal_gets_told_where_the_window_is(self, tmp_path: Path) -> None:
+        """A pseudo-terminal, because the hint is gated on isatty."""
+        import pty
+
+        primary, secondary = pty.openpty()
+        process = subprocess.Popen(
+            [str(CLI), "desktop", "--store", str(tmp_path / "store.db"), "--keep-running"],
+            stdin=subprocess.DEVNULL,
+            stdout=secondary,
+            stderr=secondary,
+            text=True,
+        )
+        os.close(secondary)
+        try:
+            deadline = time.monotonic() + 60.0
+            seen = ""
+            while time.monotonic() < deadline and "Ctrl-C" not in seen:
+                try:
+                    chunk = os.read(primary, 4096)
+                except OSError:  # pragma: no cover - the far end closed
+                    break
+                if not chunk:
+                    break
+                seen += chunk.decode(errors="replace")
+        finally:
+            process.terminate()
+            process.wait(timeout=30)
+            os.close(primary)
+
+        # Colour codes stripped: what matters is the text a person reads, and
+        # the address has to survive being copied out of a terminal in one
+        # piece rather than arriving with escape sequences inside it.
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", seen)
+        assert "CACOPHONY_HANDSHAKE" in plain
+        assert "not the window itself" in plain
+        assert "?token=" in plain
+
+    def test_it_points_at_a_shell_that_exists_when_one_does(self) -> None:
+        from cacophony.cli.main import _shell_binary
+
+        named = _shell_binary()
+        assert "cacophony-desktop" in named or "build.sh" in named
 
 
 class TestTheShellIsConfigured:

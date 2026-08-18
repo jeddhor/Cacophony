@@ -74,7 +74,13 @@ secrets.toml
 /desktop/.build/
 
 # ---- Editors / OS ----
-.vscode/
+# Contents rather than the directory itself: git cannot re-include a file whose
+# parent directory is excluded, and one file here is worth sharing.
+.vscode/*
+# ...the watcher exclusions, which every clone of this repository wants:
+# `desktop/src-tauri/target` is 4.5 GB after a build, VS Code's file watcher
+# ignores .gitignore, and the result is an editor the kernel eventually kills.
+!.vscode/settings.json
 .idea/
 *.swp
 .DS_Store

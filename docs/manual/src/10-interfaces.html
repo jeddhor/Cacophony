@@ -169,6 +169,35 @@ serves the same application <code>cacophony serve</code> serves.</p>
 <pre><code class="language-console">$ ./desktop/build.sh            # a shell that uses `cacophony` from PATH
 $ ./desktop/build.sh --bundle   # an installer, with the backend frozen inside</code></pre>
 
+<h2>Which command opens a window</h2>
+
+<p>Not <code>cacophony desktop</code>. That is the backend half: it prints a
+handshake line and then serves until its stdin closes, which is what a shell
+wants and looks like a hang to a person. The window is the Tauri binary, and it
+spawns <code>cacophony desktop</code> itself.</p>
+
+<pre><code class="language-console">$ ./desktop/src-tauri/target/release/cacophony-desktop   # the window
+$ cacophony desktop                                      # the backend it spawns
+$ cacophony serve                                        # the same thing, in a browser</code></pre>
+
+<p>Run by hand in a terminal the backend says so, and offers an address to open
+in a browser instead &mdash; token included, since <code>/api</code> refuses
+without it:</p>
+
+<pre class="small"><code class="language-console">$ cacophony desktop
+CACOPHONY_HANDSHAKE {"version": 1, "url": "http://127.0.0.1:32781", "token": "ki2NQ…", "pid": 575273}
+
+This is the backend for the desktop window, not the window itself.
+To open one:
+    /home/jason/Cacophony/desktop/src-tauri/target/release/cacophony-desktop
+or open this in a browser - the token is what gets you in:
+    http://127.0.0.1:32781/?token=ki2NQkmGRPfWuozyMTGgmMHnjDpRVAv0Y_2jUCgs-N4
+Ctrl-C to stop.</code></pre>
+
+<p>Only when a person is watching. The shell spawns it with pipes rather than a
+terminal, so it sees nothing but the handshake &mdash; which is the line stdout
+is reserved for either way.</p>
+
 <h2>The handshake</h2>
 
 <pre class="small"><code class="language-console">$ cacophony desktop

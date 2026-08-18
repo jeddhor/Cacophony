@@ -1361,6 +1361,17 @@ CACOPHONY_HANDSHAKE {"version":1,"url":"http://127.0.0.1:41287","token":"…","p
 One line of JSON on stdout, then the server runs. The shell spawns that, reads
 the line, and opens a window at the URL.
 
+**`cacophony desktop` does not open a window** — it is the half the window
+spawns, and by itself it looks like a hang. The window is the Tauri binary:
+
+```bash
+./desktop/src-tauri/target/release/cacophony-desktop
+```
+
+Run by hand in a terminal, the backend says as much and offers its URL and token
+for a browser. Run by the shell, which gives it pipes rather than a terminal, it
+says nothing but the handshake.
+
 | Property | Why |
 |---|---|
 | A port the OS chose | A fixed 8765 collides with the `cacophony serve` already running |

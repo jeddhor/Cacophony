@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Annotated, Any
@@ -1127,6 +1128,25 @@ def models(
         raise typer.Exit(code=1)
 
 
+def _shell_binary() -> str:
+    """The Tauri window's executable, if this looks like a checkout.
+
+    A guess, and an honest one: from an installed wheel there is no shell to
+    point at, so the build script is named instead of a path that does not
+    exist.
+    """
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[3]
+    for candidate in (
+        root / "desktop/src-tauri/target/release/cacophony-desktop",
+        root / "desktop/src-tauri/target/debug/cacophony-desktop",
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return "./desktop/build.sh   (builds it, as desktop/src-tauri/target/debug/cacophony-desktop)"
+
+
 @app.command()
 def desktop(
     store: StoreOpt = None,
@@ -1172,10 +1192,35 @@ def desktop(
         )
         raise typer.Exit(code=2) from exc
 
-    from ..desktop import run_sidecar
+    from ..desktop import Handshake, run_sidecar
 
     configure_logging(log_level)
     store_path = store or (default_store_path(project) if project else default_store_path())
+
+    def explain(handshake: Handshake) -> None:
+        """Say what this is, to the person who typed it expecting a window.
+
+        Only when a human is watching: the shell spawns this with pipes, so
+        stdout is not a terminal and it stays silent. On stderr regardless,
+        because the handshake owns stdout.
+        """
+        if not sys.stdout.isatty():
+            return
+        address = handshake.url + (f"/?token={handshake.token}" if handshake.token else "")
+        error_console.print(
+            "\n[cacophony.muted]This is the backend for the desktop window, not the window "
+            "itself.[/]\n[cacophony.muted]To open one:[/]"
+        )
+        # Printed raw and unwrapped: rich highlights a URL by colouring its
+        # punctuation, which puts escape sequences inside the address, and wraps
+        # long lines - either of which produces something that does not survive
+        # being copied out of a terminal.
+        error_console.print(f"    {_shell_binary()}", highlight=False, soft_wrap=True)
+        error_console.print(
+            "[cacophony.muted]or open this in a browser - the token is what gets you in:[/]"
+        )
+        error_console.print(f"    {address}", highlight=False, soft_wrap=True)
+        error_console.print("[cacophony.muted]Ctrl-C to stop.[/]")
 
     run_sidecar(
         host=host,
@@ -1185,6 +1230,7 @@ def desktop(
         studio=studio,
         watch_parent=not keep_running,
         log_level=log_level,
+        on_ready=explain,
     )
 
 
