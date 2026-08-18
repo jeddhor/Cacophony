@@ -32,6 +32,7 @@ knowing.</p>
     <tr><td class="mono">--historical</td><td>off</td><td>Keep generated timestamps instead of stamping with the wall clock</td></tr>
     <tr><td class="mono">--scenario-cycle SECONDS</td><td><code>3600</code></td><td>How often a scenario window recurs</td></tr>
     <tr><td class="mono">--on-error POLICY</td><td><code>continue</code></td><td><code>continue</code> or <code>abort</code> when a destination rejects records</td></tr>
+    <tr><td class="mono">--validate</td><td>off</td><td>Check records against the schema and report failures; they are delivered either way</td></tr>
     <tr><td class="mono">-q, --quiet</td><td>off</td><td>No dashboard; useful when piping</td></tr>
   </tbody>
 </table>
@@ -65,6 +66,19 @@ knowing.</p>
   seconds. An incident declared at <code>window: {at: 0.62}</code> has no meaning
   in an endless stream, so it happens again each cycle.</li>
 </ul>
+
+<h2>Nothing is validated unless you ask</h2>
+
+<p>A workload generator that stopped mid-load because one record in a million was
+invalid would have failed the test it was running, so <code>stream</code> does
+not check by default &mdash; and <code>--on-failure</code> has no effect here,
+deliberately. <code>--validate</code> turns the checks on: failures are counted
+and reported in the summary, and the records go to the destinations anyway.</p>
+
+<pre><code class="language-console">$ cacophony stream project.yaml -r event=200/s -s 30 --validate -t stdout -q
+  rate            195.5/s of 200.0/s requested
+  validation      77 of 80 failed
+  stdout          80 delivered</code></pre>
 
 <h2>Attainment</h2>
 

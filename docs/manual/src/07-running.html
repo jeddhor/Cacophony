@@ -76,10 +76,11 @@ rather than fidelity.</p>
   <caption>generate options</caption>
   <thead><tr><th>Option</th><th>Default</th><th>Effect</th></tr></thead>
   <tbody>
-    <tr><td class="mono">-n, --records N</td><td>&mdash;</td><td>Override every entity's count</td></tr>
+    <tr><td class="mono">-n, --records N</td><td>&mdash;</td><td>Override every entity's count. Repeatable, and <code>-n ticket=100000</code> overrides one entity</td></tr>
     <tr><td class="mono">--seed N</td><td>project</td><td>Override the project seed</td></tr>
     <tr><td class="mono">-o, --output FORMAT</td><td><code>jsonl</code></td><td>csv, json, jsonl, ndjson, parquet, sql, sqlite</td></tr>
     <tr><td class="mono">-d, --out-dir DIR</td><td><code>out</code></td><td>Destination directory</td></tr>
+    <tr><td class="mono">--output-profile NAME</td><td>&mdash;</td><td>Write a layout declared under <code>outputs:</code> (chapter&nbsp;10)</td></tr>
     <tr><td class="mono">-e, --entity NAME</td><td>all</td><td>Generate one entity</td></tr>
     <tr><td class="mono">--batch-size N</td><td><code>1000</code></td><td>Records per write batch</td></tr>
     <tr><td class="mono">--workers N</td><td><code>4</code></td><td>Entities generated concurrently</td></tr>

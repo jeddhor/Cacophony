@@ -1,19 +1,24 @@
 # Schema reference
 
-The complete project schema as of Phase 2. See [CACOPHONY.md](../CACOPHONY.md)
-for the design rationale and [ROADMAP.md](ROADMAP.md) for what is not built
-yet.
+The complete project schema. See [CACOPHONY.md](../CACOPHONY.md) for the design
+rationale, [ROADMAP.md](ROADMAP.md) for what each delivery phase built, and
+[Cacophony-Manual.pdf](Cacophony-Manual.pdf) for the same material at length.
 
-A project is one YAML or JSON file with up to six top-level keys:
+A project is one YAML or JSON file with up to twelve top-level keys:
 
 ```yaml
 project:        # metadata, seed, locale, provenance mode
 entities:       # the record types to generate
-relationships:  # connections between entities
-providers:      # generation backends
+relationships:  # documentation of connections between entities
+providers:      # generation backends: models, image, speech
+timeline:       # when this project's events happen
 scenarios:      # behavioural overlays
 chaos:          # entropy injection
-outputs:        # output profiles
+quality:        # duplication thresholds worth measuring
+recipes:        # this project's own reusable fragments
+requires:       # what the project needs that it does not carry
+patches:        # edits recorded as rules
+outputs:        # named output profiles
 ```
 
 Only `project` and `entities` are required.
@@ -29,8 +34,23 @@ Only `project` and `entities` are required.
 | `version` | integer | `1` | Schema revision, recorded in provenance |
 | `seed` | integer | `0` | Root of the seed hierarchy |
 | `locale` | string | `en_US` | Default Faker locale |
-| `profile` | enum | `balanced` | `quick_mock`, `balanced`, `high_realism`, `maximum_chaos` |
+| `profile` | enum | `balanced` | `quick_mock`, `balanced`, `high_realism`, `maximum_chaos` — see below |
 | `provenance` | enum | `none` | `none`, `run`, `record`, `field`, `full` |
+
+**What `profile` actually does**, section 77 being ambitious and this being the
+part of it that is built:
+
+| Profile | Effect |
+|---|---|
+| `balanced` *(default)* | Nothing. The baseline. |
+| `quick_mock` | Asks a language model for short, plain answers. |
+| `high_realism` | Asks a language model for specific, plausible detail. |
+| `maximum_chaos` | Turns on the `hostile_qa` chaos preset and 5% edge cases, unless the project or the command line says otherwise. |
+
+The first three touch only the prompts a model is given; they do not change
+which generators are chosen or how much entropy is injected. `maximum_chaos` is
+the one that changes the data, and anything you state explicitly still wins over
+it.
 
 Pin `seed` in any project you intend to reproduce. Leaving it at `0` still
 produces deterministic output, but a schema that states its seed explicitly
@@ -47,7 +67,7 @@ entities:
     description: A person employed by the company.
     primary_key: employee_id
     seed: 991                 # optional: regenerate this entity independently
-    tags: [core]
+    tags: [core]              # free labels, shown by `cacophony plan`
     fields: { ... }
 ```
 
@@ -933,13 +953,58 @@ outputs:
   analytics:
     format: parquet
     path: out/analytics
-    partition_by: [year, month, day]
+    partition_by: [region, opened_on]
+    options: {compression: zstd}
   fixtures:
-    format: jsonl
+    format: csv
     path: out/fixtures
+    entities: [employee]
 ```
 
+```bash
+cacophony generate project.yaml --output-profile analytics
+cacophony generate project.yaml --output-profile fixtures
+```
+
+A profile is a named set of the options `generate` would otherwise take on the
+command line: `format`, `path`, `entities`, `partition_by` and format-specific
+`options`. Naming one selects it; an explicit flag still wins, so
+`--output-profile analytics -d /tmp/scratch` writes the analytics layout
+somewhere else. Two profiles means running the command twice, which is also what
+"the same logical dataset, written two ways" means in practice.
+
+A profile's relative `path:` resolves against the **schema file**, like every
+other path in a project. `--out-dir` is a command-line argument and stays
+relative to where you are standing.
+
 Formats: `csv`, `json`, `jsonl` / `ndjson`, `parquet`, `sqlite`, `sql`.
+
+### `partition_by`
+
+Columns whose values become directories, which is the layout every columnar
+reader already understands:
+
+```text
+out/analytics/employee/region=emea/opened_on=2026-03-01/employee.parquet
+```
+
+One file per distinct combination, opened when the first record needing it
+arrives. Partitioning on a high-cardinality column is how one dataset becomes a
+million tiny files, so a run stops at 512 open partitions and says so;
+`options: {max_partitions: N}` raises it.
+
+Whether the partition columns *also* stay inside the files depends on what the
+format's readers do with them:
+
+- **Parquet** reconstructs them from the directory names, and refuses a
+  directory where they appear in both — *"Field region has incompatible types:
+  string vs dictionary"* — so they are dropped from the files.
+- **JSON Lines, CSV and JSON** have no such convention. Nothing would put the
+  column back, so it is kept.
+
+`options: {drop_partition_columns: false}` overrides either way. `sqlite` and
+`sql` cannot be partitioned and say so: there is one destination for the whole
+project, so there is nothing to divide.
 
 `sqlite` writes one database for the whole project, with every entity as a
 table and every reference as an enforced `FOREIGN KEY`. `sql` writes a portable
@@ -970,7 +1035,8 @@ cacophony validate  project.yaml [--seed N]
 cacophony lint      project.yaml [--strict]
 cacophony plan      project.yaml [--seed N] [--json]
 cacophony preview   project.yaml [-e ENTITY] [-n N] [-c a,b,c] [--offset N] [--json] [--isolate]
-cacophony generate  project.yaml [-n N] [--seed N] [-o FORMAT] [-d DIR] [-e ENTITY]
+cacophony generate  project.yaml [-n N | -n ENTITY=N] [--seed N] [-o FORMAT] [-d DIR]
+                                 [--output-profile NAME] [-e ENTITY]
                                  [--batch-size N] [--provenance MODE]
                                  [--on-failure POLICY] [--drop-invalid] [--no-validate]
                                  [--assets-dir DIR] [--regenerate-assets]
@@ -985,7 +1051,7 @@ cacophony benchmark  project.yaml -m MODEL,MODEL [-e ENTITY] [-n N] [-p PROVIDER
 cacophony stream     project.yaml [-r ENTITY=RATE]... [-t DESTINATION]...
                                   [-s SECONDS] [-n RECORDS] [--from N]
                                   [--batch-size N] [--flush SECONDS]
-                                  [--follow-shape] [--historical]
+                                  [--follow-shape] [--historical] [--validate]
                                   [--scenario-cycle SECONDS] [--on-error POLICY]
 cacophony cluster    project.yaml [-o DIR] [-w WORKERS] [-f FORMAT] [-n N]
                                   [--shard-size N] [--batch-size N]
@@ -1071,6 +1137,12 @@ memory rather than folded over a contiguous block.
 Scenario windows recur over `--scenario-cycle` seconds (default one hour): an
 incident declared at `window: {at: 0.62}` has no meaning in an endless stream,
 so it happens again each cycle.
+
+**Validation is off unless you ask for it.** A workload generator that stopped
+mid-load because one record in a million was invalid would have failed the test
+it was running, so `stream` does not check by default. `--validate` turns the
+checks on; failures are counted and reported in the summary, and the records are
+delivered anyway. `--on-failure` has no effect here, deliberately.
 
 **Attainment.** The dashboard shows the achieved rate against the requested one.
 Below 95% means generation or a destination could not keep up, which is
@@ -1672,9 +1744,10 @@ promise anybody can plan around, so it now means what it says.
 `--no-validate` switches the checking off entirely.
 
 **A run stops at the first invalid record**, so batches already written stay on
-disk and the run is recorded as `failed` with the count it reached. Resuming
-reproduces the failure, because the record is a pure function of its index: the
-fix is the schema, or a policy that says carry on.
+disk and the run is recorded as `failed` with the count it reached. It does not
+offer to resume, because a record is a pure function of its index and the second
+attempt would fail on the same one: the fix is the schema, or a policy that says
+carry on.
 
 **`preview`, `regenerate` and `benchmark` report rather than refuse.** All three
 exist to *show* you a record that should not exist, so an invalid one is the

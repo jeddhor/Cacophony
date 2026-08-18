@@ -180,6 +180,9 @@ def _summarise(stream: LiveStream, out: Any = console) -> None:
             "  [cacophony.warn]attainment      "
             f"{stats.attainment:.1%} - generation or a destination could not keep up[/]"
         )
+    if stream.config.validate:
+        style = "cacophony.warn" if stats.invalid else "cacophony.muted"
+        out.print(f"  [{style}]validation      {stats.invalid:,} of {stats.generated:,} failed[/]")
     for sink in stream.config.sinks:
         detail = sink.describe()
         line = f"  {sink.name:<15} {detail['delivered']:,} delivered"
@@ -237,6 +240,12 @@ def register(app: typer.Typer) -> None:
             "--historical",
             help="Keep generated timestamps instead of stamping events with the wall clock.",
         ),
+        validate: bool = typer.Option(
+            False,
+            "--validate",
+            help="Check records against the schema and report failures. Off by default: "
+            "a workload generator should not stop because one record is invalid.",
+        ),
         scenario_cycle: float = typer.Option(
             3600.0,
             "--scenario-cycle",
@@ -281,6 +290,7 @@ def register(app: typer.Typer) -> None:
             max_records=records,
             start_index=max(0, start),
             live_time=not historical,
+            validate=validate,
             follow_shape=follow_shape,
             on_error=on_error,
             scenario_cycle_seconds=max(1.0, scenario_cycle),

@@ -92,8 +92,20 @@ class RunConfig:
     output_dir: Path = Path("out")
     output_format: str = "jsonl"
     entities: list[str] = field(default_factory=list)
+    #: The ``outputs:`` profile this configuration came from, recorded so a run
+    #: says which layout it wrote (design document section 34).
+    output_profile: str = ""
+    #: Columns whose values become directories: ``year=2026/month=03/``. Empty
+    #: means one file per entity, which is the ordinary case.
+    partition_by: list[str] = field(default_factory=list)
+    #: Format-specific writer options from the profile, e.g. Parquet's
+    #: ``compression``.
+    output_options: dict[str, Any] = field(default_factory=dict)
     #: Override every entity's declared count.
     records: int | None = None
+    #: Override one entity's count, which ``--records ticket=100000`` sets. Takes
+    #: precedence over the blunt form above, so the two can be combined.
+    record_counts: dict[str, int] = field(default_factory=dict)
     seed: int | None = None
 
     validate: bool = True
@@ -135,8 +147,12 @@ class RunConfig:
         return {
             "output_dir": str(self.output_dir),
             "output_format": self.output_format,
+            "output_profile": self.output_profile,
+            "partition_by": list(self.partition_by),
+            "output_options": dict(self.output_options),
             "entities": list(self.entities),
             "records": self.records,
+            "record_counts": dict(self.record_counts),
             "seed": self.seed,
             "validate": self.validate,
             "drop_invalid": self.drop_invalid,
@@ -160,8 +176,14 @@ class RunConfig:
         return cls(
             output_dir=Path(data.get("output_dir", "out")),
             output_format=data.get("output_format", "jsonl"),
+            output_profile=data.get("output_profile", ""),
+            partition_by=list(data.get("partition_by") or []),
+            output_options=dict(data.get("output_options") or {}),
             entities=list(data.get("entities") or []),
             records=data.get("records"),
+            record_counts={
+                str(name): int(count) for name, count in (data.get("record_counts") or {}).items()
+            },
             seed=data.get("seed"),
             validate=bool(data.get("validate", True)),
             drop_invalid=bool(data.get("drop_invalid", False)),

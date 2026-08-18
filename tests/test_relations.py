@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from cacophony.core.errors import GenerationError, SchemaError
+from cacophony.core.errors import GenerationError, SchemaError, ValidationFailedError
 from cacophony.generation.engine import GenerationEngine
 from cacophony.generation.relations import (
     REFERENCE_DISTRIBUTIONS,
@@ -310,7 +310,7 @@ class TestReferences:
         entities = relational_entities()
         entities["login"]["fields"]["employee"]["type"] = "string"
         engine = GenerationEngine(compile_from(entities))
-        with pytest.raises(GenerationError, match="does not identify a record"):
+        with pytest.raises(ValidationFailedError, match="does not identify a record"):
             generate(engine, "login", 1)
 
     def test_a_missing_target_entity_is_a_schema_error(self) -> None:

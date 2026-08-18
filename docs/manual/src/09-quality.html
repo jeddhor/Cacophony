@@ -75,7 +75,8 @@ error EMP-000550 failed validation: email: duplicate value
 and count them, or --no-validate to stop checking.
   run             d7cc055f-d20d-40f9-97d9-8651c9748738
 
-resume with: cacophony resume d7cc055f
+this is a schema problem, not an interrupted run - resuming would fail on the
+same record.
 $ echo $?
 3</code></pre>
 
@@ -84,9 +85,9 @@ completed stay on disk and the run is recorded as <code>failed</code> with the
 count it reached &mdash; here the collision came at record 550 of a
 thousand-record batch, so nothing had been written yet.</p>
 
-<p>Resuming is offered because that is what a failed run gets, and here it will
-fail at the same record: a record is a pure function of its index, so the second
-attempt produces the same duplicate. The fix is the schema &mdash; that
+<p>It does not offer to resume, and that is the point of telling you which kind
+of failure this was: a record is a pure function of its index, so the second
+attempt would fail on the same one. The fix is the schema &mdash; that
 <code>unique</code> email cannot be drawn a hundred thousand times from a list of
 first and last names &mdash; or a policy that says carry on.</p>
 

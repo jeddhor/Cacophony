@@ -177,8 +177,30 @@ Requires Python 3.12+.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev,parquet]"
+python -m pip install -e ".[dev,parquet]"
 ```
+
+`python -m pip` rather than bare `pip`, deliberately. Not every virtualenv has a
+`pip` executable in it — one made by [uv](https://docs.astral.sh/uv/) does
+not — and when there is none, the shell walks past the environment and
+finds the system one instead, which then refuses to install anything with a
+message about an externally-managed environment. `python -m pip` asks the
+interpreter you just activated, which is the one you meant.
+
+Using uv, which needs no pip at all:
+
+```bash
+uv venv && uv pip install -e ".[dev,parquet]"
+```
+
+If `.venv` already exists, delete it before creating a new one. Running
+`python -m venv .venv` over an existing environment *updates* it in place: it
+rewrites `pyvenv.cfg` and the activate scripts while leaving the old
+interpreter and packages where they are, which produces an environment that
+claims one Python version and runs another.
+
+The extras are `api` (the server and the Studio), `parquet`, `keyring`,
+`kafka` and `dev`. None is needed to generate data to a file.
 
 ## Try it
 

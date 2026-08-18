@@ -29,7 +29,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ..core.context import GenerationContext
-from ..core.errors import CacophonyError, GenerationError, SchemaError
+from ..core.errors import (
+    CacophonyError,
+    GenerationError,
+    SchemaError,
+    ValidationFailedError,
+)
 from ..core.provenance import FieldProvenance, ProvenanceMode, RecordProvenance
 from ..core.record import GeneratedRecord
 from ..core.seeds import SeedChain
@@ -45,6 +50,11 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = ["EntityStats", "FailurePolicy", "GenerationEngine"]
 
 DEFAULT_BATCH_SIZE = 1_000
+
+#: What ``profile: maximum_chaos`` sets ``--edge-cases`` to when nothing else
+#: has. High enough to find something, low enough that the dataset is still
+#: mostly the dataset you asked for.
+PROFILE_EDGE_CASES = 0.05
 
 
 class FailurePolicy:
@@ -222,6 +232,12 @@ class GenerationEngine:
         # but awkward value. Distinct from chaos, which produces illegal ones:
         # an application that mishandles an edge case has a bug, while one that
         # rejects chaos is doing its job.
+        # The other half of section 77's `maximum_chaos`: a fraction of records
+        # get a legal-but-awkward value as well as the damage. Resolved here
+        # rather than in the CLI so that the API, the coordinator and a
+        # distributed worker all mean the same thing by the profile.
+        if edge_cases <= 0 and compiled.spec.project.profile == "maximum_chaos":
+            edge_cases = PROFILE_EDGE_CASES
         self.edge_cases = min(1.0, max(0.0, float(edge_cases)))
         self.edge_categories = list(edge_categories or [])
         self._edge_injectors: dict[str, Any] = {}
@@ -915,7 +931,7 @@ class GenerationEngine:
         self._reject(entity, index, record, result, stats)
 
         if policy == FailurePolicy.ABORT:
-            raise GenerationError(self._invalid_message(entity, index, record, result))
+            raise ValidationFailedError(self._invalid_message(entity, index, record, result))
         if policy == FailurePolicy.SKIP:
             validator.forget_last()
             return None
@@ -969,6 +985,38 @@ class GenerationEngine:
             "--on-failure report to write them and count them, "
             "or --no-validate to stop checking."
         )
+
+    async def audit(
+        self,
+        entity: CompiledEntity,
+        records: Sequence[GeneratedRecord],
+        indices: Sequence[int] | None = None,
+    ) -> int:
+        """Validate records that were produced outside :meth:`stream`.
+
+        The live stream generates chunks directly - it decides for itself how
+        many records are due this tick - so this is where its records meet the
+        validator, and it returns how many failed.
+
+        Always reporting, never enforcing, whatever the failure policy says: a
+        workload generator that stopped mid-load because one record in a million
+        was invalid would have failed the test it was running.
+        """
+        if not self.validate_records:
+            return 0
+
+        validator = self._validator_for(entity)
+        stats = self._stats_for(entity.name)
+        positions = list(indices or range(len(records)))
+        failed = 0
+        for position, record in zip(positions, records, strict=False):
+            result = validator.validate(record)
+            if result.was_repaired:
+                stats.repaired += 1
+            if not result.ok:
+                failed += 1
+                self._reject(entity, position, record, result, stats)
+        return failed
 
     async def generate_batch(
         self, entity_name: str, count: int, *, offset: int = 0

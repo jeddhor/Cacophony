@@ -636,6 +636,14 @@ class ProjectSpec(_Base):
         for name, output in self.outputs.items():
             if not output.name:
                 output.name = name
+        if self.project.profile == "maximum_chaos" and not self.chaos.is_enabled():
+            # Section 77 says this profile means "heavy entropy injection and
+            # edge cases". It used to mean nothing at all, which made it the one
+            # setting in the schema that read as a promise and was decoration.
+            # Anything stated explicitly still wins, because a preset is a
+            # starting point rather than an override.
+            self.chaos.preset = "hostile_qa"
+
         for index, relationship in enumerate(self.relationships):
             if not relationship.name:
                 relationship.name = f"{relationship.from_entity}_{relationship.to_entity}_{index}"

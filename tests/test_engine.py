@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from cacophony.core.errors import GenerationError
+from cacophony.core.errors import GenerationError, ValidationFailedError
 from cacophony.core.provenance import ProvenanceMode
 from cacophony.generation.engine import FailurePolicy, GenerationEngine
 from helpers import compile_from
@@ -257,12 +257,12 @@ class TestValidationIntegration:
         is planning around this.
         """
         engine = GenerationEngine(compile_from(self.BAD))
-        with pytest.raises(GenerationError, match="failed validation"):
+        with pytest.raises(ValidationFailedError, match="failed validation"):
             engine.preview("e", 10)
 
     def test_the_abort_message_names_the_record_and_the_way_out(self) -> None:
         engine = GenerationEngine(compile_from(self.BAD))
-        with pytest.raises(GenerationError) as caught:
+        with pytest.raises(ValidationFailedError) as caught:
             engine.preview("e", 10)
         message = str(caught.value)
         assert "e#0" in message

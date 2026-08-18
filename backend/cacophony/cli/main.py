@@ -245,6 +245,7 @@ def plan(
                 if step.depends_on
                 else ""
             )
+            + (f"  [cacophony.muted]tags {', '.join(step.tags)}[/]" if step.tags else "")
         )
         entity = compiled.entity(step.entity)
         for compiled_field in entity.fields:
@@ -423,6 +424,79 @@ def _print_preview_table(
         )
 
 
+def _profile_dir(compiled: Any, profile: Any) -> Path:
+    """Where a profile writes.
+
+    A relative path inside a project resolves against the *schema file*, the
+    same rule every other path in a project follows - a lookup table, a document
+    template. Without it a project would only work from the directory it lives
+    in, which is the thing that rule exists to prevent. ``--out-dir`` is a
+    command-line argument and stays relative to where you are standing.
+    """
+    if profile is None:
+        return Path("out")
+    declared = Path(profile.path)
+    if declared.is_absolute() or compiled.spec.base_dir is None:
+        return declared
+    return Path(compiled.spec.base_dir) / declared
+
+
+def _record_counts(compiled: Any, values: list[str] | None) -> tuple[int | None, dict[str, int]]:
+    """Parse ``-n 1000`` and ``-n ticket=100000``, which mean different things.
+
+    The bare form overrides *every* entity, which is the blunt instrument people
+    reach for when they want a smoke test and are then surprised by a hundred
+    thousand employees as well as a hundred thousand tickets. The named form
+    exists so that the surprise is avoidable without editing the schema.
+    """
+    every: int | None = None
+    per_entity: dict[str, int] = {}
+    for value in values or []:
+        name, separator, count = value.partition("=")
+        if not separator:
+            name, count = "", value
+        try:
+            number = int(count)
+        except ValueError:
+            error_console.print(
+                f"[cacophony.error]error[/] --records wants a number or ENTITY=NUMBER, "
+                f"not '{value}'."
+            )
+            raise typer.Exit(code=2) from None
+        if not name:
+            every = number
+            continue
+        if name not in compiled.entities:
+            error_console.print(
+                f"[cacophony.error]error[/] no entity '{name}'. "
+                f"Known entities: {', '.join(compiled.entity_order)}"
+            )
+            raise typer.Exit(code=2)
+        per_entity[name] = number
+    return every, per_entity
+
+
+def _output_profile(compiled: Any, name: str | None) -> Any:
+    """Look up a declared output profile, or exit naming the ones there are.
+
+    Section 34's ``outputs:`` block was parsed and ignored for a long time, so
+    an unknown name has to be an error rather than a shrug: silently writing the
+    default layout is exactly the failure the block used to have.
+    """
+    declared = compiled.spec.outputs
+    if name is None:
+        return None
+    profile = declared.get(name)
+    if profile is None:
+        known = ", ".join(sorted(declared)) or "none are declared"
+        error_console.print(
+            f"[cacophony.error]error[/] no output profile '{name}'. "
+            f"Declared under 'outputs:': {known}"
+        )
+        raise typer.Exit(code=2)
+    return profile
+
+
 # --------------------------------------------------------------------------- #
 # generate
 # --------------------------------------------------------------------------- #
@@ -432,15 +506,28 @@ def _print_preview_table(
 def generate(
     project: ProjectArg,
     records: Annotated[
-        int | None, typer.Option("--records", "-n", help="Override every entity's record count.")
+        list[str] | None,
+        typer.Option(
+            "--records",
+            "-n",
+            help="Record count: N for every entity, or ENTITY=N for one. Repeatable.",
+        ),
     ] = None,
     seed: SeedOpt = None,
     output: Annotated[
-        str, typer.Option("--output", "-o", help=f"One of: {', '.join(sorted(OUTPUT_FORMATS))}.")
-    ] = "jsonl",
-    out_dir: Annotated[Path, typer.Option("--out-dir", "-d", help="Destination directory.")] = Path(
-        "out"
-    ),
+        str | None,
+        typer.Option("--output", "-o", help=f"One of: {', '.join(sorted(OUTPUT_FORMATS))}."),
+    ] = None,
+    out_dir: Annotated[
+        Path | None, typer.Option("--out-dir", "-d", help="Destination directory.")
+    ] = None,
+    output_profile: Annotated[
+        str | None,
+        typer.Option(
+            "--output-profile",
+            help="Write the layout named under 'outputs:' in the project (section 34).",
+        ),
+    ] = None,
     entity: EntityOpt = None,
     batch_size: Annotated[
         int, typer.Option("--batch-size", help="Records per write batch.")
@@ -529,11 +616,19 @@ def generate(
         )
         raise typer.Exit(code=2)
 
+    profile = _output_profile(compiled, output_profile)
+    every, per_entity = _record_counts(compiled, records)
+
     config = build_run_config(
-        out_dir=out_dir,
-        output=output,
+        # An explicit flag beats the profile, and the profile beats the default,
+        # so `--output-profile analytics -d /tmp/here` writes the analytics
+        # layout where you said rather than where the project said.
+        out_dir=out_dir or _profile_dir(compiled, profile),
+        output=output or (profile.format if profile is not None else "jsonl"),
+        profile=profile,
         entity=entity,
-        records=records,
+        records=every,
+        record_counts=per_entity,
         seed=seed,
         no_validate=no_validate,
         drop_invalid=drop_invalid,
@@ -573,13 +668,22 @@ def generate(
     _banner("generate", compiled.name)
     if chosen_world is not None:
         console.print(f"[cacophony.muted]world[/] {chosen_world.name}")
-    console.print(f"[cacophony.muted]seed[/] {compiled.seed}   [cacophony.muted]format[/] {output}")
-    console.print(f"[cacophony.muted]output[/] {out_dir.resolve()}")
+    console.print(
+        f"[cacophony.muted]seed[/] {compiled.seed}   "
+        f"[cacophony.muted]format[/] {config.output_format}"
+        + (f"   [cacophony.muted]profile[/] {config.output_profile}" if profile else "")
+        + (
+            f"   [cacophony.muted]partitioned by[/] {', '.join(config.partition_by)}"
+            if config.partition_by
+            else ""
+        )
+    )
+    console.print(f"[cacophony.muted]output[/] {config.output_dir.resolve()}")
 
     # Deliberate damage and an enforced schema cannot both be had. Say which
     # one gave way, here, rather than leaving it to be discovered later from a
     # constraint that is not in the database.
-    if output.lower() in ("sqlite", "sql") and compiled.spec.chaos.is_enabled():
+    if config.output_format.lower() in ("sqlite", "sql") and compiled.spec.chaos.is_enabled():
         console.print(
             "[cacophony.warn]note[/] chaos is enabled, so the tables carry no keys, "
             "uniqueness or NOT NULL - the damage would be rejected by the constraints "

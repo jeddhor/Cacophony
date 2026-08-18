@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..core.errors import CacophonyError, GenerationError
+from ..core.errors import CacophonyError, GenerationError, ValidationFailedError
 from ..core.interfaces import OutputWriter
 from ..generation.engine import GenerationEngine
 from ..generation.runtime import GenerationRuntime
@@ -112,6 +112,10 @@ class RunOutcome:
     files: list[str]
     summary: dict[str, Any]
     error: str | None = None
+    #: Whether the run stopped because a record failed validation rather than
+    #: because something went wrong with the machinery. The two need different
+    #: advice: one is fixed in the schema, the other by resuming.
+    validation_failure: bool = False
 
     @property
     def ok(self) -> bool:
@@ -195,6 +199,9 @@ class Conductor:
         self.files: list[str] = []
         self.state = RunState.QUEUED
         self.error: str | None = None
+        #: Set when the run stopped on a record that failed validation, so the
+        #: caller can offer the advice that helps rather than "try resuming".
+        self._validation_failure = False
         #: Set by :meth:`resume`; a resumed run reports differently and skips
         #: the planning step because its jobs come from the store.
         self._resumed = False
@@ -256,6 +263,10 @@ class Conductor:
         return [name for name in self.compiled.entity_order if name in set(selected)]
 
     def _count_for(self, entity: CompiledEntity) -> int:
+        """How many records this entity gets: named, blunt, or as declared."""
+        named = self.config.record_counts.get(entity.name)
+        if named is not None:
+            return named
         return self.config.records if self.config.records is not None else entity.count
 
     # -- planning ----------------------------------------------------------- #
@@ -413,6 +424,10 @@ class Conductor:
             await self._run_jobs()
         except RunAbortedError:
             self._finish(RunState.CANCELLED, "cancelled by request")
+        except ValidationFailedError as exc:
+            self.error = str(exc)
+            self._validation_failure = True
+            self._finish(RunState.FAILED, self.error)
         except CacophonyError as exc:
             self.error = str(exc)
             self._finish(RunState.FAILED, self.error)
@@ -432,6 +447,7 @@ class Conductor:
             files=list(self.files),
             summary=self.summary(),
             error=self.error,
+            validation_failure=self._validation_failure,
         )
 
     async def _run_jobs(self) -> None:
@@ -645,6 +661,10 @@ class Conductor:
             provenance=self.config.provenance,
             append=resuming,
             part=part,
+            # Section 34's output profiles. Empty unless a profile asked for
+            # partitioning, in which case the path above becomes a directory.
+            partition_by=self.config.partition_by,
+            **self.config.output_options,
             # Only the database writers use these; create_writer drops them for
             # the formats that would reject the keyword.
             entity=entity,
@@ -663,6 +683,10 @@ class Conductor:
         project, so a SQLite run produces a database rather than a directory
         of unrelated files.
         """
+        if self.config.partition_by:
+            # A partitioned entity owns a directory rather than a file, and the
+            # partition columns name the directories inside it.
+            return Path(self.config.output_dir) / entity
         return output_path_for(
             self.config.output_dir,
             entity,

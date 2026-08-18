@@ -19,6 +19,7 @@ from __future__ import annotations
 import csv
 import json
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -35,8 +36,16 @@ __all__ = [
     "JsonLinesWriter",
     "JsonWriter",
     "ParquetWriter",
+    "PartitionedWriter",
     "align_to_records",
+    "count_records",
 ]
+
+#: How many partition directories one run may hold open before it is asked to
+#: reconsider. Each one is a file handle and, for Parquet, a buffered row group;
+#: partitioning on a high-cardinality column is the classic way to turn one
+#: dataset into a million tiny files.
+MAX_OPEN_PARTITIONS = 512
 
 
 class FileWriter(OutputWriter):
@@ -270,6 +279,159 @@ class ParquetWriter(FileWriter):
 # --------------------------------------------------------------------------- #
 
 
+class PartitionedWriter(OutputWriter):
+    """Writes one dataset into a tree of directories keyed by column values.
+
+    ``partition_by: [year, month]`` produces the layout every columnar reader
+    already understands::
+
+        out/analytics/employee/year=2026/month=03/employee.parquet
+
+    One child writer per distinct combination, opened when the first record
+    needing it arrives and closed with the parent.
+
+    Whether the partition columns also stay *inside* the files depends on what
+    the format's readers do with them, which is not a matter of taste:
+
+    * Parquet is a dataset format with a partitioning convention, and its
+      readers reconstruct those columns from the directory names. Leaving them
+      in the files as well makes ``pyarrow`` refuse the directory outright -
+      "Field region has incompatible types: string vs dictionary" - so they are
+      dropped.
+    * JSON Lines, CSV and JSON have no such convention. Nothing puts the column
+      back, so dropping it would lose data every time somebody concatenated the
+      files, and it is kept.
+
+    ``drop_partition_columns`` in the profile's options overrides either way.
+
+    Never appendable. A resumed run therefore writes new part files inside each
+    partition, which readers accept, and which avoids having to work out how far
+    through *each* partition the previous attempt got.
+    """
+
+    format = "partitioned"
+    extension = ""
+    appendable = False
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        fmt: str,
+        partition_by: Sequence[str],
+        entity: str = "records",
+        max_partitions: int = MAX_OPEN_PARTITIONS,
+        **options: Any,
+    ) -> None:
+        if not partition_by:
+            raise OutputError("a partitioned writer needs at least one column to partition by")
+        self.path = Path(path)
+        self.fmt = fmt
+        self.partition_by = list(partition_by)
+        self.entity = entity
+        self.max_partitions = max_partitions
+        self.drop_partition_columns = bool(
+            options.pop("drop_partition_columns", fmt.lower() == "parquet")
+        )
+        if self.drop_partition_columns and options.get("columns"):
+            options["columns"] = [
+                column for column in options["columns"] if column not in self.partition_by
+            ]
+        self.options = options
+        self.records_written = 0
+        self._children: dict[tuple[str, ...], OutputWriter] = {}
+
+    async def open(self) -> None:
+        try:
+            self.path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise OutputError(f"could not create {self.path}: {exc}") from exc
+
+    async def write_batch(self, records: Sequence[GeneratedRecord]) -> None:
+        if not records:
+            return
+
+        grouped: dict[tuple[str, ...], list[GeneratedRecord]] = {}
+        for record in records:
+            grouped.setdefault(self._key(record), []).append(record)
+
+        for key, group in grouped.items():
+            writer = self._children.get(key)
+            if writer is None:
+                if len(self._children) >= self.max_partitions:
+                    raise OutputError(
+                        f"partitioning by {', '.join(self.partition_by)} produced more than "
+                        f"{self.max_partitions} partitions. Partition on a column with few "
+                        "distinct values - a date part rather than a timestamp - or raise "
+                        "max_partitions in the output profile's options."
+                    )
+                writer = await self._open_child(key)
+                self._children[key] = writer
+            await writer.write_batch([self._shed(record) for record in group])
+        self.records_written += len(records)
+
+    async def close(self) -> None:
+        for writer in self._children.values():
+            await writer.close()
+        self._children.clear()
+
+    def describe(self) -> str:
+        return f"{self.fmt}:{self.path}/{'/'.join(f'{c}=*' for c in self.partition_by)}"
+
+    # -- internals ---------------------------------------------------------- #
+
+    def _shed(self, record: GeneratedRecord) -> GeneratedRecord:
+        """The record as the child writer should see it.
+
+        A copy rather than a mutation: the record belongs to the engine, and a
+        writer that emptied a column would be a surprising thing for the next
+        stage to meet.
+        """
+        if not self.drop_partition_columns:
+            return record
+        return replace(
+            record,
+            values={
+                name: value
+                for name, value in record.values.items()
+                if name not in self.partition_by
+            },
+        )
+
+    def _key(self, record: GeneratedRecord) -> tuple[str, ...]:
+        return tuple(_partition_value(record.values.get(column)) for column in self.partition_by)
+
+    async def _open_child(self, key: tuple[str, ...]) -> OutputWriter:
+        from . import OUTPUT_FORMATS, create_writer
+
+        directory = self.path
+        for column, value in zip(self.partition_by, key, strict=True):
+            directory = directory / f"{column}={value}"
+
+        writer_class = OUTPUT_FORMATS[self.fmt]
+        child = create_writer(
+            self.fmt,
+            directory / f"{self.entity}{writer_class.extension}",
+            **self.options,
+        )
+        await child.open()
+        return child
+
+
+def _partition_value(value: Any) -> str:
+    """A directory-safe rendering of a partition key.
+
+    Dates become their ISO form and everything else its string form, with the
+    characters a path cannot carry replaced. A null is ``__null__`` rather than
+    an empty directory name, because ``year=/`` is not a path.
+    """
+    if value is None:
+        return "__null__"
+    text = value.isoformat() if hasattr(value, "isoformat") else str(value)
+    safe = "".join("_" if character in '/\\:*?"<>|' else character for character in text)
+    return safe.strip() or "__empty__"
+
+
 def align_to_records(path: Path, records: int, fmt: str) -> int:
     """Trim a line-oriented file to exactly ``records`` records.
 
@@ -311,6 +473,34 @@ def align_to_records(path: Path, records: int, fmt: str) -> int:
         with path.open("r+b") as handle:
             handle.truncate(offset)
     return kept
+
+
+def count_records(path: Path, fmt: str) -> int | None:
+    """How many records a finished file holds, without changing it.
+
+    ``align_to_records`` trims; this only counts, which is what a partitioned
+    directory needs - there is nothing to trim there, because a partitioned
+    writer is not appendable. Returns None when counting would cost more than
+    trusting the checkpoint.
+    """
+    if not path.exists():
+        return 0
+
+    writer_class = _APPENDABLE.get(fmt.lower())
+    if writer_class is not None:
+        header_lines = 1 if writer_class is CsvWriter else 0
+        with path.open("rb") as handle:
+            complete = sum(1 for line in handle if line.endswith(b"\n"))
+        return max(0, complete - header_lines)
+
+    if fmt.lower() == "parquet":
+        try:
+            import pyarrow.parquet as pq
+
+            return int(pq.ParquetFile(str(path)).metadata.num_rows)
+        except Exception:  # pragma: no cover - a corrupt or unreadable footer
+            return None
+    return None
 
 
 def _part_path(path: Path, part: int | None) -> Path:

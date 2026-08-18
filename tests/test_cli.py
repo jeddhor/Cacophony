@@ -1053,3 +1053,135 @@ class TestDistributedCommands:
         )
         assert result.exit_code == 2
         assert "telepathy" in result.stderr
+
+
+class TestOutputProfiles:
+    """Section 34's ``outputs:`` block, which was parsed and ignored for a while."""
+
+    PROJECT = """
+project:
+  name: Profiles
+  seed: 4
+entities:
+  reading:
+    count: 30
+    tags: [telemetry]
+    fields:
+      id: {type: integer, generator: sequence}
+      site:
+        type: enum
+        generator: weighted
+        choices: {north: 1, south: 1}
+outputs:
+  analytics:
+    format: jsonl
+    path: out/analytics
+    partition_by: [site]
+  fixtures:
+    format: csv
+    path: out/fixtures
+"""
+
+    def _project(self, tmp_path: Path) -> Path:
+        path = tmp_path / "profiles.yaml"
+        path.write_text(self.PROJECT, encoding="utf-8")
+        return path
+
+    def test_a_profile_chooses_the_format_and_the_path(self, tmp_path: Path) -> None:
+        """And its relative path resolves against the schema, as every path does."""
+        project = self._project(tmp_path)
+        result = invoke("generate", str(project), "--output-profile", "fixtures")
+        assert result.exit_code == 0, result.stdout
+        assert (tmp_path / "out" / "fixtures" / "reading.csv").is_file()
+
+    def test_partition_by_builds_the_directories(self, tmp_path: Path) -> None:
+        project = self._project(tmp_path)
+        result = invoke("generate", str(project), "--output-profile", "analytics")
+        assert result.exit_code == 0, result.stdout
+        root = tmp_path / "out" / "analytics" / "reading"
+        assert sorted(child.name for child in root.iterdir()) == ["site=north", "site=south"]
+
+    def test_an_explicit_flag_beats_the_profile(self, tmp_path: Path) -> None:
+        project = self._project(tmp_path)
+        elsewhere = tmp_path / "elsewhere"
+        result = invoke(
+            "generate", str(project), "--output-profile", "fixtures", "-d", str(elsewhere)
+        )
+        assert result.exit_code == 0, result.stdout
+        assert (elsewhere / "reading.csv").is_file()
+
+    def test_an_unknown_profile_names_the_ones_there_are(self, tmp_path: Path) -> None:
+        project = self._project(tmp_path)
+        result = invoke("generate", str(project), "--output-profile", "nope")
+        assert result.exit_code == 2
+        assert "analytics, fixtures" in result.stderr
+
+    def test_without_a_profile_nothing_changes(self, tmp_path: Path) -> None:
+        project = self._project(tmp_path)
+        result = invoke("generate", str(project), "-d", str(tmp_path / "plain"))
+        assert result.exit_code == 0, result.stdout
+        assert (tmp_path / "plain" / "reading.jsonl").is_file()
+
+    def test_tags_reach_the_plan(self, tmp_path: Path) -> None:
+        """They were accepted and dropped; the manual claimed otherwise."""
+        result = invoke("plan", str(self._project(tmp_path)), "--json")
+        assert result.exit_code == 0, result.stdout
+        assert json.loads(result.stdout)["steps"][0]["tags"] == ["telemetry"]
+
+
+class TestRecordCounts:
+    PROJECT = """
+project: {name: Counts, seed: 9}
+entities:
+  parent:
+    count: 6
+    primary_key: parent_id
+    fields:
+      parent_id: {type: integer, generator: sequence}
+  child:
+    count: 50
+    fields:
+      child_id: {type: integer, generator: sequence}
+      parent: {generator: reference, entity: parent}
+"""
+
+    def _project(self, tmp_path: Path) -> Path:
+        path = tmp_path / "counts.yaml"
+        path.write_text(self.PROJECT, encoding="utf-8")
+        return path
+
+    def _lines(self, path: Path) -> int:
+        return len(path.read_text(encoding="utf-8").strip().splitlines())
+
+    def test_a_named_count_leaves_the_others_alone(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        result = invoke("generate", str(self._project(tmp_path)), "-n", "child=12", "-d", str(out))
+        assert result.exit_code == 0, result.stdout
+        assert self._lines(out / "child.jsonl") == 12
+        assert self._lines(out / "parent.jsonl") == 6
+
+    def test_a_bare_count_still_overrides_everything(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        result = invoke("generate", str(self._project(tmp_path)), "-n", "4", "-d", str(out))
+        assert result.exit_code == 0, result.stdout
+        assert self._lines(out / "child.jsonl") == 4
+        assert self._lines(out / "parent.jsonl") == 4
+
+    def test_a_named_count_beats_the_bare_one(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        result = invoke(
+            "generate", str(self._project(tmp_path)), "-n", "4", "-n", "child=9", "-d", str(out)
+        )
+        assert result.exit_code == 0, result.stdout
+        assert self._lines(out / "child.jsonl") == 9
+        assert self._lines(out / "parent.jsonl") == 4
+
+    def test_an_unknown_entity_is_refused(self, tmp_path: Path) -> None:
+        result = invoke("generate", str(self._project(tmp_path)), "-n", "ghost=5")
+        assert result.exit_code == 2
+        assert "no entity 'ghost'" in result.stderr
+
+    def test_something_that_is_not_a_number_is_refused(self, tmp_path: Path) -> None:
+        result = invoke("generate", str(self._project(tmp_path)), "-n", "lots")
+        assert result.exit_code == 2
+        assert "ENTITY=NUMBER" in result.stderr

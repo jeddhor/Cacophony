@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from cacophony.core.errors import GenerationError
+from cacophony.core.errors import GenerationError, ValidationFailedError
 from cacophony.core.provenance import ProvenanceMode
 from cacophony.generation.engine import GenerationEngine
 from cacophony.generation.runtime import GenerationRuntime
@@ -344,7 +344,7 @@ class TestUnavailableProvider:
         engine, _, _ = build(
             provider_config={"failure_rate": 1.0}, entities=self._unreachable("null")
         )
-        with pytest.raises(GenerationError, match="not nullable"):
+        with pytest.raises(ValidationFailedError, match="not nullable"):
             engine.preview("ticket", 3)
 
     def test_an_unreachable_provider_is_asked_once(self) -> None:

@@ -182,3 +182,115 @@ def test_round_trip_is_stable_across_runs(tmp_path) -> None:
         "jsonl", tmp_path / "b.jsonl", GenerationEngine(compiled).preview("employee", 20), columns
     )
     assert first.read_bytes() == second.read_bytes()
+
+
+class TestPartitionedOutput:
+    """Section 34's ``partition_by``: one dataset, a tree of directories."""
+
+    @staticmethod
+    def _write(fmt, path, records, columns, **options):
+        return write(fmt, path, records, columns, partition_by=["active"], **options)
+
+    def test_a_directory_per_distinct_value(self, records, tmp_path) -> None:
+        compiled, rows = records
+        root = tmp_path / "employee"
+        self._write("jsonl", root, rows, compiled.entity("employee").field_order)
+
+        partitions = sorted(child.name for child in root.iterdir())
+        assert partitions == ["active=False", "active=True"]
+        written = sum(
+            len(part.read_text(encoding="utf-8").strip().splitlines())
+            for part in root.rglob("*.jsonl")
+        )
+        assert written == 40
+
+    def test_text_formats_keep_the_partition_column(self, records, tmp_path) -> None:
+        """Nothing puts it back for JSON Lines, so removing it would lose data."""
+        compiled, rows = records
+        root = tmp_path / "employee"
+        self._write("jsonl", root, rows, compiled.entity("employee").field_order)
+
+        line = next(iter(root.rglob("*.jsonl"))).read_text(encoding="utf-8").splitlines()[0]
+        assert "active" in json.loads(line)
+
+    def test_parquet_drops_it_so_the_dataset_reads_back(self, records, tmp_path) -> None:
+        """The reader reconstructs it from the path, and refuses both at once.
+
+        Leaving the column in the files as well produced "Field active has
+        incompatible types: string vs dictionary" from PyArrow's dataset reader,
+        which is the whole partitioned directory being unreadable.
+        """
+        pq = pytest.importorskip("pyarrow.parquet")
+        compiled, rows = records
+        root = tmp_path / "employee"
+        self._write("parquet", root, rows, compiled.entity("employee").field_order)
+
+        table = pq.read_table(str(root))
+        assert table.num_rows == 40
+        assert "active" in table.column_names
+
+    def test_the_convention_can_be_overridden(self, records, tmp_path) -> None:
+        pytest.importorskip("pyarrow.parquet")
+        compiled, rows = records
+        root = tmp_path / "employee"
+        self._write(
+            "parquet",
+            root,
+            rows,
+            compiled.entity("employee").field_order,
+            drop_partition_columns=False,
+        )
+        import pyarrow.parquet as pq
+
+        one = next(iter(root.rglob("*.parquet")))
+        assert "active" in pq.ParquetFile(str(one)).schema.names
+
+    def test_nulls_get_a_name_a_path_can_carry(self, tmp_path) -> None:
+        compiled = compile_from(
+            {
+                "e": {
+                    "count": 4,
+                    "fields": {
+                        "n": {"type": "integer", "generator": "sequence"},
+                        "maybe": {"generator": "null", "nullable": True},
+                    },
+                }
+            }
+        )
+        rows = GenerationEngine(compiled, validate=False).preview("e", 4)
+        root = tmp_path / "e"
+        write("jsonl", root, rows, ["n", "maybe"], partition_by=["maybe"])
+        assert [child.name for child in root.iterdir()] == ["maybe=__null__"]
+
+    def test_too_many_partitions_is_refused_with_advice(self, records, tmp_path) -> None:
+        """Partitioning on a high-cardinality column makes a million tiny files."""
+        compiled, rows = records
+        with pytest.raises(OutputError, match="more than 4 partitions"):
+            write(
+                "jsonl",
+                tmp_path / "employee",
+                rows,
+                compiled.entity("employee").field_order,
+                partition_by=["employee_id"],
+                max_partitions=4,
+            )
+
+    def test_a_single_file_format_cannot_be_partitioned(self, records, tmp_path) -> None:
+        compiled, rows = records
+        with pytest.raises(OutputError, match="nothing to partition"):
+            write(
+                "sqlite",
+                tmp_path / "e.db",
+                rows,
+                compiled.entity("employee").field_order,
+                partition_by=["active"],
+            )
+
+    def test_counting_a_partitioned_directory_sums_its_files(self, records, tmp_path) -> None:
+        """What resume asks: how much of this is already on disk?"""
+        from cacophony.outputs import align_to_records
+
+        compiled, rows = records
+        root = tmp_path / "employee"
+        self._write("jsonl", root, rows, compiled.entity("employee").field_order)
+        assert align_to_records(root, 0, "jsonl") == 40

@@ -41,14 +41,26 @@ outputs:        # named output profiles</code></pre>
   </tbody>
 </table>
 
+<table class="compact">
+  <caption>What <code>profile</code> does</caption>
+  <thead><tr><th>Profile</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">balanced</td><td>Nothing. The baseline.</td></tr>
+    <tr><td class="mono">quick_mock</td><td>Asks a language model for short, plain answers.</td></tr>
+    <tr><td class="mono">high_realism</td><td>Asks a language model for specific, plausible detail over generic phrasing.</td></tr>
+    <tr><td class="mono">maximum_chaos</td><td>Turns on the <code>hostile_qa</code> chaos preset and 5% edge cases.</td></tr>
+  </tbody>
+</table>
+
 <div class="callout quiet">
-  <span class="callout-title">What profile actually does</span>
-  <p>Honestly: it adjusts the system prompt given to language models, and
-  nothing else. <code>high_realism</code> asks for specific plausible detail
-  over generic phrasing; <code>quick_mock</code> asks for short plain answers
-  because the data is for smoke tests. It does not change chaos rates, record
-  counts or generator choice. If you want messier data, write
-  <code>chaos:</code>; if you want less of it, write <code>count:</code>.</p>
+  <span class="callout-title">Three of the four only talk to the model</span>
+  <p>Section&nbsp;77 describes profiles as selecting how much realism you want,
+  and what is built is narrower than that: the first three change only the
+  prompts a language model is given, not which generators are chosen. Only
+  <code>maximum_chaos</code> changes the data, and anything you state explicitly
+  &mdash; a <code>chaos:</code> block, <code>--edge-cases</code> &mdash; still
+  wins over it. If you want messier data, write <code>chaos:</code>; if you want
+  less of it, write <code>count:</code>.</p>
 </div>
 
 <h2 id="key-entities"><code>entities</code></h2>
@@ -73,7 +85,7 @@ outputs:        # named output profiles</code></pre>
     <tr><td class="mono">primary_key</td><td>Which field identifies a record. May also be set with <code>primary_key: true</code> on the field.</td></tr>
     <tr><td class="mono">seed</td><td>Detaches this entity from the project seed, so editing another entity cannot change these records.</td></tr>
     <tr><td class="mono">description</td><td>Free text; offered to a language model as context about the record type.</td></tr>
-    <tr><td class="mono">tags</td><td>Free labels, carried into the plan and the Studio.</td></tr>
+    <tr><td class="mono">tags</td><td>Free labels, shown by <code>cacophony plan</code> and carried in its JSON.</td></tr>
     <tr><td class="mono">recipes</td><td>Catalogue fragments to expand into this entity's fields. Chapter&nbsp;21.</td></tr>
     <tr><td class="mono">simulation</td><td>Declares these records to be events belonging to subjects. Chapter&nbsp;18.</td></tr>
     <tr><td class="mono">fields</td><td>The fields, in the order they will appear in the output.</td></tr>
@@ -261,17 +273,33 @@ be related.</p>
 <h1 id="key-outputs">Outputs</h1>
 
 <p class="lead">Where records go and in what shape. The command line names one
-format; the <code>outputs:</code> block names several profiles, so one project
-can serve fixtures and an analytics table without editing.</p>
+format; the <code>outputs:</code> block names whole layouts, so a project can
+declare its analytics shape once and you pick it by name.</p>
 
 <pre><code class="language-yaml">outputs:
   analytics:
     format: parquet
     path: out/analytics
-    partition_by: [year, month, day]
+    partition_by: [region, opened_on]
+    options: {compression: zstd}
   fixtures:
-    format: jsonl
-    path: out/fixtures</code></pre>
+    format: csv
+    path: out/fixtures
+    entities: [employee]</code></pre>
+
+<pre><code class="language-console">$ cacophony generate project.yaml --output-profile analytics
+$ cacophony generate project.yaml --output-profile fixtures</code></pre>
+
+<p>A profile is a named set of the options <code>generate</code> would otherwise
+take on the command line. Naming one selects it; an explicit flag still wins, so
+<code>--output-profile analytics -d /tmp/scratch</code> writes the analytics
+layout somewhere else. Two profiles means running the command twice &mdash;
+which is also what "the same logical dataset, written two ways" means in
+practice.</p>
+
+<p>A profile's relative <code>path:</code> resolves against the <strong>schema
+file</strong>, like every other path in a project. <code>--out-dir</code> is a
+command-line argument and stays relative to where you are standing.</p>
 
 <table>
   <caption>Output formats</caption>
@@ -289,6 +317,43 @@ can serve fixtures and an analytics table without editing.</p>
 
 <pre><code class="language-console">$ cacophony generate project.yaml -o sqlite -d out/
 $ sqlite3 out/retail-commerce.db "PRAGMA foreign_key_check"   # silent</code></pre>
+
+<h2 id="key-partition-by">Partitioning</h2>
+
+<p><code>partition_by</code> turns column values into directories, which is the
+layout every columnar reader already understands:</p>
+
+<pre><code class="language-text">out/analytics/employee/region=emea/opened_on=2026-03-01/employee.parquet</code></pre>
+
+<p>One file per distinct combination, opened when the first record needing it
+arrives. Partitioning on a high-cardinality column is how one dataset becomes a
+million tiny files, so a run stops at 512 open partitions and says so;
+<code>options: {max_partitions: N}</code> raises it. A null key becomes
+<code>__null__</code>, because <code>region=/</code> is not a path.</p>
+
+<p>Whether the partition columns <em>also</em> stay inside the files is decided
+by what the format's readers do with them, which is not a matter of taste:</p>
+
+<ul>
+  <li><strong>Parquet</strong> reconstructs them from the directory names, and
+  refuses a directory where they appear in both &mdash; <em>"Field region has
+  incompatible types: string vs dictionary"</em> &mdash; so they are dropped
+  from the files.</li>
+  <li><strong>JSON Lines, CSV and JSON</strong> have no such convention. Nothing
+  would put the column back, so it is kept.</li>
+</ul>
+
+<p><code>options: {drop_partition_columns: false}</code> overrides either way.
+<code>sqlite</code> and <code>sql</code> cannot be partitioned and say so: there
+is one destination for the whole project, so there is nothing to divide.</p>
+
+<div class="callout quiet">
+  <span class="callout-title">A partitioned run resumes into new parts</span>
+  <p>A partitioned writer is not appendable &mdash; working out how far through
+  <em>each</em> partition a killed run got is a great deal of bookkeeping for no
+  benefit. A resume therefore writes new part files inside each partition, which
+  every reader for these formats accepts.</p>
+</div>
 
 <div class="callout warning">
   <span class="callout-title">Chaos and a database schema cannot both be had</span>

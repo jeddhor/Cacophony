@@ -29,6 +29,7 @@ from ..store.repository import Repository
 from .theme import console, error_console
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from ..schema.models import OutputProfileSpec
     from ..schema.plan import CompiledProject
 
 __all__ = [
@@ -66,6 +67,7 @@ def build_run_config(
     output: str,
     entity: str | None,
     records: int | None,
+    record_counts: dict[str, int] | None = None,
     seed: int | None,
     no_validate: bool,
     drop_invalid: bool,
@@ -82,6 +84,7 @@ def build_run_config(
     overwrite_assets: bool = False,
     edge_cases: float = 0.0,
     edge_categories: str | None = None,
+    profile: OutputProfileSpec | None = None,
 ) -> RunConfig:
     """Turn command-line options into a run configuration, or exit clearly."""
     try:
@@ -104,10 +107,20 @@ def build_run_config(
     return RunConfig(
         output_dir=out_dir,
         output_format=output,
+        output_profile=profile.name if profile is not None else "",
+        partition_by=list(profile.partition_by) if profile is not None else [],
+        output_options=dict(profile.options) if profile is not None else {},
         assets_dir=assets_dir,
         overwrite_assets=overwrite_assets,
-        entities=[entity] if entity else [],
+        entities=(
+            [entity]
+            if entity
+            else list(profile.entities)
+            if profile is not None and profile.entities
+            else []
+        ),
         records=records,
+        record_counts=dict(record_counts or {}),
         seed=seed,
         validate=not no_validate,
         drop_invalid=drop_invalid,
@@ -570,5 +583,16 @@ def report_outcome(outcome: RunOutcome, *, on_provider_activity: Any = None) -> 
         on_provider_activity()
 
     if not outcome.ok:
-        console.print(f"\n[cacophony.muted]resume with:[/] cacophony resume {outcome.run_id[:8]}")
+        if outcome.validation_failure:
+            # Resuming would regenerate the same record and fail on it again: a
+            # record is a pure function of its index. Offering the command that
+            # cannot work is worse than offering nothing.
+            console.print(
+                "\n[cacophony.muted]this is a schema problem, not an interrupted run - "
+                "resuming would fail on the same record.[/]"
+            )
+        else:
+            console.print(
+                f"\n[cacophony.muted]resume with:[/] cacophony resume {outcome.run_id[:8]}"
+            )
         raise typer.Exit(code=3 if outcome.state is RunState.FAILED else 4)

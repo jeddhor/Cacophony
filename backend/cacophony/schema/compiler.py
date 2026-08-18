@@ -427,6 +427,7 @@ def build_plan(compiled: CompiledProject) -> GenerationPlan:
                     for compiled_field in entity.fields
                 },
                 depends_on=entity.depends_on,
+                tags=tuple(entity.spec.tags),
                 estimate=estimate,
             )
         )

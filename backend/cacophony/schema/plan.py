@@ -157,9 +157,14 @@ class PlanStep:
     generators: dict[str, str]
     depends_on: tuple[str, ...] = ()
     estimate: WorkloadEstimate = field(default_factory=WorkloadEstimate)
+    #: Free labels from the entity. Carried here so that ``tags:`` reaches
+    #: something a reader can see; it was accepted and dropped for a long time.
+    tags: tuple[str, ...] = ()
 
     def render(self, indent: str = "") -> list[str]:
         lines = [f"{indent}Generate {self.count:,} {self.entity}"]
+        if self.tags:
+            lines.append(f"{indent}  tags: {', '.join(self.tags)}")
         if self.depends_on:
             lines.append(f"{indent}  after: {', '.join(self.depends_on)}")
         for name in self.fields:
@@ -210,6 +215,7 @@ class GenerationPlan:
                     "fields": step.fields,
                     "generators": step.generators,
                     "depends_on": list(step.depends_on),
+                    "tags": list(step.tags),
                     "estimate": step.estimate.to_dict(),
                 }
                 for step in self.steps

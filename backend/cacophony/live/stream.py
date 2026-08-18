@@ -77,6 +77,13 @@ class StreamConfig:
     start_index: int = 0
     #: Timestamp events with the wall clock rather than the project timeline.
     live_time: bool = True
+    #: Check records against the schema before delivering them. Off by default,
+    #: and deliberately so: a workload generator that stopped mid-load because
+    #: one record in a million was invalid would have failed the test it was
+    #: running. On, it costs a per-record check and reports what it found in the
+    #: summary, which is what you want when a stream is a fixture rather than a
+    #: load.
+    validate: bool = False
     #: Let the timeline's shape modulate the rate: quiet at night, busy on
     #: Tuesday. A workload that is flat around the clock is not a workload.
     follow_shape: bool = False
@@ -105,6 +112,7 @@ class StreamConfig:
             "duration_seconds": self.duration_seconds,
             "max_records": self.max_records,
             "live_time": self.live_time,
+            "validate": self.validate,
             "follow_shape": self.follow_shape,
             "scenario_cycle_seconds": self.scenario_cycle_seconds,
             "max_in_flight": self.max_in_flight,
@@ -119,6 +127,9 @@ class StreamStats:
     generated: int = 0
     delivered: int = 0
     dropped: int = 0
+    #: Records that failed validation, when ``--validate`` asked for it. Counted
+    #: and delivered anyway; see :meth:`GenerationEngine.audit`.
+    invalid: int = 0
     #: Per-entity counters, for the dashboard's per-stream rows.
     by_entity: dict[str, int] = field(default_factory=dict)
     #: A short window of recent throughput, so the displayed rate reflects now
@@ -193,6 +204,7 @@ class StreamStats:
         return {
             "elapsed_seconds": round(self.elapsed, 2),
             "generated": self.generated,
+            "invalid": self.invalid,
             "delivered": self.delivered,
             "dropped": self.dropped,
             "records_per_second": round(self.current_rate(), 2),
@@ -274,7 +286,12 @@ class LiveStream:
         if not config.rates:
             raise CacophonyError("a stream needs at least one entity rate, e.g. --rate login=50/s")
 
-        self.engine = engine or Engine(compiled, validate=False)
+        self.engine = engine or Engine(
+            compiled,
+            validate=config.validate,
+            # Counted and delivered rather than raised: see `validate` above.
+            validation_policy="report",
+        )
         # A bucket that cannot hold a batch would cap every delivery at the
         # burst ceiling, whatever `batch_size` said.
         burst = max(1.0, config.flush_seconds)
@@ -430,11 +447,12 @@ class LiveStream:
             if not indices:
                 continue
 
-            records = await self.engine.generate_chunk(
-                self.compiled.entity(stream.entity), list(indices)
-            )
+            entity = self.compiled.entity(stream.entity)
+            records = await self.engine.generate_chunk(entity, list(indices))
+            if self.config.validate:
+                self.stats.invalid += await self.engine.audit(entity, records, list(indices))
             if self.config.live_time:
-                _stamp_now(records, self.compiled.entity(stream.entity))
+                _stamp_now(records, entity)
 
             self.stats.note(stream.entity, len(records))
             produced += len(records)

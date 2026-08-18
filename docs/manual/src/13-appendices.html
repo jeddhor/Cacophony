@@ -210,7 +210,7 @@ chapter that explains it.</p>
     <tr><td class="mono">recipes</td><td>The project's own fragments: <code>description · includes · fields</code></td></tr>
     <tr><td class="mono">requires</td><td><code>plugins</code></td></tr>
     <tr><td class="mono">patches</td><td>A mapping of name to <code>description · entity · where · set · drop · keep</code></td></tr>
-    <tr><td class="mono">outputs</td><td>A mapping of name to <code>format · path · partition_by</code></td></tr>
+    <tr><td class="mono">outputs</td><td>A mapping of name to <code>format · path · entities · partition_by · options</code>, selected with <code>--output-profile</code></td></tr>
   </tbody>
 </table>
 
@@ -249,7 +249,8 @@ cacophony lint      PROJECT [--strict]
 cacophony plan      PROJECT [--seed N] [--json]
 cacophony preview   PROJECT [-e ENTITY] [-n N] [-c a,b,c] [--offset N] [--json]
                             [--isolate] [--cache MODE] [--cache-path FILE] [--seed N]
-cacophony generate  PROJECT [-n N] [--seed N] [-o FORMAT] [-d DIR] [-e ENTITY]
+cacophony generate  PROJECT [-n N | -n ENTITY=N] [--seed N] [-o FORMAT] [-d DIR]
+                            [--output-profile NAME] [-e ENTITY]
                             [--batch-size N] [--workers N] [--provenance MODE]
                             [--on-failure POLICY] [--drop-invalid] [--no-validate]
                             [--edge-cases FRACTION] [--edge-categories a,b,c]
@@ -283,7 +284,7 @@ cacophony version
 
 cacophony stream    PROJECT [-r ENTITY=RATE]... [-t DESTINATION]... [-s SECONDS]
                             [-n N] [--from N] [--batch-size N] [--flush SECONDS]
-                            [--follow-shape] [--historical]
+                            [--follow-shape] [--historical] [--validate]
                             [--scenario-cycle SECONDS] [--on-error POLICY]
                             [--seed N] [-q]
 cacophony cluster   PROJECT [-o DIR] [-w WORKERS] [-f FORMAT] [-n N]
