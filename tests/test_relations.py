@@ -288,12 +288,30 @@ class TestReferences:
         assert isinstance(record.values["employee"], int)
 
     def test_an_explicit_type_is_not_overruled(self) -> None:
+        """A declared type wins - and the validator says what that cost.
+
+        The default is to adopt the target key's type precisely because an
+        integer key referenced by a string column joins to nothing. Declaring
+        the mismatch anyway is allowed, so the string is produced; the
+        referential check then reports that it does not identify a record,
+        which is true and is why the run has to be told to carry on.
+        """
         entities = relational_entities()
         entities["login"]["fields"]["employee"]["type"] = "string"
         compiled = compile_from(entities)
+        engine = GenerationEngine(compiled, validation_policy="report")
 
-        record = generate(GenerationEngine(compiled), "login", 1)[0]
+        record = generate(engine, "login", 1)[0]
         assert isinstance(record.values["employee"], str)
+        assert engine.stats["login"].rejected == 1
+
+    def test_a_reference_that_cannot_join_stops_a_run(self) -> None:
+        """The same schema without the escape hatch, which is the default."""
+        entities = relational_entities()
+        entities["login"]["fields"]["employee"]["type"] = "string"
+        engine = GenerationEngine(compile_from(entities))
+        with pytest.raises(GenerationError, match="does not identify a record"):
+            generate(engine, "login", 1)
 
     def test_a_missing_target_entity_is_a_schema_error(self) -> None:
         entities = relational_entities()

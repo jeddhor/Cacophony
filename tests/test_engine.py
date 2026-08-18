@@ -223,6 +223,15 @@ class TestFailurePolicies:
         with pytest.raises(ValueError, match="Unknown failure policy"):
             GenerationEngine(compile_from(SIMPLE), failure_policy="panic")
 
+    def test_unknown_validation_policy_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="Unknown validation policy"):
+            GenerationEngine(compile_from(SIMPLE), validation_policy="panic")
+
+    def test_validation_follows_the_failure_policy_by_default(self) -> None:
+        """One flag, one behaviour: --on-failure covers both kinds of failure."""
+        engine = GenerationEngine(compile_from(SIMPLE), failure_policy="skip")
+        assert engine.validation_policy == "skip"
+
 
 class TestValidationIntegration:
     BAD = {
@@ -239,15 +248,96 @@ class TestValidationIntegration:
         }
     }
 
-    def test_failures_are_counted(self) -> None:
+    def test_an_invalid_record_stops_the_run(self) -> None:
+        """The default is abort, and it now means abort.
+
+        A run that reported thirty thousand validation failures used to write
+        them to the file and exit successfully, which made "abort" a promise
+        about generation only. Anyone who reads --on-failure and plans around it
+        is planning around this.
+        """
         engine = GenerationEngine(compile_from(self.BAD))
-        engine.preview("e", 10)
+        with pytest.raises(GenerationError, match="failed validation"):
+            engine.preview("e", 10)
+
+    def test_the_abort_message_names_the_record_and_the_way_out(self) -> None:
+        engine = GenerationEngine(compile_from(self.BAD))
+        with pytest.raises(GenerationError) as caught:
+            engine.preview("e", 10)
+        message = str(caught.value)
+        assert "e#0" in message
+        assert "5 is below the minimum 100" in message
+        assert "--drop-invalid" in message
+        # Rich reads square brackets as markup, so the category is parenthesised
+        # rather than rendered as "[constraint]" and eaten on the way out.
+        assert "(constraint)" in message
+        assert "[constraint]" not in message
+
+    def test_report_counts_them_and_writes_them(self) -> None:
+        engine = GenerationEngine(compile_from(self.BAD), validation_policy="report")
+        assert len(engine.preview("e", 10)) == 10
         assert engine.stats["e"].rejected == 10
         assert engine.validation_stats()["e"]["records_rejected"] == 10
 
     def test_drop_invalid_removes_them(self) -> None:
         engine = GenerationEngine(compile_from(self.BAD), drop_invalid=True)
         assert engine.preview("e", 10) == []
+        assert engine.stats["e"].rejected == 10
+
+    def test_skip_is_drop_invalid_by_another_name(self) -> None:
+        engine = GenerationEngine(compile_from(self.BAD), failure_policy="skip")
+        assert engine.preview("e", 10) == []
+
+    def test_placeholder_marks_the_offending_field(self) -> None:
+        engine = GenerationEngine(compile_from(self.BAD), validation_policy="placeholder")
+        records = engine.preview("e", 3)
+        assert [record.values["small"] for record in records] == ["[FAILED:small]"] * 3
+
+    def test_incomplete_removes_the_offending_field(self) -> None:
+        engine = GenerationEngine(compile_from(self.BAD), validation_policy="incomplete")
+        records = engine.preview("e", 3)
+        assert all("small" not in record.values for record in records)
+
+    def test_retry_gives_up_rather_than_stopping_the_run(self) -> None:
+        """A deterministic field reproduces the value that failed.
+
+        So retrying cannot help here, and the record is dropped and counted -
+        which is what an exhausted per-field retry does. Retrying is for a field
+        whose value comes from somewhere that might answer differently.
+        """
+        engine = GenerationEngine(compile_from(self.BAD), validation_policy="retry")
+        assert engine.preview("e", 3) == []
+        assert engine.stats["e"].rejected == 3
+        assert engine.stats["e"].retries == 6  # two further attempts per record
+
+    def test_a_dropped_record_gives_back_its_unique_value(self) -> None:
+        """Otherwise it holds a value on behalf of a record nobody has.
+
+        The record here fails on a length constraint, not on uniqueness. Its
+        unique key was registered before that was known, so without releasing it
+        the *next* record - which produces the same key, because the generator
+        is a constant - would be reported as a duplicate of a record that was
+        thrown away.
+        """
+        entities = {
+            "e": {
+                "count": 2,
+                "fields": {
+                    "key": {"generator": "constant", "value": "K", "unique": True},
+                    "small": {
+                        "type": "integer",
+                        "generator": "constant",
+                        "value": 5,
+                        "constraints": {"min": 100},
+                    },
+                },
+            }
+        }
+        engine = GenerationEngine(compile_from(entities), drop_invalid=True)
+        assert engine.preview("e", 2) == []
+        # Two rejections for the length, and no third for a phantom duplicate.
+        assert engine.stats["e"].rejected == 2
+        assert not any("duplicate" in error for error in engine.stats["e"].errors)
 
     def test_validation_can_be_disabled(self) -> None:
         engine = GenerationEngine(compile_from(self.BAD), validate=False)

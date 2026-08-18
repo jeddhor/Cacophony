@@ -25,51 +25,84 @@ validator that runs afterwards can be, and tells you.</p>
   </tbody>
 </table>
 
-<h2>Two different failures, and two different flags</h2>
+<h2>Two different failures, one flag</h2>
 
-<p>This trips people up, so it is worth being exact. A <strong>generation</strong>
-failure is a generator that could not produce a value at all &mdash; the model
-server is down, a template names a field that is null, a provider timed out. A
-<strong>validation</strong> failure is a value that was produced and then found
-unacceptable.</p>
+<p>A <strong>generation</strong> failure is a generator that could not produce a
+value at all &mdash; the model server is down, a template names a field that is
+null, a provider timed out. A <strong>validation</strong> failure is a value that
+was produced and then found unacceptable. <code>--on-failure</code> governs both,
+and the default is to stop <span class="sec">section&nbsp;65</span>.</p>
 
-<p><code>--on-failure</code> governs the first
-<span class="sec">section&nbsp;65</span>:</p>
-
-<table class="compact">
-  <caption>--on-failure, for a generator that raises</caption>
-  <thead><tr><th>Policy</th><th>Behaviour</th></tr></thead>
+<table>
+  <caption>--on-failure</caption>
+  <thead><tr>
+    <th>Policy</th><th>A generator that raises</th><th>A record that fails validation</th>
+  </tr></thead>
   <tbody>
-    <tr><td class="mono">abort</td><td>Stop the run and report. The default.</td></tr>
-    <tr><td class="mono">retry</td><td>Try the field again, up to the attempt limit. Useful with a flaky provider.</td></tr>
-    <tr><td class="mono">skip</td><td>Leave the field null and carry on, counting.</td></tr>
-    <tr><td class="mono">placeholder</td><td>Write a marked stand-in, <code>[FAILED:field]</code>.</td></tr>
-    <tr><td class="mono">incomplete</td><td>Write the record with the field missing.</td></tr>
+    <tr><td class="mono">abort</td><td>Stop the run</td><td>Stop the run, naming the record and what was wrong with it</td></tr>
+    <tr><td class="mono">retry</td><td>Try the field again, up to the attempt limit</td><td>Generate the record again; if it still fails, drop it and count it</td></tr>
+    <tr><td class="mono">skip</td><td>Leave the field null</td><td>Drop the record and count it</td></tr>
+    <tr><td class="mono">placeholder</td><td>Write <code>[FAILED:field]</code></td><td>Mark the offending fields <code>[FAILED:field]</code> and keep the record</td></tr>
+    <tr><td class="mono">incomplete</td><td>Write the record without the field</td><td>Remove the offending fields and keep the record</td></tr>
+    <tr><td class="mono">report</td><td>Leave the field null</td><td>Count it and write it anyway</td></tr>
   </tbody>
 </table>
 
-<p>Validation failures are handled separately, and the behaviour is worth
-knowing before you rely on it:</p>
+<p><code>--drop-invalid</code> means <code>skip</code> for validation whatever
+the policy says, and <code>--no-validate</code> switches the checking off
+entirely &mdash; which is occasionally the right thing when you already know the
+data is deliberately broken and you want the bytes.</p>
 
-<table class="compact">
-  <caption>What happens to a record that fails validation</caption>
-  <thead><tr><th>Flags</th><th>Result</th></tr></thead>
-  <tbody>
-    <tr><td><em>none</em></td><td>The record is <strong>written anyway</strong>, counted, and reported in the run summary as <code>validation failures</code>. The exit code is 0.</td></tr>
-    <tr><td class="mono">--drop-invalid</td><td>The record is discarded. Only valid records reach the file; the count is still reported.</td></tr>
-    <tr><td class="mono">--no-validate</td><td>Nothing is checked and nothing is counted.</td></tr>
-  </tbody>
-</table>
+<div class="callout">
+  <span class="callout-title">This used to be two behaviours</span>
+  <p>Until recently <code>--on-failure</code> governed only generation. A run
+  that reported <code>validation failures 30,705</code> had written those thirty
+  thousand invalid records to the file and returned success. It was found by
+  running the tutorial in chapter&nbsp;3 at a hundred thousand records, where a
+  <code>unique</code> email drawn from a name list collides, and it is fixed:
+  <em>abort</em> meaning "abort unless the data is merely invalid" is not a
+  promise anybody can plan around.</p>
+</div>
 
-<div class="callout warning">
-  <span class="callout-title">A failing run still exits 0</span>
-  <p>A run that reports <code>validation failures 30,705</code> has written
-  those thirty thousand invalid records to the file and returned success.
-  <code>--on-failure abort</code> does not change that, because it is about
-  generation rather than validation. If invalid data must not reach the file,
-  pass <code>--drop-invalid</code>; if a pipeline must fail on it, read the
-  count from the run record or from
-  <code>GET /api/runs/{id}</code> and decide there.</p>
+<h2>What stopping looks like</h2>
+
+<pre class="small"><code class="language-console">$ cacophony generate company.yaml -n 100000 -o jsonl -d out/
+
+failed  0 records written
+error EMP-000550 failed validation: email: duplicate value
+'kenneth.cooper@example.com' for a field declared unique (uniqueness). Pass
+--drop-invalid to discard records like this one, --on-failure report to write them
+and count them, or --no-validate to stop checking.
+  run             d7cc055f-d20d-40f9-97d9-8651c9748738
+
+resume with: cacophony resume d7cc055f
+$ echo $?
+3</code></pre>
+
+<p>The run stops at the first invalid record. Whatever batches had already
+completed stay on disk and the run is recorded as <code>failed</code> with the
+count it reached &mdash; here the collision came at record 550 of a
+thousand-record batch, so nothing had been written yet.</p>
+
+<p>Resuming is offered because that is what a failed run gets, and here it will
+fail at the same record: a record is a pure function of its index, so the second
+attempt produces the same duplicate. The fix is the schema &mdash; that
+<code>unique</code> email cannot be drawn a hundred thousand times from a list of
+first and last names &mdash; or a policy that says carry on.</p>
+
+<h2>The three commands that report instead</h2>
+
+<p><code>preview</code>, <code>regenerate</code> and <code>benchmark</code> all
+exist to <em>show</em> you a record that should not exist, so an invalid one is
+the answer rather than an error. All three still abort on a generator that
+raises, which is a different problem and still theirs to surface.</p>
+
+<div class="callout quiet">
+  <span class="callout-title">Retrying only helps where a provider is involved</span>
+  <p>A deterministic field reproduces the value that failed, so a retried record
+  is the record that just failed. That is why an exhausted retry drops the record
+  and counts it rather than stopping the run &mdash; which is also what an
+  exhausted per-field retry does.</p>
 </div>
 
 <h2>Damaged fields are skipped</h2>

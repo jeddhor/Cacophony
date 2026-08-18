@@ -21,14 +21,19 @@
   </tbody>
 </table>
 
-<h2>The run reports validation failures</h2>
+<h2>The run stops on a validation failure</h2>
 
-<p>They are counted in the summary, and the records were written anyway &mdash;
-see chapter&nbsp;31, which is the most important paragraph in this manual for
-anyone about to trust a generated file. Three questions, in order: is the
+<p>The default policy is <code>abort</code>, so the first invalid record ends the
+run and names itself, the field and the value. Three questions, in order: is the
 constraint right; is the generator producing what the constraint expects; and is
 a model involved, in which case the answer is usually a length limit that is too
 tight. See the note on clipping in chapter&nbsp;15.</p>
+
+<p>Resuming will fail at the same record, because the record is a pure function
+of its index. Fix the schema, or say what should happen instead:
+<code>--drop-invalid</code> to discard those records, <code>--on-failure
+report</code> to write them and count them, <code>--no-validate</code> to stop
+checking. Chapter&nbsp;31 has the whole table.</p>
 
 <p>A common one in a schema that grew: a <code>unique</code> field whose domain
 is smaller than the record count. Two hundred and fifty employees drawn from
@@ -109,7 +114,9 @@ later, and a short list of the things worth putting in a runbook.</p>
   <li>Keep edits as <code>patches:</code> rules, never as edits to output files.</li>
   <li>Use <code>cacophony bundle export</code> to hand the whole thing to
   somebody else, and <code>bundle inspect</code> on anything you receive.</li>
-  <li>Run <code>cacophony lint --strict</code> in CI.</li>
+  <li>Run <code>cacophony lint --strict</code> in CI, and leave
+  <code>--on-failure</code> at <code>abort</code> there: a pipeline that
+  generates invalid data should fail rather than publish it.</li>
   <li>Note the Cacophony version alongside the dataset; a generator's behaviour
   is part of what reproduces it.</li>
 </ul>

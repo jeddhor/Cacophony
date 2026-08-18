@@ -569,7 +569,8 @@ chaos:
 
 Damage is recorded in `_chaos` on the record and in provenance, and the
 validator skips damaged fields — otherwise a chaotic run is a wall of
-validation failures, and `--drop-invalid` discards exactly what was asked for.
+validation failures - which would now *stop* the run - and `--drop-invalid`
+discards exactly what was asked for.
 Primary keys and `scenario` fields are never damaged.
 
 ---
@@ -1649,4 +1650,38 @@ Exit codes: `0` success, `1` lint errors, `2` bad schema or bad arguments,
 `3` generation failure. Errors go to stderr, so `cacophony preview --json | jq`
 is safe.
 
-`--on-failure`: `abort` (default), `retry`, `skip`, `placeholder`, `incomplete`.
+## Failure policy
+
+`--on-failure` governs both kinds of failure a record can suffer: a generator
+that could not produce a value at all, and a value that was produced and then
+found unacceptable. It used to govern only the first, so a run that reported
+thirty thousand validation failures wrote those records to the file and exited
+successfully. "Abort" meaning "abort unless the data is merely invalid" is not a
+promise anybody can plan around, so it now means what it says.
+
+| Policy | A generator that raises | A record that fails validation |
+|---|---|---|
+| `abort` *(default)* | Stop the run | Stop the run, naming the record and what was wrong |
+| `retry` | Try the field again, up to three attempts | Generate the record again; if it still fails, drop it and count it |
+| `skip` | Leave the field null | Drop the record and count it |
+| `placeholder` | Write `[FAILED:field]` | Mark the offending fields `[FAILED:field]`, keep the record |
+| `incomplete` | Write the record without the field | Remove the offending fields, keep the record |
+| `report` | Leave the field null | Count it and write it anyway — the old behaviour |
+
+`--drop-invalid` is `skip` for validation whatever the policy says, and
+`--no-validate` switches the checking off entirely.
+
+**A run stops at the first invalid record**, so batches already written stay on
+disk and the run is recorded as `failed` with the count it reached. Resuming
+reproduces the failure, because the record is a pure function of its index: the
+fix is the schema, or a policy that says carry on.
+
+**`preview`, `regenerate` and `benchmark` report rather than refuse.** All three
+exist to *show* you a record that should not exist, so an invalid one is the
+answer rather than an error. They still abort on a generator that raises, which
+is a different problem and still theirs to surface.
+
+Retrying only helps where a provider is involved. A deterministic field
+reproduces the value that failed, so a retried record is the record that just
+failed — which is why an exhausted retry drops the record instead of stopping
+the run.

@@ -55,7 +55,18 @@ class PlaceholderMixin:
     """
 
     def placeholder(self, context: GenerationContext) -> Any:
-        """A deterministic, obviously-synthetic stand-in value."""
+        """A deterministic, obviously-synthetic stand-in, fitted to the field.
+
+        The fitting happens here rather than at the call sites, because there
+        are two of them - one field at a time, and a whole enrichment group -
+        and only one remembered. A ``max_length: 90`` helpdesk subject was
+        getting a 109-character stand-in, which validation then reported as a
+        schema problem that did not exist.
+        """
+        return self._fit(self.raw_placeholder(context))
+
+    def raw_placeholder(self, context: GenerationContext) -> Any:
+        """The stand-in before it is fitted. Subclasses override this one."""
         where = self.field.name if self.field else "?"  # type: ignore[attr-defined]
         return f"[{self.name}:{context.entity.name}.{where}#{context.record_index}]"  # type: ignore[attr-defined]
 

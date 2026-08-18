@@ -339,7 +339,7 @@ async def _score_one(
     from copy import deepcopy
 
     from ..validation.duplication import DuplicateDetector
-    from .engine import GenerationEngine
+    from .engine import FailurePolicy, GenerationEngine
     from .runtime import GenerationRuntime
 
     # A copy, because the model is written into the provider spec and one
@@ -365,6 +365,11 @@ async def _score_one(
         counts=dict.fromkeys(compiled_copy.entity_order, records),
         validate=True,
         drop_invalid=False,
+        # The whole point is to count what a model got wrong, so an invalid
+        # record is a score rather than a reason to stop. A model that cannot be
+        # reached at all is still an abort, which the benchmark catches and
+        # reports as that model's error.
+        validation_policy=FailurePolicy.REPORT,
         # Damage would be counted as a model failure, and a chaotic run's
         # duplicate records would be counted as repetition.
         chaos=False,

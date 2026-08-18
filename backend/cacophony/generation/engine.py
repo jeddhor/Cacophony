@@ -48,15 +48,42 @@ DEFAULT_BATCH_SIZE = 1_000
 
 
 class FailurePolicy:
-    """What to do when one field fails (design document section 65)."""
+    """What to do when generation or validation says no (design document section 65).
+
+    Section 65 is written about a field that fails to generate, and the policy
+    was applied only there for a long time: a record that generated cleanly and
+    then failed *validation* was counted, written to the file anyway, and the
+    run exited successfully. That is now one behaviour rather than two, because
+    "abort" meaning "abort unless the data is merely invalid" is not a promise
+    anybody can plan around.
+
+    The mapping onto a validation failure:
+
+    ``abort``
+        Stop the run, naming the record and what was wrong with it.
+    ``retry``
+        Generate the record again, up to ``max_attempts``; if it still fails,
+        drop it and count it, which is what an exhausted per-field retry does.
+    ``skip``
+        Drop the record and count it. What ``--drop-invalid`` asks for.
+    ``placeholder``
+        Mark the offending fields ``[FAILED:name]`` and keep the record.
+    ``incomplete``
+        Remove the offending fields and keep the record.
+    ``report``
+        Count it and write it anyway. The old behaviour, kept because a
+        preview, a ``regenerate`` and the model benchmark all exist to *show*
+        you the invalid record rather than to refuse it.
+    """
 
     RETRY = "retry"
     SKIP = "skip"
     PLACEHOLDER = "placeholder"
     INCOMPLETE = "incomplete"
     ABORT = "abort"
+    REPORT = "report"
 
-    ALL = (RETRY, SKIP, PLACEHOLDER, INCOMPLETE, ABORT)
+    ALL = (RETRY, SKIP, PLACEHOLDER, INCOMPLETE, ABORT, REPORT)
 
 
 @dataclass(slots=True)
@@ -94,6 +121,7 @@ class GenerationEngine:
         drop_invalid: bool = False,
         provenance: ProvenanceMode | None = None,
         failure_policy: str = FailurePolicy.ABORT,
+        validation_policy: str | None = None,
         max_attempts: int = 3,
         seed_namespace: str | None = None,
         run_id: str | None = None,
@@ -109,17 +137,26 @@ class GenerationEngine:
         edge_categories: list[str] | None = None,
         patches: bool = True,
     ) -> None:
-        if failure_policy not in FailurePolicy.ALL:
-            raise ValueError(
-                f"Unknown failure policy '{failure_policy}'. "
-                f"Choose one of: {', '.join(FailurePolicy.ALL)}"
-            )
+        for name, policy in (("failure", failure_policy), ("validation", validation_policy)):
+            if policy is not None and policy not in FailurePolicy.ALL:
+                raise ValueError(
+                    f"Unknown {name} policy '{policy}'. "
+                    f"Choose one of: {', '.join(FailurePolicy.ALL)}"
+                )
 
         self.compiled = compiled
         self.validate_records = validate
         self.drop_invalid = drop_invalid
         self.provenance_mode = provenance or compiled.spec.project.provenance
         self.failure_policy = failure_policy
+        #: What to do about a record that generated cleanly and then failed
+        #: validation. The same policy by default, which is the point: one flag,
+        #: one behaviour. It is separate so that the three commands whose job is
+        #: to *show* you a bad record - preview, regenerate, benchmark - can
+        #: report an invalid record while still aborting on a generator that
+        #: raises, which is a different kind of problem and still theirs to
+        #: surface.
+        self.validation_policy = validation_policy or failure_policy
         # Section 66: never permit infinite retry loops.
         self.max_attempts = max(1, min(max_attempts, 10))
         self.seed_namespace = seed_namespace
@@ -737,35 +774,19 @@ class GenerationEngine:
         # call can cover as many records as the batch holds. Memory stays
         # bounded by batch_size either way, which is section 31's requirement.
         for chunk_start in range(offset, offset + total, batch_size):
-            indices = range(chunk_start, min(chunk_start + batch_size, offset + total))
-            records = await self.generate_chunk(entity, list(indices), entity_seeds=entity_seeds)
-
-            # Deliberate damage, before validation so the validator can be told
-            # which defects were asked for (sections 24, 78).
-            if self.inject_chaos:
-                records = self._damage(entity, records, list(indices))
-
-            # Patch rules last, and before validation (section 104). Last
-            # because a rule is the final word on what a record contains -
-            # somebody masking a column means the column masked, not masked and
-            # then damaged. Before validation because what reaches the file is
-            # what should be checked.
-            patch_set = self._patches_for(entity)
-            if patch_set is not None:
-                records = [
-                    patched
-                    for patched in (self._patch(patch_set, record) for record in records)
-                    if patched is not None
-                ]
+            indices = list(range(chunk_start, min(chunk_start + batch_size, offset + total)))
+            prepared = await self._prepare(entity, indices, entity_seeds)
 
             detector = self._detector_for(entity)
             batch: list[GeneratedRecord] = []
-            for record in records:
+            for index, record in prepared:
                 if validator is not None:
-                    result = validator.validate(record)
-                    self._apply_result(result, stats)
-                    if not result.ok and self.drop_invalid:
+                    kept = await self._validated(
+                        entity, index, record, validator, stats, entity_seeds
+                    )
+                    if kept is None:
                         continue
+                    record = kept
                 # After the drop, so a dataset's duplication rate describes the
                 # dataset somebody gets rather than one including records that
                 # were thrown away.
@@ -789,25 +810,165 @@ class GenerationEngine:
     def _damage(
         self,
         entity: CompiledEntity,
-        records: list[GeneratedRecord],
-        indices: list[int],
-    ) -> list[GeneratedRecord]:
+        prepared: list[tuple[int, GeneratedRecord]],
+    ) -> list[tuple[int, GeneratedRecord]]:
         """Apply entropy injection to a batch (sections 24, 78).
 
         A duplicate is emitted immediately after its original, which is what a
-        retried insert looks like in a real system.
+        retried insert looks like in a real system, and it carries the index of
+        the record it duplicates - so a record stays traceable to the position
+        it came from however many of them a batch ends up holding.
         """
         injector = self._injector_for(entity)
         if injector.is_noop:
-            return records
+            return prepared
 
-        damaged: list[GeneratedRecord] = []
-        for record, index in zip(records, indices, strict=True):
+        damaged: list[tuple[int, GeneratedRecord]] = []
+        for index, record in prepared:
             duplicate = injector.apply(record, index)
-            damaged.append(record)
+            damaged.append((index, record))
             if duplicate is not None:
-                damaged.append(duplicate)
+                damaged.append((index, duplicate))
         return damaged
+
+    async def _prepare(
+        self,
+        entity: CompiledEntity,
+        indices: list[int],
+        entity_seeds: Any,
+    ) -> list[tuple[int, GeneratedRecord]]:
+        """Generate a chunk and put it through everything that precedes validation.
+
+        Chaos first, so the validator can be told which defects were asked for
+        (sections 24, 78). Patch rules last, because a rule is the final word on
+        what a record contains - somebody masking a column means the column
+        masked, not masked and then damaged - and before validation, because
+        what reaches the file is what should be checked (section 104).
+
+        Kept as one method so that regenerating a single record for a retry puts
+        it through the same steps as the batch it came from. A retried record
+        that skipped chaos or patches would be a different kind of record.
+        """
+        records = await self.generate_chunk(entity, indices, entity_seeds=entity_seeds)
+        prepared = list(zip(indices, records, strict=True))
+
+        if self.inject_chaos:
+            prepared = self._damage(entity, prepared)
+
+        patch_set = self._patches_for(entity)
+        if patch_set is not None:
+            prepared = [
+                (index, patched)
+                for index, patched in (
+                    (index, self._patch(patch_set, record)) for index, record in prepared
+                )
+                if patched is not None
+            ]
+        return prepared
+
+    async def _validated(
+        self,
+        entity: CompiledEntity,
+        index: int,
+        record: GeneratedRecord,
+        validator: RecordValidator,
+        stats: EntityStats,
+        entity_seeds: Any,
+    ) -> GeneratedRecord | None:
+        """Validate one record and apply the failure policy (sections 57, 65).
+
+        Returns the record to write, or None to drop it; raises under ``abort``.
+        """
+        result = validator.validate(record)
+        if result.was_repaired:
+            stats.repaired += 1
+        if result.ok:
+            return record
+
+        policy = FailurePolicy.SKIP if self.drop_invalid else self.validation_policy
+
+        if policy == FailurePolicy.RETRY:
+            for _ in range(self.max_attempts - 1):
+                stats.retries += 1
+                # The failed record gives back whatever unique values it took,
+                # or its own replacement collides with it.
+                validator.forget_last()
+                candidates = await self._prepare(entity, [index], entity_seeds)
+                if not candidates:  # a patch rule filtered the record out
+                    self._reject(entity, index, record, result, stats)
+                    return None
+                candidate = candidates[0][1]
+                retried = validator.validate(candidate)
+                if retried.was_repaired:
+                    stats.repaired += 1
+                if retried.ok:
+                    return candidate
+                record, result = candidate, retried
+            # Out of attempts, and the record is dropped rather than the run
+            # stopped - which is what an exhausted per-field retry does. Note
+            # that a deterministic field reproduces the value that failed, so
+            # retrying only ever helps where a provider is involved.
+            self._reject(entity, index, record, result, stats)
+            validator.forget_last()
+            return None
+
+        self._reject(entity, index, record, result, stats)
+
+        if policy == FailurePolicy.ABORT:
+            raise GenerationError(self._invalid_message(entity, index, record, result))
+        if policy == FailurePolicy.SKIP:
+            validator.forget_last()
+            return None
+        if policy in (FailurePolicy.PLACEHOLDER, FailurePolicy.INCOMPLETE):
+            for name in self._offending_fields(result):
+                if policy == FailurePolicy.PLACEHOLDER:
+                    record.values[name] = f"[FAILED:{name}]"
+                else:
+                    record.values.pop(name, None)
+            return record
+        # REPORT: counted, and written as it is.
+        return record
+
+    @staticmethod
+    def _offending_fields(result: ValidationResult) -> list[str]:
+        """Which fields the errors name, in order, without repeats."""
+        names: list[str] = []
+        for issue in result.errors:
+            if issue.field and issue.field not in names:
+                names.append(issue.field)
+        return names
+
+    def _invalid_message(
+        self,
+        entity: CompiledEntity,
+        index: int,
+        record: GeneratedRecord,
+        result: ValidationResult,
+    ) -> str:
+        """An abort message that says what to do next.
+
+        A validation failure is usually a schema problem rather than a run
+        problem, so the message names the record, quotes the first issues, and
+        lists the three flags that mean "I know, carry on".
+        """
+        # Rendered here rather than with ``issue.render()``: that form leads with
+        # "[category]", and the CLI prints an error through rich, which reads
+        # square brackets as markup and eats the word.
+        issues = "; ".join(
+            f"{issue.field}: {issue.message} ({issue.category})"
+            if issue.field
+            else f"{issue.message} ({issue.category})"
+            for issue in result.errors[:3]
+        )
+        more = len(result.errors) - 3
+        if more > 0:
+            issues += f" (and {more} more)"
+        return (
+            f"{self._record_id(entity, record, index)} failed validation: {issues}. "
+            "Pass --drop-invalid to discard records like this one, "
+            "--on-failure report to write them and count them, "
+            "or --no-validate to stop checking."
+        )
 
     async def generate_batch(
         self, entity_name: str, count: int, *, offset: int = 0
@@ -881,15 +1042,24 @@ class GenerationEngine:
             self._validators[entity.name] = validator
         return validator
 
-    @staticmethod
-    def _apply_result(result: ValidationResult, stats: EntityStats) -> None:
-        if result.was_repaired:
-            stats.repaired += 1
-        if not result.ok:
-            stats.rejected += 1
-            for issue in result.errors[:3]:
-                if len(stats.errors) < 100:
-                    stats.errors.append(issue.render())
+    def _reject(
+        self,
+        entity: CompiledEntity,
+        index: int,
+        record: GeneratedRecord,
+        result: ValidationResult,
+        stats: EntityStats,
+    ) -> None:
+        """Count one rejected record, once, whatever happens to it next.
+
+        Counted here rather than per validation attempt, so a retried record is
+        one rejection rather than three.
+        """
+        stats.rejected += 1
+        where = self._record_id(entity, record, index)
+        for issue in result.errors[:3]:
+            if len(stats.errors) < 100:
+                stats.errors.append(f"{where}: {issue.render()}")
 
     def validation_stats(self) -> dict[str, Any]:
         return {name: validator.summary() for name, validator in self._validators.items()}

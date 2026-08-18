@@ -297,7 +297,7 @@ def register(app: typer.Typer) -> None:
         """
         import asyncio
 
-        from ..generation.engine import GenerationEngine
+        from ..generation.engine import FailurePolicy, GenerationEngine
         from .main import _banner, _load, _truncate
 
         compiled = _load(project, seed)
@@ -323,7 +323,9 @@ def register(app: typer.Typer) -> None:
             )
             raise typer.Exit(code=2)
 
-        engine = GenerationEngine(compiled)
+        # Report rather than refuse: "this row looks wrong" is the question
+        # regenerate answers, so an invalid row is the answer and not an error.
+        engine = GenerationEngine(compiled, validation_policy=FailurePolicy.REPORT)
         try:
             produced = asyncio.run(engine.generate_batch(target, count, offset=start))
         except CacophonyError as exc:

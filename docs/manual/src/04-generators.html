@@ -502,6 +502,17 @@ the field's length constraints, so a project with model-written fields still
 runs end to end on a laptop with no server. Two recipes in the built-in
 catalogue use exactly this, so that the catalogue works everywhere.</p>
 
+<div class="callout quiet">
+  <span class="callout-title">Fitted, and it had to be made so</span>
+  <p>There were two paths to a placeholder &mdash; one field at a time, and a
+  whole enrichment group &mdash; and only one of them remembered to clamp the
+  result. The shipped helpdesk template, whose subject line is capped at ninety
+  characters, was getting a hundred-and-nine-character stand-in. It was invisible
+  while invalid records were written anyway; the first run under an aborting
+  validator found it immediately. The clamp now lives where the value is made,
+  so no caller can forget it.</p>
+</div>
+
 <h1>Media</h1>
 
 <p class="lead">Three generators write files: pictures, speech and documents.

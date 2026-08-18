@@ -84,8 +84,8 @@ rather than fidelity.</p>
     <tr><td class="mono">--batch-size N</td><td><code>1000</code></td><td>Records per write batch</td></tr>
     <tr><td class="mono">--workers N</td><td><code>4</code></td><td>Entities generated concurrently</td></tr>
     <tr><td class="mono">--provenance MODE</td><td><code>none</code></td><td>none, run, record, field, full</td></tr>
-    <tr><td class="mono">--on-failure POLICY</td><td><code>abort</code></td><td>What to do when a <em>generator</em> fails: retry, skip, placeholder, incomplete, abort</td></tr>
-    <tr><td class="mono">--drop-invalid</td><td>off</td><td>Discard records that fail <em>validation</em>, which are otherwise written and counted</td></tr>
+    <tr><td class="mono">--on-failure POLICY</td><td><code>abort</code></td><td>When a generator fails <em>or</em> a record fails validation: retry, skip, placeholder, incomplete, abort, report</td></tr>
+    <tr><td class="mono">--drop-invalid</td><td>off</td><td>Discard records that fail validation, whatever the policy says</td></tr>
     <tr><td class="mono">--no-validate</td><td>off</td><td>Skip validation entirely</td></tr>
     <tr><td class="mono">--edge-cases FRACTION</td><td><code>0.0</code></td><td>Fraction of records given a legal-but-awkward value</td></tr>
     <tr><td class="mono">--edge-categories LIST</td><td>all</td><td>Limit edge cases to these categories</td></tr>

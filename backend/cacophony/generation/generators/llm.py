@@ -165,14 +165,14 @@ class LanguageModelGenerator(OptionsMixin, PlaceholderMixin, Generator):
         if self.on_unavailable == "null":
             return None
         if self.on_unavailable == "placeholder":
-            return self._fit(self.placeholder(context))
+            return self.placeholder(context)
         # The engine prefixes the field location when it reports a field
         # failure, so adding it here produced "e.words: e.words: ...".
         raise GenerationError(reason)
 
     # -- presentation ------------------------------------------------------- #
 
-    def placeholder(self, context: GenerationContext) -> Any:
+    def raw_placeholder(self, context: GenerationContext) -> Any:
         meaning = (self.field.meaning if self.field else None) or "generated text"
         summary = " ".join(meaning.split())[:80]
         return f"[LLM PLACEHOLDER] {summary} (record {context.record_index})"

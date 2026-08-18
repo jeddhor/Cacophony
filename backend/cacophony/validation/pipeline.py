@@ -75,6 +75,10 @@ class RecordValidator:
         )
         self._seen: dict[str, set[Any]] = {name: set() for name in self._unique_fields}
 
+        #: What the most recently validated record added to ``_seen``, so that a
+        #: record which is then discarded can give its values back.
+        self._last_added: list[tuple[str, Any]] = []
+
     def validate_field(self, name: str, value: Any) -> ValidationResult:
         """Check one value against one field, with no side effects.
 
@@ -108,6 +112,7 @@ class RecordValidator:
         """
         result = ValidationResult()
         damaged = record.damage
+        self._last_added = []
 
         for name, validator in self._structural:
             if name in damaged:
@@ -150,14 +155,28 @@ class RecordValidator:
                 )
             else:
                 self._seen[name].add(key)
+                self._last_added.append((name, key))
 
         self.stats.record(result)
         return result
+
+    def forget_last(self) -> None:
+        """Give back the unique values the last validated record introduced.
+
+        Called when that record is discarded or regenerated. Without it, a
+        record dropped for a length violation would still be holding its email
+        address, and a later record that produced the same address would be
+        rejected as a duplicate of a record nobody has.
+        """
+        for name, key in self._last_added:
+            self._seen[name].discard(key)
+        self._last_added = []
 
     def reset(self) -> None:
         """Clear per-run state so the validator can be reused for another pass."""
         self.stats = ValidationStats()
         self._seen = {name: set() for name in self._unique_fields}
+        self._last_added = []
         self.statistical = StatisticalValidator(self.entity)
 
     def summary(self) -> dict[str, Any]:

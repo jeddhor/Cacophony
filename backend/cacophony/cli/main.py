@@ -321,6 +321,11 @@ def preview(
         compiled,
         seed_namespace=f"preview-{time.time_ns()}" if isolate else None,
         failure_policy=FailurePolicy.ABORT,
+        # A preview exists to show you what the schema produces, including the
+        # records it should not have produced. Refusing to print an invalid
+        # record would hide exactly the thing you are previewing for; the run
+        # commands are where a validation failure stops the world.
+        validation_policy=FailurePolicy.REPORT,
         runtime=_runtime(compiled, cache_mode=cache, cache_path=cache_path),
     )
 
@@ -445,10 +450,21 @@ def generate(
         str, typer.Option("--provenance", help="none, run, record, field or full.")
     ] = "none",
     on_failure: Annotated[
-        str, typer.Option("--on-failure", help=f"One of: {', '.join(FailurePolicy.ALL)}.")
+        str,
+        typer.Option(
+            "--on-failure",
+            help=(
+                "When a generator fails or a record fails validation: "
+                f"{', '.join(FailurePolicy.ALL)}."
+            ),
+        ),
     ] = FailurePolicy.ABORT,
     drop_invalid: Annotated[
-        bool, typer.Option("--drop-invalid", help="Discard records that fail validation.")
+        bool,
+        typer.Option(
+            "--drop-invalid",
+            help="Discard records that fail validation instead of stopping the run.",
+        ),
     ] = False,
     no_validate: Annotated[
         bool, typer.Option("--no-validate", help="Skip validation entirely.")

@@ -335,7 +335,7 @@ def create_app(
         """Sample records without starting a run (design document section 51)."""
         import time
 
-        from ..generation.engine import GenerationEngine
+        from ..generation.engine import FailurePolicy, GenerationEngine
         from ..generation.runtime import GenerationRuntime
 
         compiled, _revision, _name = runs.load_for_run(project_id)
@@ -351,6 +351,9 @@ def create_app(
             compiled,
             runtime=runtime,
             seed_namespace=f"preview-{time.time_ns()}" if body.isolate else None,
+            # As for the CLI preview: an invalid sample record is a finding to
+            # display, not a 500.
+            validation_policy=FailurePolicy.REPORT,
         )
         records = await engine.generate_batch(entity, body.count, offset=body.offset)
         if runtime is not None:

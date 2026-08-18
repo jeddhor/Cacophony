@@ -324,10 +324,28 @@ class TestUnavailableProvider:
         assert runtime.stats.fallbacks > 0
 
     def test_null_policy(self) -> None:
+        """A null fallback into a non-nullable field is a contradiction.
+
+        ``on_unavailable: null`` says "leave it empty" and the field says "never
+        empty", so the record that comes out is invalid - and since validation
+        now stops a run, the policy has to be stated for the fallback to be
+        observable at all. That is the intended interaction: the schema is
+        asking for two incompatible things and one of them has to give.
+        """
+        engine, _, _ = build(
+            provider_config={"failure_rate": 1.0},
+            entities=self._unreachable("null"),
+            validation_policy="report",
+        )
+        assert all(record.values["summary"] is None for record in engine.preview("ticket", 3))
+
+    def test_a_null_policy_into_a_required_field_stops_a_run(self) -> None:
+        """The other half of the above, which is what a real run does."""
         engine, _, _ = build(
             provider_config={"failure_rate": 1.0}, entities=self._unreachable("null")
         )
-        assert all(record.values["summary"] is None for record in engine.preview("ticket", 3))
+        with pytest.raises(GenerationError, match="not nullable"):
+            engine.preview("ticket", 3)
 
     def test_an_unreachable_provider_is_asked_once(self) -> None:
         """A downed server must not cost one connection attempt per record."""
