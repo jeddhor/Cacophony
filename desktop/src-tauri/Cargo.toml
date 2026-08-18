@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Cacophony, as a desktop application (design document section 41)."
 edition = "2021"
 rust-version = "1.77"
+license = "AGPL-3.0-or-later"
+authors = ["Jason Tripp"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

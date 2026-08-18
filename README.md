@@ -942,3 +942,36 @@ index, resuming needs to know only how many records a job finished — there is
 no RNG state to serialise. And because a stale checkpoint would silently
 duplicate records, the file on disk is counted and the checkpoint corrected to
 match before anything is appended (section 32).
+
+---
+
+## Licence
+
+Cacophony is free software under the **GNU Affero General Public License,
+version 3 or later**. The full text is in [LICENSE](LICENSE).
+
+    Copyright (C) 2026 Jason Tripp
+
+    This program is free software: you can redistribute it and/or modify it
+    under the terms of the GNU Affero General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or (at your
+    option) any later version.
+
+    This program is distributed in the hope that it will be useful, but
+    WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+    or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+    License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+The Affero clause is the one that matters here. Cacophony has a web interface
+and a distributed mode, so it is the kind of program people run on a server for
+others to use rather than distribute as a binary. Section 13 of the licence says
+that offering it over a network counts: anyone you let generate data through a
+hosted Cacophony is entitled to the source of the version they used, including
+your modifications.
+
+Data you generate with Cacophony is yours, and the licence says nothing about
+it. Schemas, recipes and bundles are your documents, not derived works of the
+program.
