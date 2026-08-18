@@ -1673,10 +1673,7 @@ def propose(
     the generators, compiles the result and lints it before showing it. What
     you get back is a schema that is known to work - and a file to edit.
     """
-    from ..providers.base import LanguageModelProvider
-    from ..providers.registry import PROVIDER_REGISTRY
-    from ..schema.assistant import SchemaAssistant, SchemaProposalError
-    from ..schema.models import ProviderSpec
+    from .proposing import ask_for_a_schema, provider_spec_for
 
     if out is not None and out.exists() and not force:
         error_console.print(
@@ -1684,59 +1681,16 @@ def propose(
         )
         raise typer.Exit(code=2)
 
-    if provider_from is not None:
-        borrowed = _load(provider_from)
-        specs = [spec for spec in borrowed.spec.providers.values() if spec.type == "language_model"]
-        if not specs:
-            error_console.print(
-                f"[cacophony.error]error[/] {provider_from} configures no language model"
-            )
-            raise typer.Exit(code=2)
-        spec = specs[0]
-        if model:
-            spec = spec.model_copy(update={"model": model})
-    else:
-        spec = ProviderSpec(
-            id="assistant",
-            type="language_model",
-            adapter=adapter,
-            base_url=base_url,
-            model=model,
-        )
+    spec = provider_spec_for(
+        provider_from=provider_from, adapter=adapter, base_url=base_url, model=model
+    )
 
     _banner("propose")
     console.print(f"[cacophony.muted]asking[/] {spec.adapter} {spec.model or '(default model)'}")
     console.print(f"[cacophony.muted]about [/] {description.strip()}")
     console.print()
 
-    try:
-        provider = PROVIDER_REGISTRY.create(spec)
-    except CacophonyError as exc:
-        error_console.print(f"[cacophony.error]error[/] {exc}")
-        raise typer.Exit(code=2) from exc
-
-    if not isinstance(provider, LanguageModelProvider):
-        error_console.print(
-            f"[cacophony.error]error[/] adapter '{spec.adapter}' is not a language model"
-        )
-        raise typer.Exit(code=2)
-
-    assistant = SchemaAssistant(provider, model=spec.model)
-
-    async def ask() -> Any:
-        try:
-            return await assistant.propose(description, seed=seed, scale=scale)
-        finally:
-            closer = getattr(provider, "aclose", None)
-            if closer is not None:
-                await closer()
-
-    with console.status("[cacophony.muted]designing…[/]", spinner="dots"):
-        try:
-            proposal = asyncio.run(ask())
-        except (SchemaProposalError, CacophonyError) as exc:
-            error_console.print(f"[cacophony.error]error[/] {exc}")
-            raise typer.Exit(code=1) from exc
+    proposal = ask_for_a_schema(spec, description, seed=seed, scale=scale)
 
     summary = proposal.summary()
     console.print(
@@ -1757,8 +1711,8 @@ def propose(
         console.print()
         console.print(proposal.yaml)
         console.print(
-            "[cacophony.muted]Pass --out project.yaml to save it, "
-            "then 'cacophony generate project.yaml'.[/]"
+            "[cacophony.muted]Pass --out project.yaml to save it, then "
+            "'cacophony generate project.yaml' - or 'cacophony begin' to do all of it.[/]"
         )
         return
 
@@ -1896,6 +1850,7 @@ def _human_bytes(count: int) -> str:
 
 
 from .afterwards import register as _register_afterwards  # noqa: E402
+from .begin import register as _register_begin  # noqa: E402
 from .bundles import register as _register_bundles  # noqa: E402
 from .distributed import register as _register_distributed  # noqa: E402
 from .stream import register as _register_stream  # noqa: E402
@@ -1904,6 +1859,7 @@ _register_stream(app)
 _register_distributed(app)
 _register_bundles(app)
 _register_afterwards(app)
+_register_begin(app)
 
 
 def run() -> None:

@@ -581,6 +581,30 @@ there.
 
 ---
 
+## After the phases
+
+The fourteen delivery phases are done. What has happened since, in order, is
+recorded here because "complete" is a claim that needs a footnote once anybody
+starts using the thing.
+
+**Validation failures obey `--on-failure`.** They used to be counted and written
+anyway, so a run reporting thirty thousand failures exited successfully. Found by
+running the manual's own tutorial at a hundred thousand records.
+
+**`outputs:`, `tags:` and `profile:` do what they say.** All three were parsed
+and then ignored to varying degrees: output profiles selected nothing,
+`partition_by` partitioned nothing, entity tags reached nothing, and
+`maximum_chaos` injected no chaos. Sections 34 and 77.
+
+**Section 110's flow exists.** `cacophony begin "a description"` proposes a
+world, shows what it would produce, lets you edit it and builds it. Every part
+of that already existed; what was missing was the join. Its first real run found
+a bug in the assistant worth having: a proposal that referenced an entity with no
+declared primary key produced a schema that compiled, generated, and failed on
+its first join.
+
+---
+
 # The remaining work
 
 *Complete. Every phase below is delivered; this section is kept as the record of

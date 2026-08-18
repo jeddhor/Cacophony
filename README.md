@@ -83,6 +83,10 @@ put it in a window.
   through the real pipeline and reports validity, usability, clipping, speed and
   repetition, with the cache forced off so nobody is scored on somebody else's
   answers
+- **BEGIN CACOPHONY** — section 110's closing image, which is a flow rather
+  than a feature: describe a world in a sentence, Cacophony proposes it, you
+  edit the proposal, and it builds it. The schema is written to a file first,
+  so what comes out is a project you can run again
 - A desktop application — a Tauri window hosting the Studio with the backend as
   a child process, on a port the OS chose, behind a per-launch token, and gone
   the moment the window is — verified even when the shell is `SIGKILL`ed
@@ -127,7 +131,8 @@ put it in a window.
   including `retarget`, so a workload can be turned up while you watch what it
   does to whatever is receiving it
 - Structured logging with the fields design document section 86 asks for
-- CLI: `validate`, `lint`, `plan`, `prompt`, `propose`, `preview`, `generate`,
+- CLI: `begin`, `validate`, `lint`, `plan`, `prompt`, `propose`, `preview`,
+  `generate`,
   `resume`, `runs`, `run`, `serve`, `stream`, `cluster`, `controller`,
   `worker`, `worlds`, `benchmark`, `recipes`, `bundle`, `transform`,
   `regenerate`, `plugins`, `desktop`, `generators`, `providers --test`, `models`
@@ -205,7 +210,10 @@ The extras are `api` (the server and the Studio), `parquet`, `keyring`,
 ## Try it
 
 ```bash
-# Compile the schema and report problems
+# Describe a world and build it
+cacophony begin "a small hospital: staff, wards, and admissions over a year"
+
+# Or work from a schema. Compile it and report problems
 cacophony validate templates/corporate-directory.yaml
 
 # See what the compiler decided, and why

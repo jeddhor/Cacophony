@@ -427,3 +427,66 @@ class TestRunnability:
         engine = GenerationEngine(proposal.compiled, runtime=None)
         records = asyncio.run(engine.generate_batch("employee", 3))
         assert len(records) == 3
+
+
+class TestKeysForReferencedEntities:
+    """A reference to an entity with no key points at nothing (section 110).
+
+    ``primary_key`` is not a required property of a proposal, so a model can
+    leave it out. It used to be noted and left, which produced a schema that
+    compiled, generated, and then failed on its first join - the one outcome
+    "a schema that is known to work" must not have.
+    """
+
+    ANSWER = {
+        "name": "Wards",
+        "entities": [
+            {
+                "name": "ward",
+                "count": 8,
+                "fields": [
+                    {"name": "ward_id", "type": "integer", "semantic": "ward number"},
+                    {"name": "ward_name", "type": "string", "semantic": "the name of a ward"},
+                ],
+            },
+            {
+                "name": "nurse",
+                "count": 40,
+                "fields": [
+                    {"name": "nurse_id", "type": "integer", "semantic": "staff number"},
+                    {"name": "ward", "type": "integer", "semantic": "ward", "references": "ward"},
+                ],
+            },
+        ],
+    }
+
+    def test_the_referenced_entity_gets_a_key(self) -> None:
+        data = to_project_data(self.ANSWER)
+        assert data["entities"]["ward"]["primary_key"] == "ward_id"
+
+    def test_the_key_is_unique_and_generated(self) -> None:
+        """Whatever the recommender would have picked from a meaning, a key
+        has to produce a distinct value per record."""
+        field = to_project_data(self.ANSWER)["entities"]["ward"]["fields"]["ward_id"]
+        assert field["unique"] is True
+        assert field["generator"] == "sequence"
+
+    def test_an_entity_nobody_references_is_left_alone(self) -> None:
+        """No key is a design choice there, and the linter says so at info."""
+        assert "primary_key" not in to_project_data(self.ANSWER)["entities"]["nurse"]
+
+    def test_a_declared_key_is_not_overruled(self) -> None:
+        answer = json.loads(json.dumps(self.ANSWER))
+        answer["entities"][0]["fields"][1]["primary_key"] = True
+        assert to_project_data(answer)["entities"]["ward"]["primary_key"] == "ward_name"
+
+    def test_the_result_generates_and_its_joins_resolve(self) -> None:
+        from cacophony.generation.engine import GenerationEngine
+        from cacophony.schema.compiler import compile_project
+        from cacophony.schema.loader import load_project_data
+
+        compiled = compile_project(load_project_data(to_project_data(self.ANSWER)))
+        engine = GenerationEngine(compiled)
+        keys = {record.values["ward_id"] for record in engine.preview("ward", 8)}
+        nurses = engine.preview("nurse", 40)
+        assert nurses and all(record.values["ward"] in keys for record in nurses)

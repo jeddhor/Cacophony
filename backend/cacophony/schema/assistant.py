@@ -460,6 +460,8 @@ def to_project_data(payload: dict[str, Any], *, scale: int | None = None) -> dic
     if not entities:
         raise SchemaProposalError("the proposal contains no usable entities")
 
+    _ensure_referenced_entities_have_keys(entities)
+
     return {
         "project": {
             "name": str(payload.get("name") or "Proposed Schema").strip(),
@@ -468,6 +470,47 @@ def to_project_data(payload: dict[str, Any], *, scale: int | None = None) -> dic
         },
         "entities": entities,
     }
+
+
+def _ensure_referenced_entities_have_keys(entities: dict[str, Any]) -> None:
+    """Give a referenced entity a primary key if the model forgot to.
+
+    ``primary_key`` is not a required property of a proposal, so a model can
+    leave it out - and then a reference to that entity points at nothing, the
+    joins fail, and section 110's promise that what comes back is a schema
+    *known to work* is broken in the one way that matters. Cacophony already
+    chooses the generators; choosing which field identifies a record is the same
+    kind of decision, and it is one that can be made correctly from the field
+    names.
+
+    Only for entities something actually points at. An entity nobody references
+    is entitled to have no key, and the linter mentions it at ``info``.
+    """
+    referenced = {
+        field_data["entity"]
+        for entity in entities.values()
+        for field_data in entity["fields"].values()
+        if field_data.get("generator") == "reference" and field_data.get("entity")
+    }
+
+    for name in sorted(referenced & set(entities)):
+        entity = entities[name]
+        if entity.get("primary_key"):
+            continue
+        candidates = list(entity["fields"])
+        preferred = [f"{name}_id", "id", f"{name}_key"]
+        chosen = next(
+            (field for field in preferred if field in candidates),
+            next((field for field in candidates if field.endswith("_id")), candidates[0]),
+        )
+        entity["primary_key"] = chosen
+        # A key has to be unique for the reference to mean anything, and the
+        # generator has to produce something distinct per record. A field the
+        # model described only by meaning would get whatever the recommender
+        # picked, which is not necessarily distinct.
+        field_data = entity["fields"][chosen]
+        field_data.setdefault("generator", "sequence")
+        field_data["unique"] = True
 
 
 def _entity_data(entity: dict[str, Any], *, known: list[str], scale: int | None) -> dict[str, Any]:

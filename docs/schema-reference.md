@@ -1101,6 +1101,48 @@ Exit code `4` means a run was cancelled rather than failed.
 
 ---
 
+## One sentence to a world
+
+Design document section 110. `begin` is `propose`, an editor and `generate`
+joined into the flow section 110 describes:
+
+```bash
+cacophony begin "a small hospital: staff, wards, and admissions over a year"
+```
+
+It asks a model for a schema, writes it to a file, prints what it would produce
+— entities, counts, model calls, media, storage — and then asks:
+
+```
+BEGIN CACOPHONY? [b]egin, [e]dit, [q]uit
+```
+
+`e` opens the schema in `$EDITOR` and recompiles it when you come back, as many
+times as you like; `b` hands the compiled project to the same Conductor
+`cacophony generate` uses. Nothing here generates a record itself.
+
+**The schema is written before anything is generated**, and the run is recorded
+against it. A world that only ever existed in one terminal session is an
+anecdote; what you get instead is a project file, a run in the store, and
+`cacophony generate <schema>` to do it again.
+
+**It asks.** A sentence can describe four hours of work and a hundred gigabytes,
+so the estimate comes first and the question after it. `--yes` skips the question
+for a script, and outside a terminal it is skipped automatically — with a schema
+that lints clean required, since there is nobody there to fix it.
+
+`--scale N` divides every proposed count, which is how you get the shape of a
+world before committing to the size of one.
+
+**A proposal that references an entity gets a primary key for it**, whether or
+not the model supplied one. `primary_key` is not a required property of a
+proposal, and a reference to an entity without one points at nothing: the schema
+compiles, generates, and fails on its first join. Cacophony picks the key the
+same way it picks generators — `<entity>_id`, then `id`, then the first field
+ending `_id` — and marks it unique.
+
+---
+
 ## Streaming
 
 `cacophony stream` turns a project into a workload generator (section 35): a

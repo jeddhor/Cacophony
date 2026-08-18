@@ -130,7 +130,7 @@ default. Interactive API documentation is at <code>/docs</code>.</p>
 <div class="signature">cacophony desktop [--store FILE] [-p PROJECT] [--studio DIR] [--host H]
                   [--port N] [--no-token] [--keep-running] [--log-level LEVEL]</div>
 <p>The same application, with a handshake line on stdout and a lifetime tied to
-stdin. Chapter&nbsp;38.</p>
+stdin. Chapter&nbsp;39.</p>
 
 <h2>Providers and models</h2>
 
@@ -142,6 +142,11 @@ cacophony benchmark PROJECT -m MODEL,MODEL [-e ENTITY] [-n N] [-p PROVIDER]
 
 <h2>Everything else</h2>
 
+<h3 id="cmd-begin-ref"><code>begin</code></h3>
+<div class="signature">cacophony begin "DESCRIPTION" [-o SCHEMA] [-d DIR] [-f FORMAT]
+              [--scale N] [--seed N] [-e] [-y] [--force] [provider options]</div>
+<p>Propose a world, review it, build it. The chapter at the end of this part.</p>
+
 <h3 id="cmd-propose"><code>propose</code></h3>
 <div class="signature">cacophony propose "a description" [-o FILE] [--providers PROJECT]
                   [--adapter NAME] [--url URL] [-m MODEL] [--scale N]
@@ -151,10 +156,10 @@ generators, compiles the result and lints it before showing it. What comes back
 is a schema known to work, and a file to edit.</p>
 
 <h3 id="cmd-stream"><code>stream</code>, <code>cluster</code>, <code>controller</code>, <code>worker</code></h3>
-<p>Chapters&nbsp;28 and&nbsp;29.</p>
+<p>Chapters&nbsp;29 and&nbsp;30.</p>
 
 <h3 id="cmd-transform"><code>transform</code></h3>
-<p>Chapter&nbsp;35.</p>
+<p>Chapter&nbsp;36.</p>
 
 <h1>Providers</h1>
 
@@ -324,3 +329,101 @@ diagnosable after the fact:</p>
 
 <p><code>--no-history</code> skips the store entirely, for throwaway runs and for
 environments where writing a database beside the schema is unwelcome.</p>
+
+<h1 id="cmd-begin">One sentence to a world</h1>
+
+<p class="lead">The design document closes with an image rather than a feature:
+somebody describes the world they need in a sentence, Cacophony proposes it,
+they edit the proposal, and then they press a button marked BEGIN CACOPHONY.
+Every part of that existed separately. This is the flow that joins them.</p>
+
+<pre><code class="language-console">$ cacophony begin "a small hospital: staff, wards, and admissions over a year"</code></pre>
+
+<h2>What it does</h2>
+
+<ol class="tight">
+  <li>Asks a language model for a schema &mdash; the same assistant
+  <code>propose</code> uses.</li>
+  <li>Writes it to a file.</li>
+  <li>Prints the world it would build: entities, record counts, model calls,
+  media and an approximate size.</li>
+  <li>Asks.</li>
+  <li>Hands the compiled project to the same Conductor <code>generate</code>
+  uses.</li>
+</ol>
+
+<pre><code class="language-console">───────────────────────────── CACOPHONY ──────────────────────────────
+building a small hospital: staff, wards, and admissions over a year
+
+schema small-hospital.yaml
+  note no primary key was proposed for: nurse
+
+proposed 2 entities, 48 records
+  ward                               8 records
+  nurse                             40 records  after ward
+
+  field values     136
+  storage (approx) 1.8 KB
+
+INFO  nurse
+  No primary key is declared.
+
+BEGIN CACOPHONY? [b]egin, [e]dit, [q]uit (b):</code></pre>
+
+<p>The linter runs on the proposal too, and its findings are part of what you
+are being asked about. Here it is telling you that <code>nurse</code> has no
+identifier &mdash; harmless for a leaf entity, worth a moment's thought if you
+were going to reference it later.</p>
+
+<p><code>e</code> opens the schema in <code>$EDITOR</code> and recompiles it
+when you come back, as many times as you like &mdash; a schema that does not
+compile puts you straight back in the editor rather than ending the session.
+<code>q</code> leaves the file where it is.</p>
+
+<h2>Two things it insists on</h2>
+
+<p><strong>The schema is written before anything is generated.</strong> A world
+that only ever existed in one terminal session is an anecdote. What you get is a
+project file, a run recorded against it, and
+<code>cacophony generate &lt;schema&gt;</code> to do the whole thing again on
+another machine next year.</p>
+
+<p><strong>It asks.</strong> A sentence can quite easily describe four hours of
+work and a hundred gigabytes, so the estimate comes first and the question after
+it. <code>--yes</code> skips the question for a script, and outside a terminal it
+is skipped automatically &mdash; with a schema that lints clean required, since
+there is nobody there to fix one that does not.</p>
+
+<table class="compact">
+  <caption>begin options</caption>
+  <thead><tr><th>Option</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">-o, --out PATH</td><td>Where the schema goes. Default: a filename made from the name the model gave it</td></tr>
+    <tr><td class="mono">-d, --out-dir DIR</td><td>Where the data goes</td></tr>
+    <tr><td class="mono">-f, --format FORMAT</td><td>Output format for the data</td></tr>
+    <tr><td class="mono">--scale N</td><td>Divide every proposed count by this</td></tr>
+    <tr><td class="mono">--seed N</td><td>Seed the world</td></tr>
+    <tr><td class="mono">-e, --edit</td><td>Open the editor before deciding anything</td></tr>
+    <tr><td class="mono">-y, --yes</td><td>Do not ask; begin as soon as it compiles</td></tr>
+    <tr><td class="mono">--force</td><td>Overwrite an existing schema file</td></tr>
+    <tr><td class="mono">--providers FILE</td><td>Borrow a project's language-model configuration</td></tr>
+    <tr><td class="mono">--adapter, --url, -m</td><td>Describe the model directly instead</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <span class="callout-title">The bug this flow found on its first run</span>
+  <p><code>primary_key</code> is not a required property of a proposal, and a
+  model that omits it produces a schema whose references point at nothing: it
+  compiles, it generates, and it fails on the first join. Cacophony now picks a
+  key for any entity something references &mdash; <code>&lt;entity&gt;_id</code>,
+  then <code>id</code>, then the first field ending <code>_id</code> &mdash; and
+  marks it unique. "A schema that is known to work" has to include the joins.</p>
+</div>
+
+<h2>What it is not</h2>
+
+<p>It is not a different generator, a different engine or a different set of
+guarantees. Every record it produces comes from the same pipeline as every other
+record in this manual, and the file it writes is an ordinary project you can
+edit, lint, bundle, stream, shard across eight machines, or throw away.</p>

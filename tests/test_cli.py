@@ -1185,3 +1185,213 @@ entities:
         result = invoke("generate", str(self._project(tmp_path)), "-n", "lots")
         assert result.exit_code == 2
         assert "ENTITY=NUMBER" in result.stderr
+
+
+# --------------------------------------------------------------------------- #
+# begin (design document section 110)
+# --------------------------------------------------------------------------- #
+
+#: A mock provider with an exact answer, so the flow can be tested rather than
+#: the model. Without it the mock invents a schema afresh every call, which is
+#: the right behaviour for a stand-in and useless for an assertion.
+SCRIPTED_PROPOSAL = json.dumps(
+    {
+        "name": "Small Hospital",
+        "description": "Staff and the wards they work on.",
+        "entities": [
+            {
+                "name": "ward",
+                "count": 8,
+                "fields": [
+                    {"name": "ward_id", "type": "integer", "semantic": "ward number"},
+                    {"name": "ward_name", "type": "string", "semantic": "the name of a ward"},
+                ],
+            },
+            {
+                "name": "nurse",
+                "count": 40,
+                "fields": [
+                    {"name": "nurse_id", "type": "integer", "semantic": "staff number"},
+                    {"name": "full_name", "type": "string", "semantic": "a person's full name"},
+                    {"name": "ward", "type": "integer", "semantic": "ward", "references": "ward"},
+                ],
+            },
+        ],
+    }
+)
+
+SCRIPTED_PROVIDER_YAML = f"""
+project:
+  name: Scripted Assistant
+  seed: 1
+providers:
+  designer:
+    type: language_model
+    adapter: mock
+    model: mock-designer
+    options:
+      responses:
+        # A block scalar, so the apostrophe in "a person's full name" does not
+        # end a quoted string halfway through the JSON.
+        - |-
+          {SCRIPTED_PROPOSAL}
+entities:
+  placeholder:
+    count: 1
+    fields:
+      id:
+        type: integer
+        generator: sequence
+"""
+
+
+class TestBegin:
+    """One sentence to a world: propose, review, generate."""
+
+    @pytest.fixture
+    def scripted(self, tmp_path: Path) -> Path:
+        path = tmp_path / "assistant.yaml"
+        path.write_text(SCRIPTED_PROVIDER_YAML, encoding="utf-8")
+        return path
+
+    def test_it_proposes_writes_and_generates_in_one_go(
+        self, scripted: Path, tmp_path: Path
+    ) -> None:
+        schema = tmp_path / "hospital.yaml"
+        out = tmp_path / "world"
+        result = invoke(
+            "begin",
+            "a small hospital",
+            "--providers",
+            str(scripted),
+            "--out",
+            str(schema),
+            "-d",
+            str(out),
+            "--yes",
+        )
+        assert result.exit_code == 0, result.stdout + result.stderr
+        # The schema, because a world nobody can regenerate is an anecdote.
+        assert schema.exists()
+        assert invoke("validate", str(schema)).exit_code == 0
+        # And the data.
+        assert len((out / "ward.jsonl").read_text(encoding="utf-8").strip().splitlines()) == 8
+        assert len((out / "nurse.jsonl").read_text(encoding="utf-8").strip().splitlines()) == 40
+
+    def test_the_references_it_proposed_resolve(self, scripted: Path, tmp_path: Path) -> None:
+        """The point of proposing a relationship is that it is a real one.
+
+        This proposal declares no primary key anywhere - the model is not
+        required to, and this one did not. Cacophony supplies one for the
+        entity being referenced, because otherwise the reference points at
+        nothing and the first join fails.
+        """
+        schema = tmp_path / "hospital.yaml"
+        out = tmp_path / "world"
+        invoke(
+            "begin",
+            "a small hospital",
+            "--providers",
+            str(scripted),
+            "--out",
+            str(schema),
+            "-d",
+            str(out),
+            "--yes",
+        )
+        wards = {
+            json.loads(line)["ward_id"]
+            for line in (out / "ward.jsonl").read_text(encoding="utf-8").splitlines()
+        }
+        nurses = [
+            json.loads(line)
+            for line in (out / "nurse.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        assert nurses and all(nurse["ward"] in wards for nurse in nurses)
+
+    def test_it_says_what_it_is_about_to_build(self, scripted: Path, tmp_path: Path) -> None:
+        result = invoke(
+            "begin",
+            "a small hospital",
+            "--providers",
+            str(scripted),
+            "--out",
+            str(tmp_path / "h.yaml"),
+            "-d",
+            str(tmp_path / "w"),
+            "--yes",
+        )
+        assert "proposed 2 entities, 48 records" in result.stdout
+        assert "BEGIN CACOPHONY" in result.stdout
+
+    def test_scale_shrinks_the_world(self, scripted: Path, tmp_path: Path) -> None:
+        out = tmp_path / "world"
+        result = invoke(
+            "begin",
+            "a small hospital",
+            "--providers",
+            str(scripted),
+            "--out",
+            str(tmp_path / "h.yaml"),
+            "-d",
+            str(out),
+            "--yes",
+            "--scale",
+            "8",
+        )
+        assert result.exit_code == 0, result.stdout
+        assert len((out / "nurse.jsonl").read_text(encoding="utf-8").strip().splitlines()) == 5
+
+    def test_it_will_not_overwrite_a_schema(self, scripted: Path, tmp_path: Path) -> None:
+        schema = tmp_path / "taken.yaml"
+        schema.write_text("project:\n  name: mine\n", encoding="utf-8")
+        result = invoke(
+            "begin",
+            "a small hospital",
+            "--providers",
+            str(scripted),
+            "--out",
+            str(schema),
+            "--yes",
+        )
+        assert result.exit_code == 2
+        assert "--force" in result.stderr
+        assert schema.read_text(encoding="utf-8") == "project:\n  name: mine\n"
+
+    def test_the_output_format_is_the_one_asked_for(self, scripted: Path, tmp_path: Path) -> None:
+        out = tmp_path / "world"
+        result = invoke(
+            "begin",
+            "a small hospital",
+            "--providers",
+            str(scripted),
+            "--out",
+            str(tmp_path / "h.yaml"),
+            "-d",
+            str(out),
+            "--yes",
+            "-f",
+            "csv",
+        )
+        assert result.exit_code == 0, result.stdout
+        assert (out / "nurse.csv").is_file()
+
+    def test_the_run_is_recorded_against_the_schema_it_wrote(
+        self, scripted: Path, tmp_path: Path
+    ) -> None:
+        """So `cacophony runs` finds it, and `generate` reproduces it."""
+        schema = tmp_path / "hospital.yaml"
+        invoke(
+            "begin",
+            "a small hospital",
+            "--providers",
+            str(scripted),
+            "--out",
+            str(schema),
+            "-d",
+            str(tmp_path / "w"),
+            "--yes",
+        )
+        listed = invoke("runs", "--project", str(schema), "--json")
+        assert listed.exit_code == 0, listed.stdout
+        assert json.loads(listed.stdout)
