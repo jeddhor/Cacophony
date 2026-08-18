@@ -1,0 +1,102 @@
+<section class="cover">
+  <div class="cover-grid"></div>
+  <div class="cover-inner">
+    <div class="cover-rule"></div>
+    <h1 class="no-number">Cacophony</h1>
+    <div class="cover-sub">The Manual</div>
+    <div class="cover-tag">A synthetic reality compiler. Schemas in, worlds out &mdash;
+      and the same world every time you ask for it.</div>
+  </div>
+  <div class="cover-foot">Version 0.1.0 &nbsp;&middot;&nbsp; Complete edition &nbsp;&middot;&nbsp; Fourteen phases, delivered</div>
+</section>
+
+<section class="frontmatter colophon" id="about-this-manual">
+  <h1 class="no-number">About this manual</h1>
+
+  <p class="lead">This is the whole of Cacophony, written down. Every command,
+  every option, every generator, every key the schema language accepts, and the
+  reasoning behind the parts where the reasoning is the interesting bit.</p>
+
+  <p>It is long on purpose. Cacophony is a compiler for realities, and a
+  compiler that will happily produce four hundred million rows deserves a
+  reference you can look something up in at two in the morning without guessing.
+  Where a chapter is a tutorial it says so; everywhere else, assume you are
+  reading reference material and skip freely.</p>
+
+  <h2 class="no-number">How it is arranged</h2>
+
+  <p>Twelve parts and a stack of appendices. Part&nbsp;I gets a dataset out of
+  the machine in ten minutes. Part&nbsp;II explains the two or three ideas the
+  whole system rests on &mdash; principally that a record's seed is a hash of
+  its <em>position</em>, which is why nearly everything else is cheap.
+  Parts&nbsp;III to&nbsp;VI are the schema language. Parts&nbsp;VII
+  to&nbsp;IX are running, scaling and checking. Parts&nbsp;X to&nbsp;XII are the
+  interfaces, the extension points and the operational detail. The appendices
+  are the tables you will actually use.</p>
+
+  <h2 class="no-number">Conventions</h2>
+
+  <p>Command lines and file contents are set in monospace and labelled with
+  their language. A label of <em>terminal</em> means you type it; the
+  <code>$</code> is the prompt, not part of the command.</p>
+
+  <p>References like <span class="sec">section&nbsp;75</span> point at the
+  numbered sections of <code>CACOPHONY.md</code>, the design document this
+  program was built from. They appear throughout because a good deal of
+  Cacophony's behaviour is a deliberate reading of a specific requirement, and
+  the requirement is often the shortest explanation of the behaviour.</p>
+
+  <p>British spelling throughout, matching the source. Where a schema key or a
+  command differs &mdash; <code>normalize</code>, <code>--no-validate</code>
+  &mdash; the code spelling wins, because that is what you have to type.</p>
+
+  <div class="callout quiet">
+    <span class="callout-title">Two words that mean different things</span>
+    <p><strong>Chaos</strong> is damage: data the schema forbids, injected on
+    purpose &mdash; a null in a required column, a key pointing at nothing.
+    <strong>Edge cases</strong> are legal values that naive code mishandles
+    anyway &mdash; <code>O'Brien-Smith</code>, an emoji in a display name, the
+    year's last second. The first tests your error handling; the second tests
+    your correctness. They are separate features with separate flags, and
+    conflating them is the most common way to misread this manual.</p>
+  </div>
+
+  <h2 class="no-number">Versions</h2>
+
+  <p>Written against Cacophony <strong>0.1.0</strong>, the state of the
+  repository after the fourteenth and final delivery phase. Every command in
+  this manual was run against that build while the manual was being written; the
+  outputs shown are real, including the ones that report a problem.</p>
+
+  <h2 class="no-number">Licence</h2>
+
+  <p>Cacophony is free software under the GNU Affero General Public License,
+  version&nbsp;3 or later. The Affero clause is the one that matters for a
+  program like this &mdash; it has a web interface and a distributed mode, so it
+  is the kind of thing people run on a server for other people to use, which is
+  precisely the case ordinary GPL leaves open.</p>
+
+  <div class="legal">Copyright (C) 2026 Jason Tripp
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program. If not, see &lt;https://www.gnu.org/licenses/&gt;.</div>
+
+  <p>The data you generate is yours. The licence says nothing about it, and a
+  schema is your document rather than a derived work of the program.</p>
+
+  <p class="colophon-end">Set in IBM Plex &mdash; Serif for reading, Sans for
+  structure, Mono for anything the computer said. Composed from HTML and CSS
+  with WeasyPrint; the sources are in <code>docs/manual/</code> and the build is
+  one command.</p>
+</section>
+
+<!--CONTENTS-->

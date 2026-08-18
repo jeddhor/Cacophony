@@ -1,0 +1,380 @@
+<section class="part-page">
+  <h1>Assurance</h1>
+  <p class="part-blurb">Whether what came out is any good: is it valid, is it
+  repetitive, does it have awkward corners, was the model up to it, and what to
+  do when the answer is no.</p>
+</section>
+
+<h1>Validation</h1>
+
+<p class="lead">Generation and validation are separate stages on purpose. A
+generator that also decided what was acceptable could never be wrong; a
+validator that runs afterwards can be, and tells you.</p>
+
+<h2>What is checked</h2>
+
+<table class="compact">
+  <thead><tr><th>Category</th><th>Checks</th></tr></thead>
+  <tbody>
+    <tr><td>Type</td><td>The value is of the declared type, or coercible to it without loss</td></tr>
+    <tr><td>Constraints</td><td><code>min</code>, <code>max</code>, lengths, <code>pattern</code>, <code>enum</code>, <code>forbidden</code>, <code>multiple_of</code>, <code>precision</code></td></tr>
+    <tr><td>Nullability</td><td>A null appears only where nulls are permitted</td></tr>
+    <tr><td>Uniqueness</td><td>Fields marked <code>unique</code> have no repeats</td></tr>
+    <tr><td>Referential</td><td>Every foreign key resolves to a record that exists</td></tr>
+    <tr><td>Duplication</td><td>When <code>quality:</code> asks for it. Next chapter.</td></tr>
+  </tbody>
+</table>
+
+<h2>Two different failures, and two different flags</h2>
+
+<p>This trips people up, so it is worth being exact. A <strong>generation</strong>
+failure is a generator that could not produce a value at all &mdash; the model
+server is down, a template names a field that is null, a provider timed out. A
+<strong>validation</strong> failure is a value that was produced and then found
+unacceptable.</p>
+
+<p><code>--on-failure</code> governs the first
+<span class="sec">section&nbsp;65</span>:</p>
+
+<table class="compact">
+  <caption>--on-failure, for a generator that raises</caption>
+  <thead><tr><th>Policy</th><th>Behaviour</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">abort</td><td>Stop the run and report. The default.</td></tr>
+    <tr><td class="mono">retry</td><td>Try the field again, up to the attempt limit. Useful with a flaky provider.</td></tr>
+    <tr><td class="mono">skip</td><td>Leave the field null and carry on, counting.</td></tr>
+    <tr><td class="mono">placeholder</td><td>Write a marked stand-in, <code>[FAILED:field]</code>.</td></tr>
+    <tr><td class="mono">incomplete</td><td>Write the record with the field missing.</td></tr>
+  </tbody>
+</table>
+
+<p>Validation failures are handled separately, and the behaviour is worth
+knowing before you rely on it:</p>
+
+<table class="compact">
+  <caption>What happens to a record that fails validation</caption>
+  <thead><tr><th>Flags</th><th>Result</th></tr></thead>
+  <tbody>
+    <tr><td><em>none</em></td><td>The record is <strong>written anyway</strong>, counted, and reported in the run summary as <code>validation failures</code>. The exit code is 0.</td></tr>
+    <tr><td class="mono">--drop-invalid</td><td>The record is discarded. Only valid records reach the file; the count is still reported.</td></tr>
+    <tr><td class="mono">--no-validate</td><td>Nothing is checked and nothing is counted.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warning">
+  <span class="callout-title">A failing run still exits 0</span>
+  <p>A run that reports <code>validation failures 30,705</code> has written
+  those thirty thousand invalid records to the file and returned success.
+  <code>--on-failure abort</code> does not change that, because it is about
+  generation rather than validation. If invalid data must not reach the file,
+  pass <code>--drop-invalid</code>; if a pipeline must fail on it, read the
+  count from the run record or from
+  <code>GET /api/runs/{id}</code> and decide there.</p>
+</div>
+
+<h2>Damaged fields are skipped</h2>
+
+<p>Chaos marks what it damaged, and the validator does not check those fields.
+Otherwise every chaotic run would be a wall of failures reporting the feature
+working, and <code>--drop-invalid</code> would discard exactly the records you
+asked to be broken.</p>
+
+<h2>Quality scoring</h2>
+
+<p>A completed run carries referential and distribution scores, visible in the
+Studio and at <code>GET /api/runs/{id}/quality</code>: how many references
+resolved, how closely categorical fields matched their declared weights, and the
+duplication report if one was requested.</p>
+
+<h1 id="key-quality">Duplication</h1>
+
+<p class="lead">The characteristic failure of model-written data is repetition:
+the same three biographies, lightly reworded, forever. Measuring it needs care,
+because the naive approaches either miss it or cost more than the generation
+did.</p>
+
+<pre><code class="language-yaml">quality:
+  duplication:
+    max_exact: 0.001        # fraction of compared *values*, not records
+    max_near: 0.02
+    fields: [biography]     # default: the long-form text a model wrote
+    methods: [exact, normalized, minhash]
+    similarity: 0.7         # Jaccard at which two texts are the same thing
+    shingle: 3              # word n-gram width
+    window: 50000           # recent values held for near-duplicate comparison
+    error_rate: 0.001       # Bloom filter false-positive target</code></pre>
+
+<p>Writing a threshold is a request to measure. Nothing is checked that nobody
+asked for, and <code>enabled: false</code> overrides that.</p>
+
+<table>
+  <caption>Methods</caption>
+  <thead><tr><th>Method</th><th>Catches</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">exact</td><td>Byte-identical values</td></tr>
+    <tr><td class="mono">normalized</td><td>The same text casefolded, depunctuated, whitespace-collapsed</td></tr>
+    <tr><td class="mono">minhash</td><td>Shared <em>phrasing</em> &mdash; a paragraph rewritten around one clause</td></tr>
+    <tr><td class="mono">fuzzy</td><td>The same candidates, confirmed with a real sequence ratio</td></tr>
+    <tr><td class="mono">embeddings</td><td>Named in the design and <strong>refused</strong>: it needs an embedding provider, and no adapter offers one</td></tr>
+  </tbody>
+</table>
+
+<h2>Which fields, by default</h2>
+
+<p>Model-written fields, fields declared <code>text</code>, and strings whose
+<code>max_length</code> is 80 or more. Comparing every employee id against every
+other one finds nothing and costs a great deal; reporting that a weighted choice
+recurs would be reporting what a weighted choice is for. <code>["*"]</code>
+compares whole records.</p>
+
+<h2>What to believe</h2>
+
+<p>Exact matching uses a Bloom filter &mdash; 18&nbsp;MB for ten million values
+rather than most of a gigabyte. It has no false negatives, so a report of zero
+is exact, and its false-positive rate at the load it actually reached is
+reported beside the count.</p>
+
+<p>Near-duplicate detection holds a sliding window, because model repetition is
+<em>local</em>: the same three biographies come back within a few hundred calls,
+and a window catches that at any dataset size where a uniform sample would
+not.</p>
+
+<h2>The thresholds are calibrated, not guessed</h2>
+
+<table class="compact">
+  <caption>Word-trigram Jaccard on a sixty-word biography</caption>
+  <thead><tr><th>Relationship between the two texts</th><th class="num">Score</th></tr></thead>
+  <tbody>
+    <tr><td>Identical but for the name</td><td class="num">0.82</td></tr>
+    <tr><td>Name changed and one clause rewritten</td><td class="num">0.69</td></tr>
+    <tr><td>Sharing an opening sentence and nothing else</td><td class="num">0.13</td></tr>
+  </tbody>
+</table>
+
+<p>Hence a default <code>similarity</code> of 0.7: above it the two texts are the
+same text, below it they merely start the same way.</p>
+
+<div class="callout warning">
+  <span class="callout-title">A confirmation step that lied</span>
+  <p>The fuzzy confirmation uses Python's <code>SequenceMatcher</code>, which
+  by default treats characters appearing in more than one per cent of a long
+  string as junk &mdash; that is, the vowels. A name-swapped biography scored
+  <strong>0.014</strong> against a true value of 0.956. The autojunk heuristic is
+  now switched off. It is recorded here because the failure was silent: the
+  detector reported clean data, which is the worst possible way for a quality
+  tool to be wrong.</p>
+</div>
+
+<h2>What is excluded</h2>
+
+<p>Deliberate duplicates from <code>chaos</code>. Reporting those would be
+reporting the feature.</p>
+
+<h1>Edge cases</h1>
+
+<p class="lead">Values the schema <em>permits</em> and naive code mishandles
+anyway. <code>O'Brien-Smith</code> is a real surname; an application that cannot
+store it has a bug, not bad input.</p>
+
+<pre><code class="language-console">$ cacophony generate project.yaml --edge-cases 0.05
+$ cacophony generate project.yaml --edge-cases 0.2 --edge-categories emoji,rtl_text</code></pre>
+
+<h2>Not chaos</h2>
+
+<p>Entropy injection produces data the schema forbids and answers "what does my
+pipeline do with broken input". Edge cases produce data the schema permits and
+answer "is my code actually correct". They are separate flags because they are
+separate questions, and the answers have different owners.</p>
+
+<h2>The categories</h2>
+
+<table>
+  <caption>--edge-categories</caption>
+  <thead><tr><th>Category</th><th>Values</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">boundary_length</td><td>Empty string where legal, exactly <code>min_length</code>, exactly <code>max_length</code></td></tr>
+    <tr><td class="mono">punctuation_names</td><td><code>O'Brien-Smith</code>, <code>d'Arcy</code>, <code>van der Waals</code>, <code>Ó Séaghdha</code></td></tr>
+    <tr><td class="mono">unicode_text</td><td>One-character names, <code>ß</code>, Turkish dotted and dotless I, ligatures, fullwidth forms, Cherokee</td></tr>
+    <tr><td class="mono">emoji</td><td>Zero-width joiner sequences, family groups, flag pairs, skin-tone modifiers</td></tr>
+    <tr><td class="mono">rtl_text</td><td>Arabic, Hebrew, Persian, and the RLO override that renders reversed</td></tr>
+    <tr><td class="mono">whitespace</td><td>Leading, trailing, doubled, tab, non-breaking, zero-width, embedded newline</td></tr>
+    <tr><td class="mono">extreme_numbers</td><td>Declared bounds and one inside them; unbounded fields get 2³¹, 2⁵³, 2⁶³ and their negatives</td></tr>
+    <tr><td class="mono">temporal_boundaries</td><td>29 February, year end, the Unix epoch, and both US daylight-saving transitions</td></tr>
+    <tr><td class="mono">extreme_coordinates</td><td>The poles, the antimeridian, null island</td></tr>
+  </tbody>
+</table>
+
+<h2>Three rules that make the mode trustworthy</h2>
+
+<p><strong>Every value is validated against the field that will hold it</strong>,
+and a candidate that does not fit is discarded and counted. An edge case that
+fails validation has told you nothing about your application.</p>
+
+<p><strong>Primary keys, unique fields and references are never touched.</strong>
+An emoji primary key is a broken fixture, not a robustness test: the joins stop
+resolving and every finding after that is about Cacophony.</p>
+
+<p><strong>Cases are applied as each field is produced</strong>, not to the
+finished record, so anything derived from an awkward value derives from the
+awkward value. A first name of <code>O'Brien-Smith</code> yields
+<code>o'brien-smith.smith@example.com</code>, which tests the template too.
+Doing it the other way round produced a colleague named
+<code>" leading space"</code> whose model-written biography still began
+"Courtney specializes in…" &mdash; two fields disagreeing is a broken fixture,
+not a finding.</p>
+
+<p>Which records get a case, and which case, is derived from the record index,
+so a bug found once is found again.</p>
+
+<div class="callout quiet">
+  <span class="callout-title">Bounds are read from the generator, not just the constraints</span>
+  <p>An early version proposed 2⁶³ as an age, because the field had no
+  <code>constraints.max</code> &mdash; only a generator option saying to draw
+  between 21 and 67. The injector now reads the generator's own bounds as well,
+  which is the difference between an edge case and nonsense.</p>
+</div>
+
+<h1 id="cmd-benchmark">Benchmarking models</h1>
+
+<p class="lead">Not "which model is best" &mdash; a question with no answer
+&mdash; but "which of these models can do <em>this schema</em>", which has a
+measurable one.</p>
+
+<pre><code class="language-console">$ cacophony benchmark project.yaml -m gemma4:12b,qwen3:8b -n 100
+
+MODEL               VALID  FIELDS  USABLE  CLIPPED   SPEED  DUPLICATION  LATENCY
+gemma4:12b         100.0%  100.0%   91.7%        1  11 t/s         0.0%  1760 ms
+smollm3:latest     100.0%  100.0%   70.0%        6  21 t/s         0.0%   806 ms</code></pre>
+
+<table>
+  <caption>Columns</caption>
+  <thead><tr><th>Column</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">VALID</td><td>Answers that parsed without the repair stage touching them</td></tr>
+    <tr><td class="mono">FIELDS</td><td>Records that passed validation</td></tr>
+    <tr><td class="mono">USABLE</td><td>Values that were not empty, over-length, clipped or a refusal</td></tr>
+    <tr><td class="mono">CLIPPED</td><td>Values that stop dead at their length limit, mid-word</td></tr>
+    <tr><td class="mono">SPEED</td><td>Completion tokens per second</td></tr>
+    <tr><td class="mono">DUPLICATION</td><td>Repeated values, measured with the detector from the previous chapter</td></tr>
+    <tr><td class="mono">LATENCY</td><td>Mean per-call latency</td></tr>
+  </tbody>
+</table>
+
+<h2>Fairness is enforced, not documented as a caveat</h2>
+
+<p>Every model generates the same record indices from the same seed. The cache
+is forced off &mdash; with it on, the second model would be scored on the first
+model's answers and report an impossible speed. Concurrency comes from the
+provider spec and is stated, because 71 tokens per second at four concurrent
+requests is not comparable to 42 at one.</p>
+
+<h2>Why CLIPPED exists</h2>
+
+<p>A provider that enforces the JSON Schema natively stops decoding at
+<code>maxLength</code>, so the value is never <em>over</em> length &mdash; it is
+cut. <code>"…failed to handle queueing mechanism, led 3"</code> passes every
+check in the platform and is not a sentence. Without this column the benchmark
+could not fail: three models scored 100% on everything while producing output
+that was 70% usable.</p>
+
+<h2>What is not measured, and why</h2>
+
+<p>Semantic quality, which cannot be assessed without a judge model &mdash;
+which would make the benchmark depend on the thing it is assessing. What is
+measured instead is named honestly: empty values, broken lengths, clipped
+answers, and boilerplate about being a language model.</p>
+
+<h1 id="key-patches">Changing a dataset that exists</h1>
+
+<p class="lead">Sooner or later a dataset needs an edit: mask a column before it
+leaves the building, drop the test accounts, round the money. There are two ways
+to do it and only one of them survives regeneration.</p>
+
+<h2>The command</h2>
+
+<pre><code class="language-console"># Rewrite a file. Streams, so the size does not matter.
+$ cacophony transform out/employee.jsonl \
+      --set 'email=mask:8' --where "department == 'Finance'" \
+      -o out/employee.masked.jsonl --record-as mask_finance_emails
+
+# Apply the project's own patch rules to a file.
+$ cacophony transform out/employee.jsonl --project project.yaml --in-place
+
+# Filter.
+$ cacophony transform out/employee.jsonl \
+      --keep-where "department == 'Engineering'" -o eng.jsonl
+
+# Re-derive specific records, with no run and no file.
+$ cacophony regenerate project.yaml -e employee -r 4823913-4823920</code></pre>
+
+<table class="compact">
+  <caption>transform options</caption>
+  <thead><tr><th>Option</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">-s, --set FIELD=OP</td><td>An operation pipeline for one field. Repeatable.</td></tr>
+    <tr><td class="mono">-w, --where EXPR</td><td>Only records matching this expression</td></tr>
+    <tr><td class="mono">--drop-where EXPR</td><td>Drop records matching</td></tr>
+    <tr><td class="mono">--keep-where EXPR</td><td>Keep only records matching</td></tr>
+    <tr><td class="mono">-o, --out FILE</td><td>Where to write the result</td></tr>
+    <tr><td class="mono">--in-place</td><td>Rewrite the file, via a temporary beside it</td></tr>
+    <tr><td class="mono">-f, --format FORMAT</td><td><code>jsonl</code>, <code>csv</code> or <code>json</code>. Default: from the suffix</td></tr>
+    <tr><td class="mono">-p, --project FILE</td><td>Apply the project's own patch rules instead of the flags</td></tr>
+    <tr><td class="mono">-e, --entity NAME</td><td>Which entity's rules to apply</td></tr>
+    <tr><td class="mono">--record-as NAME</td><td>Also print this transform as a patch rule to paste into the project</td></tr>
+  </tbody>
+</table>
+
+<p>Parquet cannot be transformed a record at a time: its records live in column
+chunks, so a row-by-row rewrite would mean decoding and re-encoding every one.
+Convert to JSON Lines, transform, convert back.</p>
+
+<h2>It never writes over its input</h2>
+
+<p>Including <code>--in-place</code>, which writes beside and swaps at the end.
+A rule that raises halfway through leaves the original untouched and no partial
+file behind. What it did is recorded in a <code>&lt;name&gt;.transform.json</code>
+sidecar, because a masked column is indistinguishable from a column that was
+always masked.</p>
+
+<h2>Patch rules, which are the better answer</h2>
+
+<pre class="small"><code class="language-yaml">patches:
+  mask_finance_emails:
+    description: Finance addresses are masked before this dataset leaves the building.
+    entity: employee                        # omit to apply to every entity
+    where: "department == 'Finance'"        # omit to apply to every record
+    set:
+      email: "mask:8"                       # an operation pipeline
+      notes: "upper(department)"            # or an expression over the record
+      internal_ref: {value: null}           # or a literal
+  drop_test_accounts:
+    where: "startswith(email, 'test@')"
+    drop: true                              # or `keep: true` for the inverse</code></pre>
+
+<p>A Cacophony dataset is a pure function of its schema and its seed. Editing a
+row in an output file breaks that silently: the file stops corresponding to
+anything, no other machine reproduces it, and the next <code>generate</code>
+overwrites the edit without noticing. A rule in the project applies on every
+run, travels with the schema, and <code>cacophony regenerate</code> produces the
+edited value a year later.</p>
+
+<p>Rules apply in authored order, after chaos and before validation &mdash; so
+what the validator checks is what reaches the file, and a rule is the last word
+on what a record contains. Order matters: masking then hashing is a different
+value from hashing then masking.</p>
+
+<p><code>--record-as NAME</code> prints the equivalent rule so you can paste it
+in. Without it, <code>transform</code> warns that it changed a file and not the
+project, and that the next <code>generate</code> will produce the untransformed
+data again. That warning is the honest one.</p>
+
+<h2>Regeneration is nearly free</h2>
+
+<p>A record's seed is a hash of its position, so record 4,823,913 can be
+produced on its own &mdash; without the 4,823,912 before it, without the
+dataset, and without the run that made it. "This row looks wrong" is a question
+with a millisecond answer.</p>
+
+<p>The Studio's data preview does the same thing from the other end: double-click
+a row and it builds a patch rule from it, showing the YAML rather than offering
+to save the row.</p>

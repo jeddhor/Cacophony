@@ -1,0 +1,894 @@
+/* ==========================================================================
+   The Cacophony manual - print stylesheet.
+
+   Designed for paper first: mirrored margins, running heads that tell you
+   where you are, and page numbers on the outer edge where a thumb finds them.
+   IBM Plex throughout - Serif for reading, Sans for structure, Mono for
+   anything the computer said - because it is one family with one set of
+   proportions, and a manual that mixes families looks assembled rather than
+   designed.
+   ========================================================================== */
+
+:root {
+  --ink: #16161d;
+  --ink-soft: #3d3d4a;
+  --ink-faint: #6e6e80;
+  --rule: #d8d6e3;
+  --rule-faint: #eceaf4;
+  --accent: #4b2fa0;
+  --accent-soft: #7b5fd0;
+  --accent-wash: #f4f1fc;
+  --code-bg: #f7f6fb;
+  --warn: #9a3412;
+  --warn-wash: #fdf3ec;
+}
+
+/* --------------------------------------------------------------------------
+   Pages
+   -------------------------------------------------------------------------- */
+
+@page {
+  size: Letter;
+  /* A measure of about 74 characters at 11pt. Wider than this and the eye
+     loses the start of the next line; the generous outer margin is what a
+     reader's thumb holds and what a pen writes in. */
+  margin: 22mm 34mm 19mm 38mm;
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 8pt;
+  color: var(--ink-faint);
+}
+
+@page :left {
+  margin-left: 34mm;
+  margin-right: 38mm;
+  @top-left {
+    content: string(part);
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    font-size: 7pt;
+    color: var(--ink-faint);
+    vertical-align: bottom;
+    padding-bottom: 3mm;
+  }
+  @bottom-left {
+    content: counter(page);
+    font-size: 8.5pt;
+    font-weight: 600;
+    color: var(--accent);
+    vertical-align: top;
+    padding-top: 4mm;
+  }
+}
+
+@page :right {
+  margin-left: 38mm;
+  margin-right: 34mm;
+  @top-right {
+    content: string(chapnum) "  " string(chapter);
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    font-size: 7pt;
+    color: var(--ink-faint);
+    vertical-align: bottom;
+    padding-bottom: 3mm;
+  }
+  @bottom-right {
+    content: counter(page);
+    font-size: 8.5pt;
+    font-weight: 600;
+    color: var(--accent);
+    vertical-align: top;
+    padding-top: 4mm;
+  }
+}
+
+/* The cover bleeds; nothing else does. */
+@page cover {
+  margin: 0;
+  background: var(--ink);
+  @top-left { content: none }
+  @top-right { content: none }
+  @bottom-left { content: none }
+  @bottom-right { content: none }
+}
+
+@page front {
+  @top-left { content: none }
+  @top-right { content: none }
+  @bottom-left { content: none }
+  @bottom-right { content: none }
+  @bottom-center {
+    content: counter(page, lower-roman);
+    font-size: 8pt;
+    color: var(--ink-faint);
+    vertical-align: top;
+    padding-top: 4mm;
+  }
+}
+
+/* A page left blank so the next chapter can open on a right-hand page carries
+   nothing at all - a running head on an otherwise empty page reads as a
+   printing fault. */
+@page :blank {
+  @top-left { content: none }
+  @top-right { content: none }
+  @bottom-left { content: none }
+  @bottom-right { content: none }
+  @bottom-center { content: none }
+}
+
+/* A chapter opens clean: no running head competing with the title. */
+@page chapter {
+  @top-left { content: none }
+  @top-right { content: none }
+}
+
+@page part {
+  margin: 0;
+  background: var(--ink);
+  @top-left { content: none }
+  @top-right { content: none }
+  @bottom-left { content: none }
+  @bottom-right { content: none }
+}
+
+/* --------------------------------------------------------------------------
+   Body text
+   -------------------------------------------------------------------------- */
+
+html {
+  font-family: "IBM Plex Serif", Georgia, serif;
+  font-size: 11pt;
+  line-height: 1.55;
+  color: var(--ink);
+  hyphens: auto;
+  orphans: 2;
+  widows: 2;
+}
+
+body { margin: 0 }
+
+p {
+  margin: 0;
+  text-align: justify;
+}
+
+p + p { text-indent: 1.35em }
+
+p.lead, .callout p, li p, td p, dd p { text-indent: 0 }
+
+p.lead {
+  margin-bottom: 1.1em;
+  font-size: 11pt;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+
+p.lead::first-line {
+  font-variant-caps: small-caps;
+  letter-spacing: 0.03em;
+  color: var(--ink);
+}
+
+.spaced p + p { text-indent: 0; margin-top: 0.6em }
+
+em { font-style: italic }
+strong { font-weight: 600 }
+
+a { color: inherit; text-decoration: none }
+.body-link { color: var(--accent); text-decoration: none }
+
+abbr { text-decoration: none }
+
+/* Design-document references, e.g. section 75. Present but never shouting. */
+.sec {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 0.82em;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+   Headings
+   -------------------------------------------------------------------------- */
+
+h1, h2, h3, h4 {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-weight: 600;
+  color: var(--ink);
+  break-after: avoid;
+  break-inside: avoid;
+  text-align: left;
+  hyphens: none;
+}
+
+h1 {
+  string-set: chapter attr(data-title), chapnum attr(data-number);
+  bookmark-level: 1;
+  bookmark-label: attr(data-title);
+  margin: 0 0 6mm 0;
+  font-size: 24pt;
+  font-weight: 300;
+  line-height: 1.12;
+  letter-spacing: -0.015em;
+}
+
+h1 .heading-number { display: none }
+
+h2 {
+  bookmark-level: 2;
+  bookmark-label: attr(data-title);
+  margin: 9mm 0 2.2mm 0;
+  font-size: 13pt;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+h3 {
+  bookmark-level: 3;
+  bookmark-label: attr(data-title);
+  margin: 6mm 0 1.6mm 0;
+  font-size: 10.6pt;
+  font-weight: 600;
+}
+
+h4 {
+  margin: 5mm 0 1.2mm 0;
+  font-size: 9.6pt;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+h2 .heading-number,
+h3 .heading-number {
+  display: inline-block;
+  min-width: 3.2em;
+  margin-left: -3.2em;
+  color: var(--accent-soft);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+h2 + p, h3 + p, h4 + p { text-indent: 0 }
+
+/* --------------------------------------------------------------------------
+   Chapter and part openers
+   -------------------------------------------------------------------------- */
+
+.chapter-open {
+  page: chapter;
+  break-inside: avoid;
+  /* Parts open on a right-hand page; chapters simply start a new one. Opening
+     42 chapters on the recto as well would leave a fifth of the book blank,
+     which is a lot of paper for a convention. */
+  break-before: page;
+  margin-bottom: 4mm;
+  padding-bottom: 4mm;
+  border-bottom: 0.4pt solid var(--rule);
+}
+
+.chapter-eyebrow {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 7.5pt;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.chapter-number {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 54pt;
+  font-weight: 200;
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+  color: var(--accent);
+  margin: 1mm 0 3mm -1.5mm;
+}
+
+.part-page {
+  page: part;
+  break-before: right;
+  break-after: page;
+  height: 279.4mm;
+  width: 215.9mm;
+  color: #fff;
+  padding: 92mm 26mm 0 26mm;
+  box-sizing: border-box;
+}
+
+.part-number {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 8.5pt;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--accent-soft);
+}
+
+.part-title {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 34pt;
+  font-weight: 200;
+  line-height: 1.06;
+  letter-spacing: -0.02em;
+  color: #fff;
+  margin: 4mm 0 0 0;
+  string-set: part attr(data-title);
+  bookmark-level: 1;
+  bookmark-label: attr(data-title);
+}
+
+.part-page .part-blurb {
+  margin-top: 7mm;
+  padding-top: 6mm;
+  border-top: 0.5pt solid rgba(255, 255, 255, 0.28);
+  max-width: 108mm;
+  font-size: 10pt;
+  line-height: 1.55;
+  color: #cfcbdd;
+  text-align: left;
+  text-indent: 0;
+}
+
+.part-contents {
+  list-style: none;
+  margin: 9mm 0 0 0;
+  padding: 0;
+  max-width: 108mm;
+  font-family: "IBM Plex Sans", sans-serif;
+}
+
+.part-contents li {
+  margin-bottom: 2.4mm;
+  font-size: 9.6pt;
+  color: #e6e3ef;
+}
+
+.part-chapter-number {
+  display: inline-block;
+  width: 10mm;
+  color: var(--accent-soft);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.part-chapter-title { font-weight: 300 }
+
+/* --------------------------------------------------------------------------
+   Cover and front matter
+   -------------------------------------------------------------------------- */
+
+/* A definite height, so the absolutely positioned blocks have something to
+   position against; the ink itself is painted by @page, which is the only way
+   a background reaches the trim edge. */
+.cover {
+  page: cover;
+  break-after: page;
+  height: 279.4mm;
+  width: 215.9mm;
+  box-sizing: border-box;
+  color: #fff;
+  position: relative;
+  overflow: hidden;
+}
+
+.cover-grid {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 96mm;
+  background-image:
+    radial-gradient(circle at center, rgba(179, 136, 255, 0.55) 0.7px, transparent 0.75px);
+  background-size: 6.2mm 6.2mm;
+  opacity: 0.85;
+}
+
+.cover-inner {
+  position: absolute;
+  left: 22mm;
+  right: 22mm;
+  top: 104mm;
+}
+
+.cover-rule {
+  height: 1.6pt;
+  background: var(--accent-soft);
+  width: 34mm;
+  margin-bottom: 8mm;
+}
+
+.cover h1 {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 54pt;
+  font-weight: 200;
+  letter-spacing: -0.035em;
+  line-height: 1;
+  color: #fff;
+  margin: 0;
+}
+
+.cover .cover-sub {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 15pt;
+  font-weight: 300;
+  letter-spacing: 0.02em;
+  color: var(--accent-soft);
+  margin-top: 4mm;
+}
+
+.cover .cover-tag {
+  font-family: "IBM Plex Serif", serif;
+  font-size: 11pt;
+  font-style: italic;
+  color: #b9b5c8;
+  margin-top: 14mm;
+  max-width: 112mm;
+  line-height: 1.5;
+}
+
+.cover-foot {
+  position: absolute;
+  left: 22mm;
+  right: 22mm;
+  bottom: 20mm;
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 8.5pt;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #8f8aa3;
+  border-top: 0.5pt solid rgba(255, 255, 255, 0.2);
+  padding-top: 4mm;
+}
+
+.frontmatter {
+  page: front;
+  break-before: right;
+}
+
+.frontmatter h1.no-number {
+  font-size: 20pt;
+  font-weight: 300;
+  margin-bottom: 7mm;
+  padding-bottom: 3mm;
+  border-bottom: 0.4pt solid var(--rule);
+}
+
+.colophon {
+  font-size: 9.2pt;
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+
+.colophon p { text-align: left; text-indent: 0; margin-bottom: 3.4mm }
+.colophon .legal {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 7.6pt;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  color: var(--ink-faint);
+  background: var(--code-bg);
+  padding: 4mm;
+  border-left: 1.5pt solid var(--accent-soft);
+}
+
+/* --------------------------------------------------------------------------
+   Contents
+   -------------------------------------------------------------------------- */
+
+.toc-list { list-style: none; margin: 0; padding: 0 }
+
+.toc-list a {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+
+.toc-list a::after {
+  content: target-counter(attr(href), page);
+  float: right;
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 8.6pt;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+
+.toc-part {
+  margin: 7mm 0 2.5mm 0;
+  padding-bottom: 1.4mm;
+  border-bottom: 0.4pt solid var(--rule);
+  break-after: avoid;
+}
+
+.toc-part .toc-label {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 7.4pt;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-right: 3mm;
+}
+
+.toc-part .toc-title {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 11pt;
+  font-weight: 500;
+}
+
+.toc-part a::after { color: var(--accent) }
+
+.toc-chapter {
+  margin-top: 2.2mm;
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 9.6pt;
+  font-weight: 500;
+}
+
+.toc-section {
+  font-size: 9pt;
+  color: var(--ink-soft);
+  margin-left: 11mm;
+}
+
+.toc-chapter .toc-number,
+.toc-section .toc-number {
+  display: inline-block;
+  width: 11mm;
+  color: var(--accent-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.toc-chapter .toc-number { margin-left: 0 }
+.toc-section .toc-number { width: 13mm; margin-left: -13mm }
+
+/* --------------------------------------------------------------------------
+   Code
+   -------------------------------------------------------------------------- */
+
+code, kbd, samp {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.855em;
+  font-feature-settings: "liga" 0;
+}
+
+p code, li code, td code, dd code, dt code {
+  background: var(--accent-wash);
+  padding: 0.08em 0.28em;
+  border-radius: 2px;
+  color: #33206e;
+  word-break: break-word;
+}
+
+pre {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 8pt;
+  line-height: 1.45;
+  background: var(--code-bg);
+  border-left: 1.5pt solid var(--accent-soft);
+  padding: 3.2mm 4mm 3.2mm 4.5mm;
+  margin: 3.6mm 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  break-inside: avoid;
+  color: #232330;
+  text-align: left;
+  hyphens: none;
+}
+
+pre.wide { break-inside: auto }
+
+/* A block whose lines run past the 85 columns the measure holds. Setting it
+   smaller keeps the shape of the output, which is the thing being shown;
+   wrapping a table of generated records makes it unreadable. */
+pre.small { font-size: 6.9pt; line-height: 1.4; white-space: pre }
+
+/* The command synopsis is 86 columns wide and would rather not be reflowed;
+   the measure is 74 characters of body text, so the synopsis is set smaller
+   instead of wrapped into nonsense. */
+pre.synopsis {
+  font-size: 6.9pt;
+  line-height: 1.42;
+  white-space: pre;
+  break-inside: auto;
+}
+
+pre[data-lang]::before {
+  content: attr(data-lang);
+  display: block;
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 6.4pt;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 2mm;
+}
+
+pre[data-lang="console"]::before { content: "terminal" }
+pre[data-lang="text"]::before { content: none }
+
+/* Pygments, restrained for paper: colour carries meaning, not decoration. */
+.pyg-k, .pyg-kn, .pyg-kd, .pyg-kc { color: #6b21a8; font-weight: 600 }
+.pyg-nt { color: #1d4ed8; font-weight: 600 }
+.pyg-s, .pyg-s1, .pyg-s2, .pyg-sb, .pyg-se, .pyg-sd { color: #0f6b45 }
+.pyg-c, .pyg-c1, .pyg-cm, .pyg-ch { color: #7a7a8c; font-style: italic }
+.pyg-m, .pyg-mi, .pyg-mf { color: #9a3412 }
+.pyg-nf, .pyg-nd { color: #1d4ed8 }
+.pyg-nb { color: #6b21a8 }
+.pyg-o, .pyg-p { color: #4b4b5a }
+.pyg-err { color: inherit; border: none }
+.pyg-gp { color: var(--accent); font-weight: 600 }
+
+/* --------------------------------------------------------------------------
+   Callouts
+   -------------------------------------------------------------------------- */
+
+.callout {
+  break-inside: avoid;
+  margin: 4.2mm 0;
+  padding: 3.2mm 4mm;
+  background: var(--accent-wash);
+  border-left: 2pt solid var(--accent-soft);
+  font-size: 9.3pt;
+  line-height: 1.48;
+}
+
+.callout .callout-title {
+  display: block;
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 7.2pt;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 1.6mm;
+}
+
+.callout p { text-align: left }
+.callout p + p { margin-top: 2mm }
+.callout pre { background: #fff; margin: 2.4mm 0 1mm }
+
+.callout.warning { background: var(--warn-wash); border-left-color: #c2410c }
+.callout.warning .callout-title { color: var(--warn) }
+
+.callout.quiet { background: #f6f6f9; border-left-color: var(--ink-faint) }
+.callout.quiet .callout-title { color: var(--ink-soft) }
+
+/* --------------------------------------------------------------------------
+   Tables
+   -------------------------------------------------------------------------- */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 4mm 0;
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 8.5pt;
+  line-height: 1.4;
+  break-inside: auto;
+}
+
+caption {
+  caption-side: top;
+  text-align: left;
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 7.4pt;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding-bottom: 1.8mm;
+}
+
+thead { display: table-header-group }
+tr { break-inside: avoid }
+
+th {
+  text-align: left;
+  hyphens: none;
+  font-weight: 600;
+  font-size: 7.6pt;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  border-bottom: 0.9pt solid var(--ink-soft);
+  padding: 1.4mm 3mm 1.4mm 0;
+  vertical-align: bottom;
+}
+
+td {
+  padding: 1.5mm 3mm 1.5mm 0;
+  /* Identifiers must not acquire a hyphen when they wrap: `govern-ment_id`
+     reads as a different name. Break without one instead. */
+  hyphens: none;
+  overflow-wrap: break-word;
+  border-bottom: 0.35pt solid var(--rule-faint);
+  vertical-align: top;
+}
+
+td:last-child, th:last-child { padding-right: 0 }
+
+td code { background: none; padding: 0; color: #33206e }
+
+table.compact { font-size: 8pt }
+table td.mono, table th.mono, table code { hyphens: none }
+table.compact td, table.compact th { padding-top: 1mm; padding-bottom: 1mm }
+
+td.num { text-align: right; font-variant-numeric: tabular-nums }
+td.mono, th.mono { font-family: "IBM Plex Mono", monospace; font-size: 7.9pt }
+
+/* --------------------------------------------------------------------------
+   Definition lists - used for option references
+   -------------------------------------------------------------------------- */
+
+dl.options { margin: 3.5mm 0 }
+
+dl.options dt {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 8.4pt;
+  font-weight: 600;
+  color: #33206e;
+  margin-top: 3mm;
+  break-after: avoid;
+}
+
+dl.options dd {
+  margin: 0.8mm 0 0 7mm;
+  font-size: 9.4pt;
+  color: var(--ink-soft);
+}
+
+dl.options dd .type {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 7.2pt;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent-soft);
+  margin-right: 2mm;
+}
+
+/* --------------------------------------------------------------------------
+   Lists
+   -------------------------------------------------------------------------- */
+
+ul, ol { margin: 2.6mm 0; padding-left: 5.4mm }
+li { margin-bottom: 1.4mm }
+li::marker { color: var(--accent-soft) }
+ul.tight li, ol.tight li { margin-bottom: 0.5mm }
+
+/* --------------------------------------------------------------------------
+   Generator and command reference cards
+   -------------------------------------------------------------------------- */
+
+.card {
+  break-inside: avoid;
+  margin: 3.5mm 0 0 0;
+}
+
+.signature {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 8.6pt;
+  color: #33206e;
+  background: var(--accent-wash);
+  padding: 2.2mm 3mm;
+  border-radius: 2px;
+  margin: 2mm 0 2.5mm 0;
+  break-inside: avoid;
+}
+
+.tags {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 7pt;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 2mm;
+}
+
+.tag {
+  display: inline-block;
+  border: 0.4pt solid var(--rule);
+  border-radius: 8pt;
+  padding: 0.5mm 2.2mm;
+  margin-right: 1.6mm;
+}
+
+.tag.on { border-color: var(--accent-soft); color: var(--accent) }
+
+/* --------------------------------------------------------------------------
+   Figures
+   -------------------------------------------------------------------------- */
+
+figure { margin: 4.5mm 0; break-inside: avoid }
+
+figcaption {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 7.8pt;
+  color: var(--ink-faint);
+  margin-top: 2mm;
+  text-align: left;
+}
+
+.diagram {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 7.6pt;
+  line-height: 1.35;
+  white-space: pre;
+  background: #fff;
+  border: 0.4pt solid var(--rule);
+  padding: 4mm;
+  color: var(--ink-soft);
+  overflow-wrap: normal;
+  hyphens: none;
+}
+
+/* --------------------------------------------------------------------------
+   Index
+   -------------------------------------------------------------------------- */
+
+.index-columns { column-count: 2; column-gap: 9mm }
+
+.index-letter {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 9pt;
+  font-weight: 600;
+  color: var(--accent);
+  margin: 3.5mm 0 1.4mm 0;
+  break-after: avoid;
+  break-inside: avoid;
+}
+
+.index-entry {
+  font-size: 8.6pt;
+  line-height: 1.35;
+  margin-bottom: 0.9mm;
+  break-inside: avoid;
+  padding-left: 4mm;
+  text-indent: -4mm;
+}
+
+.index-entry a { color: inherit }
+.index-entry .index-term { margin-right: 1.4mm }
+.index-entry a + a::before { content: ", "; color: var(--ink-faint) }
+
+.index-entry a::after {
+  content: target-counter(attr(href), page);
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 8pt;
+  color: var(--accent-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.index-entry .index-kind {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 6.8pt;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-left: 1.5mm;
+}
+
+/* Cross-references that print their page number. */
+a.xref::after {
+  content: " (page " target-counter(attr(href), page) ")";
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 0.86em;
+  color: var(--ink-faint);
+}
+
+a.xref { color: var(--accent) }
+
+/* The end. */
+.colophon-end {
+  margin-top: 10mm;
+  padding-top: 4mm;
+  border-top: 0.4pt solid var(--rule);
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 7.8pt;
+  color: var(--ink-faint);
+  text-align: left;
+}

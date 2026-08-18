@@ -1,0 +1,600 @@
+<section class="part-page">
+  <h1>Generators</h1>
+  <p class="part-blurb">Thirty strategies for producing a value. Twenty-six are
+  deterministic, four need a server, and one is deliberately not implemented.</p>
+</section>
+
+<h1>Choosing a generator</h1>
+
+<p class="lead">You do not have to choose. A field with a clear
+<code>semantic</code> and a type gets a generator recommended for it, and the
+recommendation is visible in <code>cacophony plan</code> before anything is
+generated. But the choice is usually obvious once the catalogue is laid out, and
+naming one is how a schema documents its intent.</p>
+
+<h2>The registry</h2>
+
+<pre><code class="language-console">$ cacophony generators
+$ cacophony generators --json | jq '.[] | select(.cost_class=="llm")'</code></pre>
+
+<table class="compact">
+  <caption>All thirty generators</caption>
+  <thead><tr><th>Name</th><th>Aliases</th><th>Cost</th><th>Deterministic</th><th>Produces</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">constant</td><td class="mono">fixed, literal</td><td>cpu</td><td>yes</td><td>The same value, always</td></tr>
+    <tr><td class="mono">sequence</td><td class="mono">serial, autoincrement</td><td>cpu</td><td>yes</td><td>Numbered identifiers from the record index</td></tr>
+    <tr><td class="mono">uuid</td><td class="mono">guid</td><td>cpu</td><td>yes</td><td>A UUID, stable for a given seed</td></tr>
+    <tr><td class="mono">random</td><td class="mono">rand</td><td>cpu</td><td>yes</td><td>Random values within the field's constraints</td></tr>
+    <tr><td class="mono">boolean</td><td class="mono">bool, flag</td><td>cpu</td><td>yes</td><td>A weighted coin flip</td></tr>
+    <tr><td class="mono">weighted</td><td class="mono">choice, categorical, enum</td><td>cpu</td><td>yes</td><td>A choice from a weighted set</td></tr>
+    <tr><td class="mono">distribution</td><td class="mono">dist, statistical</td><td>cpu</td><td>yes</td><td>A draw from a statistical distribution</td></tr>
+    <tr><td class="mono">lookup</td><td class="mono">dataset, from_list</td><td>cpu</td><td>yes</td><td>A value from a list or a data file</td></tr>
+    <tr><td class="mono">pattern</td><td class="mono">shape, mask</td><td>cpu</td><td>yes</td><td>Template-based identifiers</td></tr>
+    <tr><td class="mono">template</td><td class="mono">interpolate, format</td><td>cpu</td><td>yes</td><td>Other fields interpolated into a string</td></tr>
+    <tr><td class="mono">expression</td><td class="mono">expr, derived, computed</td><td>cpu</td><td>yes</td><td>A value computed from other values</td></tr>
+    <tr><td class="mono">composite</td><td class="mono">chain, pipeline</td><td>cpu</td><td>yes</td><td>Generators in sequence</td></tr>
+    <tr><td class="mono">transform</td><td class="mono">post_process</td><td>cpu</td><td>yes</td><td>Operations applied to a value</td></tr>
+    <tr><td class="mono">null</td><td class="mono">none, empty</td><td>cpu</td><td>yes</td><td>Null, always</td></tr>
+    <tr><td class="mono">datetime</td><td class="mono">date, time, timestamp, temporal</td><td>cpu</td><td>yes</td><td>A moment drawn from a window</td></tr>
+    <tr><td class="mono">ip</td><td class="mono">ip_address, ipv4</td><td>cpu</td><td>yes</td><td>An IP address</td></tr>
+    <tr><td class="mono">mac</td><td class="mono">mac_address</td><td>cpu</td><td>yes</td><td>A hardware address</td></tr>
+    <tr><td class="mono">phone</td><td class="mono">phone_number, telephone</td><td>cpu</td><td>yes</td><td>A telephone number</td></tr>
+    <tr><td class="mono">government_id</td><td class="mono">ssn, national_id</td><td>cpu</td><td>yes</td><td>An identifier that cannot belong to anyone</td></tr>
+    <tr><td class="mono">faker</td><td class="mono">fake</td><td>cpu</td><td>yes</td><td>Any Faker provider, made safe</td></tr>
+    <tr><td class="mono">reference</td><td class="mono">fk, foreign_key, belongs_to</td><td>cpu</td><td>yes</td><td>A foreign key that resolves</td></tr>
+    <tr><td class="mono">event_time</td><td class="mono">occurred_at, timeline</td><td>cpu</td><td>yes</td><td>When this event happened</td></tr>
+    <tr><td class="mono">subject</td><td class="mono">actor, belongs_to_subject</td><td>cpu</td><td>yes</td><td>Whose event this is</td></tr>
+    <tr><td class="mono">state</td><td class="mono">running, accumulated</td><td>cpu</td><td>yes</td><td>A value folded over earlier events</td></tr>
+    <tr><td class="mono">scenario</td><td class="mono">incident, affected_by</td><td>cpu</td><td>yes</td><td>What a scenario is doing to this record</td></tr>
+    <tr><td class="mono">llm</td><td class="mono">language_model, ai, gpt</td><td>llm</td><td>no</td><td>Prose, from a language model</td></tr>
+    <tr><td class="mono">image</td><td class="mono">invokeai, text_to_image</td><td>gpu</td><td>no</td><td>A picture</td></tr>
+    <tr><td class="mono">tts</td><td class="mono">speech, voice</td><td>gpu</td><td>no</td><td>Audio of generated text</td></tr>
+    <tr><td class="mono">document</td><td class="mono">pdf, invoice, report</td><td>cpu</td><td>no</td><td>A rendered document</td></tr>
+    <tr><td class="mono">script</td><td class="mono">custom, python</td><td>cpu</td><td>&mdash;</td><td>Declared, and deliberately not implemented</td></tr>
+  </tbody>
+</table>
+
+<h2>Cost classes</h2>
+
+<p>Every generator declares what it costs, and the number is used rather than
+displayed. <code>cpu</code> work is generated in parallel across entities;
+<code>llm</code> work is batched and rate-limited by the provider's declared
+concurrency; <code>gpu</code> work is usually serialised because there is one
+graphics card. The distributed controller reads a shard's requirements from
+exactly this information, so a node with no model server is never handed model
+work.</p>
+
+<h2>Recommendation</h2>
+
+<p>Omit <code>generator:</code> and one is chosen from the field's name, its
+<code>semantic</code>, its type and its constraints. An <code>email</code> type
+gets a safe address; a <code>decimal</code> with a <code>precision</code>
+constraint gets a distribution; a field whose semantic is a sentence of English
+about what a human would write gets <code>llm</code> if a model provider is
+configured and a marked placeholder if not.</p>
+
+<div class="callout">
+  <span class="callout-title">Recommendation is a starting point, not magic</span>
+  <p>Run <code>cacophony plan</code> and read what you were given. The
+  recommender is good at the obvious cases and has no opinion about your
+  domain: it cannot know that your <code>status</code> field should be 70%
+  resolved, or that your salaries are lognormal. Naming the generator is how you
+  tell it.</p>
+</div>
+
+<h1>Values from nothing</h1>
+
+<p class="lead">Generators that need no other field, no server and no context
+beyond the record's position. These are the backbone of every schema.</p>
+
+<h2 id="gen-constant"><code>constant</code></h2>
+<div class="signature">generator: constant &nbsp;·&nbsp; aliases: fixed, literal</div>
+<dl class="options">
+  <dt>value</dt><dd><span class="type">any</span> The value to produce. Required.</dd>
+</dl>
+<pre><code class="language-yaml">  source_system:
+    type: string
+    generator: constant
+    value: "hr-core"</code></pre>
+
+<h2 id="gen-sequence"><code>sequence</code></h2>
+<div class="signature">generator: sequence &nbsp;·&nbsp; aliases: serial, autoincrement</div>
+<dl class="options">
+  <dt>format</dt><dd><span class="type">string</span> A pattern with a digit group, e.g. <code>"USER-{000000}"</code>. The number of zeros is the zero-padded width.</dd>
+  <dt>start</dt><dd><span class="type">integer</span> First value. Default <code>1</code>.</dd>
+  <dt>step</dt><dd><span class="type">integer</span> Increment. Default <code>1</code>.</dd>
+  <dt>pad</dt><dd><span class="type">integer</span> Zero-padding width, when no <code>format</code> is given.</dd>
+</dl>
+<pre><code class="language-yaml">  employee_id:
+    generator: sequence
+    format: "EMP-{000000}"     # EMP-000001, EMP-000002, …</code></pre>
+<p>Derived from the record index rather than a counter, so record 4,823,913 has
+the same identifier however it is reached &mdash; in a resumed run, in a shard on
+another machine, or on its own from <code>regenerate</code>.</p>
+
+<h2 id="gen-uuid"><code>uuid</code></h2>
+<div class="signature">generator: uuid &nbsp;·&nbsp; alias: guid</div>
+<dl class="options">
+  <dt>version</dt><dd><span class="type">4 | 5</span> Default <code>4</code>.</dd>
+  <dt>namespace</dt><dd><span class="type">uuid</span> For version 5.</dd>
+  <dt>name</dt><dd><span class="type">string</span> The name hashed for version 5; may be a <code>{field}</code> template.</dd>
+  <dt>string</dt><dd><span class="type">boolean</span> Emit as a string rather than a UUID object. Default true for most writers.</dd>
+</dl>
+<p>Version 4 draws its bits from the field's derived seed, so it looks random
+and is entirely reproducible. Version 5 is a hash of a namespace and a name,
+which is how you make a UUID that is a function of the record's own data.</p>
+
+<h2 id="gen-random"><code>random</code></h2>
+<div class="signature">generator: random &nbsp;·&nbsp; alias: rand</div>
+<dl class="options">
+  <dt>min, max</dt><dd><span class="type">number</span> Bounds, for numeric fields. Aliases <code>low</code>, <code>high</code>, <code>minimum</code>, <code>maximum</code>.</dd>
+  <dt>precision</dt><dd><span class="type">integer</span> Decimal places.</dd>
+  <dt>length, min_length, max_length</dt><dd><span class="type">integer</span> For strings.</dd>
+  <dt>charset</dt><dd><span class="type">string</span> <code>alpha</code>, <code>alphanumeric</code>, <code>lower</code>, <code>upper</code>, <code>digits</code>, <code>hex</code>, or a literal set of characters.</dd>
+</dl>
+<p>Behaviour follows the field's declared type: integers get integers, strings
+get characters from the charset, and temporal fields hand off to
+<code>datetime</code>.</p>
+
+<h2 id="gen-boolean"><code>boolean</code></h2>
+<div class="signature">generator: boolean &nbsp;·&nbsp; aliases: bool, flag</div>
+<dl class="options">
+  <dt>probability</dt><dd><span class="type">0.0&ndash;1.0</span> Chance of <code>true</code>. Default <code>0.5</code>. Alias <code>true_probability</code>.</dd>
+</dl>
+
+<h2 id="gen-weighted"><code>weighted</code></h2>
+<div class="signature">generator: weighted &nbsp;·&nbsp; aliases: choice, categorical, enum</div>
+<dl class="options">
+  <dt>choices</dt><dd><span class="type">mapping | list</span> A mapping of value to weight, a plain list (equal weights), or a list of <code>{value, weight}</code>. Aliases <code>values</code>, <code>items</code>, <code>options</code>.</dd>
+</dl>
+<pre><code class="language-yaml">  operating_system:
+    type: enum
+    generator: weighted
+    choices:
+      Windows 11: 52
+      Windows 10: 15
+      macOS 15: 18
+      Ubuntu 24.04: 13
+      Other: 2</code></pre>
+<p>Weights need not sum to anything in particular; they are normalised. This is
+the generator that does most of the work of making a dataset look real, because
+almost nothing in the world is uniformly distributed.</p>
+
+<h2 id="gen-distribution"><code>distribution</code></h2>
+<div class="signature">generator: distribution &nbsp;·&nbsp; aliases: dist, statistical</div>
+<dl class="options">
+  <dt>distribution</dt><dd><span class="type">enum</span> <code>uniform</code>, <code>normal</code>, <code>lognormal</code>, <code>exponential</code>, <code>poisson</code>, <code>beta</code>, <code>histogram</code>.</dd>
+  <dt>mean, stddev</dt><dd><span class="type">number</span> For <code>normal</code> and <code>lognormal</code>. Aliases <code>mu</code>, <code>sigma</code>, <code>std</code>.</dd>
+  <dt>rate, scale</dt><dd><span class="type">number</span> For <code>exponential</code>.</dd>
+  <dt>lam</dt><dd><span class="type">number</span> For <code>poisson</code>. Alias <code>lambda</code>.</dd>
+  <dt>alpha, beta</dt><dd><span class="type">number</span> For <code>beta</code>. Aliases <code>a</code>, <code>b</code>.</dd>
+  <dt>bins</dt><dd><span class="type">list</span> For <code>histogram</code>: bucket edges and weights.</dd>
+  <dt>min, max</dt><dd><span class="type">number</span> Clamp the result. Not a re-draw &mdash; the tail piles up on the bound, which is usually what you want for an age or a salary.</dd>
+  <dt>precision</dt><dd><span class="type">integer</span> Decimal places.</dd>
+</dl>
+<pre><code class="language-yaml">  cvss_score:
+    type: float
+    generator: distribution
+    distribution: beta
+    alpha: 2.4
+    beta: 2.0
+    min: 0.1
+    max: 10.0
+    precision: 1</code></pre>
+
+<div class="callout quiet">
+  <span class="callout-title">Lognormal parameters are in log space</span>
+  <p>A <code>lognormal</code> with <code>mean: 11.2</code> has a median of
+  <em>e</em><sup>11.2</sup> &mdash; about 73,000, which is a salary. Writing
+  <code>mean: 73000</code> produces numbers with more digits than money has. The
+  linter mentions this at <code>info</code> when it sees a suspiciously large
+  log-space mean.</p>
+</div>
+
+<h2 id="gen-lookup"><code>lookup</code></h2>
+<div class="signature">generator: lookup &nbsp;·&nbsp; aliases: dataset, from_list</div>
+<dl class="options">
+  <dt>values</dt><dd><span class="type">list</span> Inline values. Aliases <code>choices</code>, <code>items</code>, <code>list</code>.</dd>
+  <dt>path</dt><dd><span class="type">path</span> A <code>.csv</code>, <code>.json</code> or <code>.txt</code> file. Relative to the <em>schema file</em>. Aliases <code>file</code>, <code>source</code>.</dd>
+  <dt>column</dt><dd><span class="type">string</span> Which column of a CSV. Alias <code>key</code>, <code>field</code>.</dd>
+  <dt>mode</dt><dd><span class="type">enum</span> <code>random</code> (default) or <code>cycle</code>.</dd>
+</dl>
+<p>This is how a project uses real reference data &mdash; a list of product
+categories, a table of airport codes &mdash; without inventing it. The file
+travels with the project in a bundle, because export follows the paths in the
+expanded project.</p>
+
+<h2 id="gen-null"><code>null</code></h2>
+<div class="signature">generator: null &nbsp;·&nbsp; aliases: none, empty</div>
+<p>Always produces null. Useful for a placeholder column that must exist in the
+output shape, and for negative tests.</p>
+
+<h1>Shapes, text and derivation</h1>
+
+<p class="lead">Five generators that build a value out of structure or out of
+other fields. Between them they cover most of what people reach for a scripting
+language to do &mdash; which is the point, since Cacophony will not run one.</p>
+
+<h2 id="gen-pattern"><code>pattern</code></h2>
+<div class="signature">generator: pattern &nbsp;·&nbsp; aliases: shape, mask</div>
+<dl class="options">
+  <dt>pattern</dt><dd><span class="type">string</span> Required. The shape, with token groups in braces.</dd>
+  <dt>upper, lower</dt><dd><span class="type">boolean</span> Force the case of the result.</dd>
+</dl>
+
+<table class="compact">
+  <caption>Pattern tokens</caption>
+  <thead><tr><th>Token</th><th>Produces</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">{A-Z}</td><td>One character from the range</td></tr>
+    <tr><td class="mono">{A-Z:3}</td><td>Three characters from the range</td></tr>
+    <tr><td class="mono">{0000}</td><td>Four random digits</td></tr>
+    <tr><td class="mono">{???}</td><td>Three random letters</td></tr>
+    <tr><td class="mono">{***}</td><td>Three random alphanumerics</td></tr>
+    <tr><td class="mono">{{ &nbsp;}}</td><td>A literal brace</td></tr>
+  </tbody>
+</table>
+
+<pre><code class="language-yaml">  server_tag:
+    generator: pattern
+    pattern: "SRV-{A-Z}{A-Z}-{0000}"     # SRV-KQ-4817</code></pre>
+
+<div class="callout warning">
+  <span class="callout-title">A numeric range is not a token</span>
+  <p><code>{10000-99999}</code> looks like it should produce a number in that
+  range and does not &mdash; the range syntax is for <em>characters</em>. Use
+  <code>{00000}</code> for five digits, or the <code>random</code> generator with
+  <code>min</code> and <code>max</code> for a genuine numeric range. Three
+  recipes in the catalogue got this wrong before the catalogue was tested per
+  recipe.</p>
+</div>
+
+<h2 id="gen-template"><code>template</code></h2>
+<div class="signature">generator: template &nbsp;·&nbsp; aliases: interpolate, format</div>
+<dl class="options">
+  <dt>template</dt><dd><span class="type">string</span> Required. Text with <code>{field}</code> placeholders.</dd>
+  <dt>on_missing</dt><dd><span class="type">enum</span> <code>empty</code> (default), <code>error</code>, <code>keep</code>.</dd>
+</dl>
+<p>Placeholders name sibling fields, or <code>{related.field}</code> to read
+through a reference. Filters chain with <code>|</code>:</p>
+
+<table class="compact">
+  <caption>Template filters</caption>
+  <thead><tr><th>Filter</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">lower · upper · title</td><td>Case</td></tr>
+    <tr><td class="mono">strip · nospace</td><td>Trim, or remove all spaces</td></tr>
+    <tr><td class="mono">slug</td><td>Lowercase, hyphenated, ASCII</td></tr>
+    <tr><td class="mono">initial</td><td>First character</td></tr>
+    <tr><td class="mono">trunc:N</td><td>At most N characters</td></tr>
+    <tr><td class="mono">pad:N</td><td>Zero-pad to width N</td></tr>
+  </tbody>
+</table>
+
+<pre><code class="language-yaml">  email:
+    type: email
+    generator: template
+    template: "{first_name|lower}.{last_name|lower}@example.com"
+  badge:
+    generator: template
+    template: "{first_name|initial}{last_name|initial}-{employee_id|trunc:6}"</code></pre>
+
+<h2 id="gen-expression"><code>expression</code></h2>
+<div class="signature">generator: expression &nbsp;·&nbsp; aliases: expr, derived, computed</div>
+<dl class="options">
+  <dt>expression</dt><dd><span class="type">string</span> Required. Aliases <code>expr</code>, <code>formula</code>.</dd>
+</dl>
+<p>Evaluated from a parsed syntax tree with an allow-list of node types and
+functions. There is no <code>eval</code>, no imports, and no attribute access
+beyond dotted record lookups &mdash; because a project file is something people
+send each other.</p>
+
+<table class="compact">
+  <caption>Expression functions</caption>
+  <thead><tr><th>Group</th><th>Functions</th></tr></thead>
+  <tbody>
+    <tr><td>Text</td><td class="mono">lower upper title strip len str slug concat join replace substr</td></tr>
+    <tr><td>Numbers</td><td class="mono">int float round abs min max sum</td></tr>
+    <tr><td>Logic</td><td class="mono">bool coalesce iif when</td></tr>
+    <tr><td>Dates</td><td class="mono">year month day format_date</td></tr>
+    <tr><td>Tests</td><td class="mono">contains startswith</td></tr>
+    <tr><td>Hashing</td><td class="mono">hash</td></tr>
+  </tbody>
+</table>
+
+<pre><code class="language-yaml">  username:
+    generator: expression
+    expression: 'lower(substr(first_name, 0, 1) + last_name)'
+  unit:
+    generator: expression
+    expression: >
+      iif(metric == 'temperature', 'celsius',
+        iif(metric == 'humidity', 'percent', 'ppm'))</code></pre>
+
+<p>It is <code>iif(condition, a, b)</code> rather than <code>if</code>, because
+<code>if</code> is a Python keyword and the parser is Python's own.</p>
+
+<h2 id="gen-composite"><code>composite</code></h2>
+<div class="signature">generator: composite &nbsp;·&nbsp; aliases: chain, pipeline</div>
+<dl class="options">
+  <dt>steps</dt><dd><span class="type">list</span> Generators to run in order, threading the value through. Aliases <code>generators</code>, <code>pipeline</code>, <code>ops</code>.</dd>
+</dl>
+
+<h2 id="gen-transform"><code>transform</code></h2>
+<div class="signature">generator: transform &nbsp;·&nbsp; alias: post_process</div>
+<dl class="options">
+  <dt>operations</dt><dd><span class="type">list | string</span> Operations to apply, joined with <code>|</code> if written as a string.</dd>
+  <dt>source</dt><dd><span class="type">string</span> Which field to read. Defaults to this field's own generated value. Alias <code>from</code>, <code>field</code>.</dd>
+</dl>
+<pre><code class="language-yaml">  email_hash:
+    generator: transform
+    source: email
+    operations: "lowercase|hash:16"</code></pre>
+<p>The operations are the same set available in <code>patches:</code> and on the
+command line, listed in full in appendix&nbsp;C. Every one is deterministic,
+including <code>add_noise</code>, whose jitter is derived by hashing the value
+rather than drawn from a generator.</p>
+
+<h1>Identifiers of the real world</h1>
+
+<p class="lead">Six generators produce the values that look most like personal
+data, and all six are constrained by default to ranges that cannot belong to
+anyone.</p>
+
+<h2 id="gen-datetime"><code>datetime</code></h2>
+<div class="signature">generator: datetime &nbsp;·&nbsp; aliases: date, time, timestamp, temporal</div>
+<dl class="options">
+  <dt>start, end</dt><dd><span class="type">ISO date or datetime</span> The window to draw from.</dd>
+  <dt>business_hours</dt><dd><span class="type">boolean</span> Restrict to working hours. Aliases <code>office_hours</code>.</dd>
+  <dt>weekdays_only</dt><dd><span class="type">boolean</span> Skip weekends. Alias <code>business_days</code>.</dd>
+  <dt>timezone_offset</dt><dd><span class="type">number</span> Hours from UTC. Alias <code>tz_offset</code>.</dd>
+</dl>
+<p>Returns whatever the field declares: a <code>date</code> field gets a date, a
+<code>time</code> field a time, a <code>datetime</code> field both. For events
+that should follow a project-wide shape rather than a flat window, use
+<code>event_time</code> and a <code>timeline:</code>.</p>
+
+<h2 id="gen-ip"><code>ip</code></h2>
+<div class="signature">generator: ip &nbsp;·&nbsp; aliases: ip_address, ipv4</div>
+<dl class="options">
+  <dt>network</dt><dd><span class="type">CIDR</span> Draw from this network. Aliases <code>cidr</code>, <code>subnet</code>.</dd>
+  <dt>version</dt><dd><span class="type">4 | 6</span> Default 4.</dd>
+  <dt>safe</dt><dd><span class="type">boolean</span> Default true: RFC 5737 and RFC 3849 documentation ranges.</dd>
+</dl>
+<p>Naming a <code>network</code> takes precedence, which is how you generate
+addresses inside <code>10.0.0.0/8</code> for a network your test is about. RFC
+1918 private space is not "safe" in the documentation sense but is harmless in
+practice; the setting exists so the choice is yours and explicit.</p>
+
+<h2 id="gen-mac"><code>mac</code></h2>
+<div class="signature">generator: mac &nbsp;·&nbsp; alias: mac_address</div>
+<dl class="options">
+  <dt>oui</dt><dd><span class="type">string</span> A specific vendor prefix. Aliases <code>prefix</code>, <code>vendor</code>.</dd>
+  <dt>separator</dt><dd><span class="type">string</span> <code>:</code> (default) or <code>-</code>.</dd>
+  <dt>upper</dt><dd><span class="type">boolean</span> Uppercase hex.</dd>
+  <dt>safe</dt><dd><span class="type">boolean</span> Default true: RFC 7042's documentation OUI.</dd>
+</dl>
+
+<h2 id="gen-phone"><code>phone</code></h2>
+<div class="signature">generator: phone &nbsp;·&nbsp; aliases: phone_number, telephone</div>
+<dl class="options">
+  <dt>format</dt><dd><span class="type">enum</span> <code>e164</code>, <code>national</code>, <code>plain</code>.</dd>
+  <dt>area_code</dt><dd><span class="type">string</span> A specific area code.</dd>
+  <dt>safe</dt><dd><span class="type">boolean</span> Default true: the 555-0100 to 555-0199 fiction block.</dd>
+</dl>
+
+<h2 id="gen-government-id"><code>government_id</code></h2>
+<div class="signature">generator: government_id &nbsp;·&nbsp; aliases: ssn, national_id</div>
+<dl class="options">
+  <dt>masked</dt><dd><span class="type">boolean</span> Emit as <code>***-**-1234</code>.</dd>
+  <dt>safe</dt><dd><span class="type">boolean</span> Default true: the never-issued 900 area.</dd>
+</dl>
+
+<h2 id="gen-faker"><code>faker</code></h2>
+<div class="signature">generator: faker &nbsp;·&nbsp; alias: fake</div>
+<dl class="options">
+  <dt>provider</dt><dd><span class="type">string</span> The Faker provider to call, e.g. <code>company</code>, <code>job</code>, <code>street_address</code>. Aliases <code>method</code>, <code>faker</code>.</dd>
+  <dt>locale</dt><dd><span class="type">string</span> Overrides the project locale.</dd>
+  <dt>unique</dt><dd><span class="type">boolean</span> Ask Faker for distinct values.</dd>
+  <dt>safe</dt><dd><span class="type">boolean</span> Default true. Domain-bearing values are rewritten onto reserved domains.</dd>
+</dl>
+<p>Any option Cacophony does not recognise is passed to the provider, so
+<code>provider: pystr</code> with <code>min_chars: 8</code> works as it would
+directly. Faker is seeded from the field's derived seed, so it is as
+reproducible as everything else here.</p>
+
+<h1 id="gen-llm">Language models</h1>
+
+<p class="lead">One generator, <code>llm</code>, for the fields that are
+genuinely prose. It has no <code>prompt</code> option, and that absence is the
+design.</p>
+
+<h2>No prompt</h2>
+
+<p>A field already says what it means (<code>semantic</code>), what type it is,
+what length it must be (<code>constraints</code>), what voice to use
+(<code>tone</code>), what good answers look like (<code>examples</code>) and
+what else about the record matters (<code>context</code>). All of that is
+already in the schema, so the prompt compiler assembles the prompt
+<span class="sec">section&nbsp;12</span>. Writing one by hand would mean saying
+the same things twice and having them disagree.</p>
+
+<pre><code class="language-console">$ cacophony prompt project.yaml -e ticket --schema</code></pre>
+
+<p>That command prints exactly what will be sent, including the JSON Schema used
+to constrain decoding. It is the answer to "what is it actually asking".</p>
+
+<h2>Options</h2>
+<div class="signature">generator: llm &nbsp;·&nbsp; aliases: language_model, ai, gpt</div>
+<dl class="options">
+  <dt>provider</dt><dd><span class="type">string</span> Which configured provider to use. Alias <code>provider_id</code>.</dd>
+  <dt>mode</dt><dd><span class="type">enum</span> <code>per_field</code>, <code>per_record</code> (default), <code>batch</code>, <code>expansion</code>.</dd>
+  <dt>context</dt><dd><span class="type">list</span> Which already-generated fields the model is shown. Alias <code>inputs</code>.</dd>
+  <dt>max_tokens</dt><dd><span class="type">integer</span> Ceiling on the answer.</dd>
+  <dt>temperature</dt><dd><span class="type">number</span> Sampling temperature.</dd>
+  <dt>on_unavailable</dt><dd><span class="type">enum</span> <code>error</code> (default), <code>placeholder</code>, <code>null</code>.</dd>
+</dl>
+
+<pre><code class="language-yaml">  resolution_notes:
+    type: text
+    semantic: >
+      Natural-language notes written by an IT support technician explaining
+      how the ticket was resolved.
+    tone: Concise internal enterprise IT helpdesk writing
+    generator: llm
+    provider: local_llm
+    mode: per_record
+    context: [category, device_type, status]
+    constraints:
+      min_length: 40
+      max_length: 300</code></pre>
+
+<h2>Modes, and what they cost</h2>
+
+<table>
+  <caption>Calls for 1,000 records with three model-written fields</caption>
+  <thead><tr><th>Mode</th><th>Calls</th><th>When to use it</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">per_field</td><td class="num">3,000</td><td>Maximum control; each field gets the model's full attention.</td></tr>
+    <tr><td class="mono">per_record</td><td class="num">1,000</td><td>The default. Fields of one record stay mutually consistent.</td></tr>
+    <tr><td class="mono">batch</td><td class="num">1,000 &divide; <code>--llm-batch-size</code></td><td>Bulk generation, when volume matters more than nuance.</td></tr>
+    <tr><td class="mono">expansion</td><td class="num">1,000</td><td>An explicit name for what every mode already does.</td></tr>
+  </tbody>
+</table>
+
+<h2>Context</h2>
+
+<p>Omit <code>context</code> and every deterministic field of the record is
+offered. That default is deliberate: a model given no context writes a biography
+that contradicts the record it belongs to, and a dataset where two columns
+disagree is a broken fixture rather than a realistic one. Name the fields
+explicitly when the record is wide and only some of it is relevant.</p>
+
+<h2>The model is never trusted</h2>
+
+<p>What comes back is extracted from whatever wrapper it arrived in, parsed,
+type-checked, constraint-checked and repaired where repair needs no judgement
+&mdash; trailing prose after a JSON object, a number quoted as a string, a
+missing field with an obvious default. What cannot be repaired is retried with a
+prompt quoting what was wrong, then with the schema restated. The ladder is
+three model calls long and then it stops
+<span class="sec">sections&nbsp;13, 66</span>.</p>
+
+<p>Where the provider supports it, decoding is constrained by a JSON Schema so
+the answer cannot be malformed in the first place: Ollama enforces the schema
+natively, llama.cpp through a GBNF grammar, and OpenAI-compatible servers by
+negotiation.</p>
+
+<div class="callout warning">
+  <span class="callout-title">Constrained decoding clips</span>
+  <p>A server enforcing <code>maxLength</code> during decoding stops mid-word
+  rather than producing an over-length value. The result passes every check in
+  the platform and is not a sentence:
+  <code>"…failed to handle queueing mechanism, led 3"</code>. This is why
+  <code>cacophony benchmark</code> has a <code>CLIPPED</code> column. If you see
+  it, either the model needs more room or your limit is wrong.</p>
+</div>
+
+<h2>When there is no model</h2>
+
+<p><code>on_unavailable: placeholder</code> produces a marked stand-in fitted to
+the field's length constraints, so a project with model-written fields still
+runs end to end on a laptop with no server. Two recipes in the built-in
+catalogue use exactly this, so that the catalogue works everywhere.</p>
+
+<h1>Media</h1>
+
+<p class="lead">Three generators write files: pictures, speech and documents.
+Each puts a path in the record and the bytes under <code>assets/</code>, with a
+manifest tying the two together.</p>
+
+<h2 id="gen-image"><code>image</code></h2>
+<div class="signature">generator: image &nbsp;·&nbsp; aliases: invokeai, text_to_image</div>
+<dl class="options">
+  <dt>prompt</dt><dd><span class="type">string</span> A <code>{field}</code> template over this record. Without one, the field's semantic plus the record's values stand in.</dd>
+  <dt>style</dt><dd><span class="type">enum</span> For the procedural adapter: <code>identicon</code>, <code>portrait</code>, <code>card</code>, <code>document</code>.</dd>
+  <dt>width, height</dt><dd><span class="type">integer</span> Pixels.</dd>
+  <dt>steps, guidance</dt><dd><span class="type">number</span> Diffusion parameters. Alias <code>cfg_scale</code>.</dd>
+  <dt>negative_prompt</dt><dd><span class="type">string</span> Alias <code>negative</code>.</dd>
+  <dt>workflow</dt><dd><span class="type">path</span> An exported InvokeAI graph, for architectures the built-in graph does not cover.</dd>
+  <dt>provider, reuse, on_unavailable</dt><dd><span class="type">&mdash;</span> As elsewhere.</dd>
+</dl>
+<pre><code class="language-yaml">  portrait:
+    type: image
+    generator: image
+    prompt: "corporate headshot of {first_name} {last_name}, {team} agent"
+    width: 256
+    height: 256
+    style: portrait</code></pre>
+<p>Because the prompt is a template over the record, the compiler orders the
+image after the fields it names &mdash; you cannot accidentally render a portrait
+before the name exists.</p>
+
+<h2 id="gen-tts"><code>tts</code></h2>
+<div class="signature">generator: tts &nbsp;·&nbsp; aliases: speech, voice</div>
+<dl class="options">
+  <dt>source</dt><dd><span class="type">string</span> Required. The field holding the words.</dd>
+  <dt>voice</dt><dd><span class="type">string</span> A voice name the provider knows.</dd>
+  <dt>voice_field</dt><dd><span class="type">string</span> Take the voice from a field, so a speaker is consistent per subject. Alias <code>voice_from</code>.</dd>
+  <dt>speed, language, sample_rate</dt><dd><span class="type">&mdash;</span> Synthesis parameters.</dd>
+  <dt>provider, reuse, on_unavailable</dt><dd><span class="type">&mdash;</span> As elsewhere.</dd>
+</dl>
+<p>The clip's duration and an aligned transcript go into the asset manifest,
+which is what makes a generated speech set usable for training or testing rather
+than merely present.</p>
+
+<h2 id="gen-document"><code>document</code></h2>
+<div class="signature">generator: document &nbsp;·&nbsp; aliases: pdf, invoice, report</div>
+<dl class="options">
+  <dt>template</dt><dd><span class="type">string</span> Inline body text with <code>{field}</code> placeholders. One of this or <code>template_path</code> is required.</dd>
+  <dt>template_path</dt><dd><span class="type">path</span> A file holding the same, relative to the schema.</dd>
+  <dt>format</dt><dd><span class="type">enum</span> <code>pdf</code>, <code>html</code>, <code>txt</code>.</dd>
+  <dt>title</dt><dd><span class="type">string</span> Also a template.</dd>
+  <dt>page_size</dt><dd><span class="type">string</span> <code>a4</code>, <code>a5</code>, <code>letter</code>.</dd>
+  <dt>font, font_size</dt><dd><span class="type">&mdash;</span> Typeface and size.</dd>
+</dl>
+<pre><code class="language-yaml">  id_badge:
+    type: file
+    generator: document
+    format: pdf
+    page_size: a5
+    title: "{first_name} {last_name} - {employee_id}"
+    template: |
+      {first_name} {last_name}
+      {employee_id}
+      Team: {team}</code></pre>
+<p>No provider is needed: a document is rendered in-process from the record it
+describes. Templates take <code>{field}</code> and <code>{related.field}</code>
+and nothing else &mdash; deliberately not a template <em>language</em>, since a
+project file is something people share.</p>
+
+<h2 id="key-assets">Where the files go</h2>
+
+<pre><code class="language-text">out/
+├── employee.jsonl
+└── assets/
+    ├── manifest.jsonl
+    └── employee/00000000/employee_00000000_portrait.png</code></pre>
+
+<p>Paths are derived from entity, record index and field, so a resumed run
+reuses what it already produced rather than paying for it again. Identical bytes
+are stored once <span class="sec">section&nbsp;81</span>. The manifest records
+one line per asset:</p>
+
+<pre><code class="language-json">{"entity": "employee", "record_index": 0, "field": "portrait", "kind": "image",
+ "media_type": "image/png", "size_bytes": 2588, "record_id": "SUP-0001",
+ "metadata": {"provider": "pictures", "workflow": "procedural:portrait",
+              "seed": 1585453150, "prompt_hash": "514e7bbc1af5d2bb"}}</code></pre>
+
+<p><code>--assets-dir</code> puts them elsewhere, which is how several machines
+share one directory; <code>--regenerate-assets</code> redraws what is already
+there.</p>
+
+<h2>Designing multimodal schemas without a GPU</h2>
+
+<p>The <code>procedural_image</code> and <code>procedural_speech</code> adapters
+draw and synthesise in-process, deterministically, with no server and no
+graphics card. Every result is labelled <code>synthetic: true</code>. They exist
+so a multimodal schema can be designed, previewed, tested and demonstrated
+anywhere; swapping in <code>invokeai</code> or <code>piper</code> is one line in
+<code>providers:</code>.</p>

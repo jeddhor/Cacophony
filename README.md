@@ -152,6 +152,16 @@ transformation, or a plugin for real code. A `script` field still compiles, lint
 plans and estimates, and `on_unavailable: placeholder` runs the whole pipeline
 with obviously-marked stand-ins.
 
+**The manual.** [docs/Cacophony-Manual.pdf](docs/Cacophony-Manual.pdf) is the
+complete reference: 165 pages, every command, every generator option, every
+schema key, and the reasoning behind the parts where the reasoning is the
+interesting bit. It is built from [docs/manual/](docs/manual/) with one command:
+
+```bash
+pip install weasyprint pygments
+python docs/manual/build.py
+```
+
 See [docs/ROADMAP.md](docs/ROADMAP.md) for what each phase delivered, what broke
 along the way, and the decisions taken where the design document left room.
 

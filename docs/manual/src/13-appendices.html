@@ -1,0 +1,430 @@
+<section class="part-page">
+  <h1>Appendices</h1>
+  <p class="part-blurb">The tables. Every generator and its options, the whole
+  recipe catalogue, the operations, the schema keys, the commands, the lint
+  rules, and an index of everything with a name.</p>
+</section>
+
+<h1 class="appendix">Generator quick reference</h1>
+
+<p class="lead">All thirty, with their options. Chapters&nbsp;11&ndash;16 explain
+what each is for; this is the page to keep open while writing a schema.</p>
+
+<table class="compact">
+  <caption>Generators and their options</caption>
+  <thead><tr><th>Generator</th><th>Options</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">constant</td><td class="mono">value</td></tr>
+    <tr><td class="mono">sequence</td><td class="mono">format · start · step · pad</td></tr>
+    <tr><td class="mono">uuid</td><td class="mono">version · namespace · name · string</td></tr>
+    <tr><td class="mono">random</td><td class="mono">min · max · precision · length · min_length · max_length · charset</td></tr>
+    <tr><td class="mono">boolean</td><td class="mono">probability</td></tr>
+    <tr><td class="mono">weighted</td><td class="mono">choices</td></tr>
+    <tr><td class="mono">distribution</td><td class="mono">distribution · mean · stddev · rate · scale · lam · alpha · beta · bins · min · max · precision</td></tr>
+    <tr><td class="mono">lookup</td><td class="mono">values · path · column · mode</td></tr>
+    <tr><td class="mono">pattern</td><td class="mono">pattern · upper · lower</td></tr>
+    <tr><td class="mono">template</td><td class="mono">template · on_missing</td></tr>
+    <tr><td class="mono">expression</td><td class="mono">expression</td></tr>
+    <tr><td class="mono">composite</td><td class="mono">steps</td></tr>
+    <tr><td class="mono">transform</td><td class="mono">operations · source</td></tr>
+    <tr><td class="mono">null</td><td class="mono">&mdash;</td></tr>
+    <tr><td class="mono">datetime</td><td class="mono">start · end · business_hours · weekdays_only · timezone_offset</td></tr>
+    <tr><td class="mono">ip</td><td class="mono">network · version · safe</td></tr>
+    <tr><td class="mono">mac</td><td class="mono">oui · separator · upper · safe</td></tr>
+    <tr><td class="mono">phone</td><td class="mono">format · area_code · safe</td></tr>
+    <tr><td class="mono">government_id</td><td class="mono">masked · safe</td></tr>
+    <tr><td class="mono">faker</td><td class="mono">provider · locale · unique · safe · <em>plus anything Faker takes</em></td></tr>
+    <tr><td class="mono">reference</td><td class="mono">entity · field · distribution · skew · unique · expose · on_unavailable</td></tr>
+    <tr><td class="mono">event_time</td><td class="mono">jitter · offset · offset_field · spread</td></tr>
+    <tr><td class="mono">subject</td><td class="mono">field</td></tr>
+    <tr><td class="mono">state</td><td class="mono">variable</td></tr>
+    <tr><td class="mono">scenario</td><td class="mono">report · normal</td></tr>
+    <tr><td class="mono">llm</td><td class="mono">provider · mode · context · max_tokens · temperature · on_unavailable</td></tr>
+    <tr><td class="mono">image</td><td class="mono">prompt · style · width · height · steps · guidance · negative_prompt · workflow · provider · reuse · on_unavailable</td></tr>
+    <tr><td class="mono">tts</td><td class="mono">source · voice · voice_field · speed · language · sample_rate · provider · reuse · on_unavailable</td></tr>
+    <tr><td class="mono">document</td><td class="mono">template · template_path · format · title · page_size · font · font_size</td></tr>
+    <tr><td class="mono">script</td><td class="mono">on_unavailable &nbsp;<em>(declared, not implemented)</em></td></tr>
+  </tbody>
+</table>
+
+<h1 class="appendix">The recipe catalogue</h1>
+
+<p class="lead">Thirty-one fragments in five groups. <code>includes</code> lists
+the other recipes a recipe pulls in; its own fields are listed beside it. Every
+one is asserted to compile, generate and validate in the test suite.</p>
+
+<table class="compact">
+  <caption>Built-in recipes</caption>
+  <thead><tr><th>Recipe</th><th>What it is</th><th>Fields</th><th>Includes</th></tr></thead>
+  <tbody>
+<tr><th colspan="4" class="mono">identity</th></tr>
+<tr><td class="mono">address</td><td>A postal address, in documentation-safe form.</td><td class="mono">street, city, postcode, country</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">customer</td><td>Someone who has bought something - name, contact, tier, signup.</td><td class="mono">customer_id, tier, signed_up_at, marketing_opt_in</td><td class="mono">person, email, address</td></tr>
+<tr><td class="mono">email</td><td>A work address on a reserved domain, derived from the name.</td><td class="mono">email</td><td class="mono">name</td></tr>
+<tr><td class="mono">employee</td><td>Section 80&#x27;s &quot;US Corporate Employee Identity&quot;: name, employee id, email, username, department, and the manager relationship. <em>Needs nothing - the manager reference points at this entity.</em></td><td class="mono">employee_id, department, seniority, hire_date, manager</td><td class="mono">person, email, username</td></tr>
+<tr><td class="mono">name</td><td>A given name and a family name.</td><td class="mono">first_name, last_name</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">person</td><td>A human being - name, date of birth, contact details.</td><td class="mono">full_name, date_of_birth, phone</td><td class="mono">name</td></tr>
+<tr><td class="mono">username</td><td>A login name derived from a person&#x27;s name.</td><td class="mono">username</td><td class="mono">name</td></tr>
+<tr><th colspan="4" class="mono">computing</th></tr>
+<tr><td class="mono">browser</td><td>A browser and a plausible major version.</td><td class="mono">browser, browser_version</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">device</td><td>A managed endpoint - name, hardware, addresses, compliance.</td><td class="mono">device_id, device_type, manufacturer, serial_number, last_seen_at, encrypted</td><td class="mono">hostname, ip, mac, os</td></tr>
+<tr><td class="mono">hostname</td><td>A machine name in a documentation domain.</td><td class="mono">hostname</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">ip</td><td>An IPv4 address from RFC 5737 documentation space.</td><td class="mono">ip_address</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">mac</td><td>A hardware address from RFC 7042&#x27;s documentation OUI.</td><td class="mono">mac_address</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">os</td><td>An operating system and its version, weighted like a real fleet.</td><td class="mono">operating_system</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">software_version</td><td>A semantic version, weighted so most installs are current.</td><td class="mono">version, release_channel</td><td class="mono">&mdash;</td></tr>
+<tr><th colspan="4" class="mono">security</th></tr>
+<tr><td class="mono">alert_severity</td><td>An alert severity and priority, weighted like a real queue.</td><td class="mono">severity, priority</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">cve_identifier</td><td>A CVE-shaped identifier in a year that has none published.</td><td class="mono">cve_id</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">cvss_score</td><td>A CVSS-like base score, distributed the way real ones are.</td><td class="mono">cvss_score, cvss_severity</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">hash_value</td><td>SHA-256-shaped and MD5-shaped digests, drawn rather than computed.</td><td class="mono">sha256, md5</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">logon_event</td><td>An authentication attempt - who, from where, and how it went. <em>Needs a timeline, and a `user` entity if the subject should be a reference.</em></td><td class="mono">event_id, timestamp, logon_type, source_ip, result, mfa_used</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">network_event</td><td>A connection record - endpoints, protocol, bytes, verdict.</td><td class="mono">flow_id, source_ip, destination_ip, destination_port, protocol, bytes_sent, action</td><td class="mono">&mdash;</td></tr>
+<tr><th colspan="4" class="mono">commerce</th></tr>
+<tr><td class="mono">currency</td><td>An ISO-4217 currency code, weighted towards the major ones.</td><td class="mono">currency</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">invoice</td><td>An invoice - number, dates, net, tax and gross, all decimal.</td><td class="mono">invoice_number, issued_on, net_amount, tax_amount, gross_amount, paid</td><td class="mono">currency</td></tr>
+<tr><td class="mono">price</td><td>A price with a long tail, as a decimal.</td><td class="mono">price</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">product</td><td>A catalogue item - identifier, name, category, price, stock.</td><td class="mono">name, category, stock_on_hand, discontinued</td><td class="mono">sku, price, currency</td></tr>
+<tr><td class="mono">sku</td><td>A stock-keeping unit, unique per record.</td><td class="mono">sku</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">transaction</td><td>A payment - amount, method, status, authorisation code.</td><td class="mono">transaction_id, occurred_at, amount, method, status, authorisation_code</td><td class="mono">currency</td></tr>
+<tr><th colspan="4" class="mono">operational</th></tr>
+<tr><td class="mono">comment</td><td>A short human note about a record. <em>Needs a language-model provider, or the placeholder is used.</em></td><td class="mono">comment</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">priority</td><td>A priority, and the severity it implies.</td><td class="mono">priority</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">status</td><td>A workflow status, weighted like a real queue.</td><td class="mono">status</td><td class="mono">&mdash;</td></tr>
+<tr><td class="mono">ticket</td><td>A support ticket - identifier, subject, status, priority, times. <em>Needs a language-model provider for the summary, or the placeholder is used.</em></td><td class="mono">ticket_id, channel, category, summary</td><td class="mono">status, priority, timestamp</td></tr>
+<tr><td class="mono">timestamp</td><td>Created and updated times, in order.</td><td class="mono">created_at, updated_at</td><td class="mono">&mdash;</td></tr>
+  </tbody>
+</table>
+
+<h1 class="appendix">Transform operations</h1>
+
+<p class="lead">Sixteen operations, available in <code>patches:</code>, in the
+<code>transform</code> generator, and on the command line as
+<code>--set FIELD=OP</code>. Several are joined with <code>|</code>.</p>
+
+<table>
+  <caption>Operations</caption>
+  <thead><tr><th>Operation</th><th>Aliases</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td class="mono" id="op-lowercase">lowercase</td><td class="mono">lower</td><td>Case</td></tr>
+    <tr><td class="mono" id="op-uppercase">uppercase</td><td class="mono">upper</td><td>Case</td></tr>
+    <tr><td class="mono" id="op-title">title</td><td>&mdash;</td><td>Title case</td></tr>
+    <tr><td class="mono" id="op-strip">strip</td><td class="mono">trim</td><td>Leading and trailing whitespace</td></tr>
+    <tr><td class="mono" id="op-slug">slug</td><td>&mdash;</td><td>Lowercase, hyphenated</td></tr>
+    <tr><td class="mono" id="op-normalize">normalize</td><td>&mdash;</td><td>Collapse whitespace, normalise Unicode to NFKC</td></tr>
+    <tr><td class="mono" id="op-truncate">truncate:N</td><td class="mono">trunc</td><td>At most N characters. Default 50</td></tr>
+    <tr><td class="mono" id="op-mask">mask:N</td><td class="mono">redact</td><td>All but the last N characters become <code>*</code>. Default 4</td></tr>
+    <tr><td class="mono" id="op-hash">hash:N</td><td>&mdash;</td><td>A stable BLAKE2b digest, N hex characters. Default 32</td></tr>
+    <tr><td class="mono" id="op-round">round:N</td><td>&mdash;</td><td>N decimal places; a <code>Decimal</code> stays a <code>Decimal</code></td></tr>
+    <tr><td class="mono" id="op-add-noise">add_noise:N</td><td class="mono">noise</td><td>Jitter a number by up to N per cent, deterministically</td></tr>
+    <tr><td class="mono" id="op-format-date">format_date:FMT</td><td class="mono">date_format</td><td><code>strftime</code> a date or datetime. Default <code>%Y-%m-%d</code></td></tr>
+    <tr><td class="mono" id="op-encode">encode:KIND</td><td class="mono">b64</td><td><code>base64</code>, <code>hex</code>, <code>url</code> or <code>json</code></td></tr>
+    <tr><td class="mono" id="op-compress">compress:N</td><td>&mdash;</td><td>Deflate and return base64-encoded</td></tr>
+    <tr><td class="mono" id="op-decompress">decompress</td><td>&mdash;</td><td>The inverse, so a transformed file can be read back</td></tr>
+    <tr><td class="mono" id="op-nullify">nullify</td><td class="mono">null</td><td>Drop the value entirely</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Every operation is deterministic, including <code>add_noise</code>.</strong>
+Its jitter is derived by hashing the value rather than drawn from a generator,
+because an operation that reached for a random number would make a transformed
+dataset unreproducible and would change the file every time it ran.</p>
+
+<p><strong>An inapplicable operation raises.</strong> Rounding a name or
+formatting something that is not a date stops the pass rather than passing the
+value through: a masking run that quietly skipped half a column is worse than
+one that failed. A null short-circuits, because deliberate nulls are what a
+chaos preset put there.</p>
+
+<h1 class="appendix">Expressions, templates and filters</h1>
+
+<p class="lead">One evaluator, used in four places: the <code>expression</code>
+generator, simulation <code>state.update</code>, scenario effects beginning
+<code>=</code>, and the <code>--where</code> family of filters.</p>
+
+<h2>Functions</h2>
+
+<table class="compact">
+  <caption>Expression functions</caption>
+  <thead><tr><th>Function</th><th>Does</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">lower(s) · upper(s) · title(s)</td><td>Case</td></tr>
+    <tr><td class="mono">strip(s)</td><td>Trim whitespace</td></tr>
+    <tr><td class="mono">slug(s)</td><td>Lowercase, hyphenated</td></tr>
+    <tr><td class="mono">len(s)</td><td>Length</td></tr>
+    <tr><td class="mono">str(x) · int(x) · float(x) · bool(x)</td><td>Conversion</td></tr>
+    <tr><td class="mono">round(x, n) · abs(x)</td><td>Arithmetic</td></tr>
+    <tr><td class="mono">min(…) · max(…) · sum(…)</td><td>Aggregation over arguments</td></tr>
+    <tr><td class="mono">concat(a, b, …) · join(sep, …)</td><td>Text assembly</td></tr>
+    <tr><td class="mono">replace(s, old, new)</td><td>Substitution</td></tr>
+    <tr><td class="mono">substr(s, start, end)</td><td>Slice</td></tr>
+    <tr><td class="mono">coalesce(a, b, …)</td><td>First non-null</td></tr>
+    <tr><td class="mono">iif(cond, a, b)</td><td>Conditional. Named <code>iif</code> because <code>if</code> is a Python keyword</td></tr>
+    <tr><td class="mono">when(cond, a)</td><td>Conditional with no else</td></tr>
+    <tr><td class="mono">hash(s)</td><td>A stable digest</td></tr>
+    <tr><td class="mono">year(d) · month(d) · day(d)</td><td>Date parts</td></tr>
+    <tr><td class="mono">format_date(d, fmt)</td><td><code>strftime</code></td></tr>
+    <tr><td class="mono">contains(s, sub) · startswith(s, p)</td><td>Tests</td></tr>
+  </tbody>
+</table>
+
+<h2>Template filters</h2>
+
+<table class="compact">
+  <thead><tr><th>Filter</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">lower · upper · title</td><td>Case</td></tr>
+    <tr><td class="mono">strip · nospace</td><td>Trim, or remove all spaces</td></tr>
+    <tr><td class="mono">slug</td><td>Lowercase, hyphenated, ASCII</td></tr>
+    <tr><td class="mono">initial</td><td>First character</td></tr>
+    <tr><td class="mono">trunc:N</td><td>At most N characters</td></tr>
+    <tr><td class="mono">pad:N</td><td>Zero-pad to width N</td></tr>
+  </tbody>
+</table>
+
+<h2>What is not available, on purpose</h2>
+
+<p>No <code>eval</code>, no imports, no attribute access beyond dotted record
+lookups, no comprehensions, no lambdas, no assignment. The evaluator walks a
+parsed syntax tree and refuses any node type not on the allow-list. A project
+file is something people send each other, and this is the boundary that makes
+opening one safe.</p>
+
+<h1 class="appendix">Schema keys</h1>
+
+<p class="lead">Every key the schema language accepts, in one place, with the
+chapter that explains it.</p>
+
+<table class="compact">
+  <caption>Top level</caption>
+  <thead><tr><th>Key</th><th>Contains</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">project</td><td><code>name · description · version · seed · locale · profile · provenance</code></td></tr>
+    <tr><td class="mono">entities</td><td>A mapping of entity name to <code>count · description · primary_key · seed · tags · recipes · simulation · fields</code></td></tr>
+    <tr><td class="mono">relationships</td><td>A list of <code>from · to · cardinality · field · required</code></td></tr>
+    <tr><td class="mono">providers</td><td>A mapping of id to <code>type · adapter · base_url · model · secret · concurrency · timeout_seconds · options</code></td></tr>
+    <tr><td class="mono">timeline</td><td><code>start · end · shape · holidays · holiday_weight · months · spikes · growth</code></td></tr>
+    <tr><td class="mono">scenarios</td><td>A mapping of name to <code>description · applies_to · affects_fraction · parameters</code></td></tr>
+    <tr><td class="mono">chaos</td><td><code>preset</code> plus any of the seven damage rates</td></tr>
+    <tr><td class="mono">quality</td><td><code>duplication:</code> with <code>max_exact · max_near · fields · methods · similarity · shingle · window · error_rate · enabled</code></td></tr>
+    <tr><td class="mono">recipes</td><td>The project's own fragments: <code>description · includes · fields</code></td></tr>
+    <tr><td class="mono">requires</td><td><code>plugins</code></td></tr>
+    <tr><td class="mono">patches</td><td>A mapping of name to <code>description · entity · where · set · drop · keep</code></td></tr>
+    <tr><td class="mono">outputs</td><td>A mapping of name to <code>format · path · partition_by</code></td></tr>
+  </tbody>
+</table>
+
+<table class="compact">
+  <caption>Field</caption>
+  <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">type</td><td>One of 28 types</td></tr>
+    <tr><td class="mono">semantic</td><td>What the field means, in natural language</td></tr>
+    <tr><td class="mono">description</td><td>Documentation; falls back to <code>semantic</code></td></tr>
+    <tr><td class="mono">generator</td><td>A name, or a mapping with <code>type</code> and options</td></tr>
+    <tr><td class="mono">primary_key · unique</td><td>Identity and uniqueness</td></tr>
+    <tr><td class="mono">nullable · null_probability</td><td>Nullability; <code>true</code> alone means 5%</td></tr>
+    <tr><td class="mono">depends_on · context</td><td>Ordering, and what a generator may consult</td></tr>
+    <tr><td class="mono">constraints</td><td><code>min · max · min_length · max_length · pattern · enum · forbidden · multiple_of · precision</code></td></tr>
+    <tr><td class="mono">examples · tone · locale</td><td>Hints for generators that can use them</td></tr>
+    <tr><td class="mono"><em>anything else</em></td><td>A generator option</td></tr>
+  </tbody>
+</table>
+
+<table class="compact">
+  <caption>simulation</caption>
+  <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">subject</td><td>Whose events these are</td></tr>
+    <tr><td class="mono">distribution · skew</td><td>How events are allocated across subjects: <code>uniform</code>, <code>skewed</code>, <code>zipf</code></td></tr>
+    <tr><td class="mono">minimum</td><td>Events every subject gets before the rest are allocated</td></tr>
+    <tr><td class="mono">state</td><td>A mapping of variable to <code>initial · update · min · max · precision</code></td></tr>
+  </tbody>
+</table>
+
+<h1 class="appendix">Command synopsis</h1>
+
+<pre class="synopsis"><code class="language-text">cacophony validate  PROJECT [--seed N]
+cacophony lint      PROJECT [--strict]
+cacophony plan      PROJECT [--seed N] [--json]
+cacophony preview   PROJECT [-e ENTITY] [-n N] [-c a,b,c] [--offset N] [--json]
+                            [--isolate] [--cache MODE] [--cache-path FILE] [--seed N]
+cacophony generate  PROJECT [-n N] [--seed N] [-o FORMAT] [-d DIR] [-e ENTITY]
+                            [--batch-size N] [--workers N] [--provenance MODE]
+                            [--on-failure POLICY] [--drop-invalid] [--no-validate]
+                            [--edge-cases FRACTION] [--edge-categories a,b,c]
+                            [--cache MODE] [--cache-path FILE] [-w WORLD]
+                            [--assets-dir DIR] [--regenerate-assets]
+                            [--llm-batch-size N] [--checkpoint-every N]
+                            [--store FILE] [--no-history]
+                            [--log-level LEVEL] [--log-format text|json]
+cacophony resume    [RUN] [-p PROJECT] [--store FILE] [--log-level LEVEL]
+cacophony runs      [-p PROJECT] [--store FILE] [--state STATE] [--limit N] [--json]
+cacophony run       RUN [-p PROJECT] [--store FILE] [--events N] [--json]
+cacophony regenerate PROJECT -r N|N-M [-e ENTITY] [-c a,b,c] [--json] [--seed N]
+
+cacophony serve     [--host H] [--port P] [--store FILE] [-p PROJECT]
+                            [--studio DIR] [--reload] [--log-level LEVEL]
+cacophony desktop   [--store FILE] [-p PROJECT] [--studio DIR] [--host H]
+                            [--port N] [--no-token] [--keep-running] [--log-level L]
+
+cacophony generators [--json]
+cacophony recipes   [-p PROJECT] [--show NAME] [--group NAME] [--json]
+cacophony plugins   [--show NAME] [--json]
+cacophony providers [PROJECT] [--test]
+cacophony models    PROJECT [-p PROVIDER]
+cacophony prompt    PROJECT [-e ENTITY] [--batch-size N] [--schema]
+cacophony benchmark PROJECT -m MODEL,MODEL [-e ENTITY] [-n N] [-p PROVIDER]
+                            [--sort-by FIELD] [--json] [--seed N]
+cacophony propose   "DESCRIPTION" [-o FILE] [--providers PROJECT] [--adapter NAME]
+                            [--url URL] [-m MODEL] [--scale N] [--seed N] [--force]
+cacophony worlds    PROJECT [--create NAME] [--show NAME] [--delete NAME]
+cacophony version
+
+cacophony stream    PROJECT [-r ENTITY=RATE]... [-t DESTINATION]... [-s SECONDS]
+                            [-n N] [--from N] [--batch-size N] [--flush SECONDS]
+                            [--follow-shape] [--historical]
+                            [--scenario-cycle SECONDS] [--on-error POLICY]
+                            [--seed N] [-q]
+cacophony cluster   PROJECT [-o DIR] [-w WORKERS] [-f FORMAT] [-n N]
+                            [--shard-size N] [--batch-size N] [--join|--no-join]
+                            [--assets-dir DIR] [--seed N] [-q]
+cacophony controller PROJECT [--host H] [--port P] [--shard-size N]
+                            [--lease-seconds S] [--max-attempts N] [-n N]
+                            [--seed N] [--log-level LEVEL]
+cacophony worker    PROJECT -c URL [-o DIR] [-f FORMAT] [--name ID]
+                            [--capabilities LIST] [--concurrency N] [--batch-size N]
+                            [-n N] [--assets-dir DIR] [--idle-timeout S] [--seed N]
+
+cacophony transform SOURCE [-s 'FIELD=OP']... [-w EXPR] [--drop-where EXPR]
+                            [--keep-where EXPR] [-o FILE | --in-place] [-f FORMAT]
+                            [-p PROJECT] [-e ENTITY] [--record-as NAME]
+                            [--force] [--json]
+cacophony bundle export  PROJECT [-o FILE] [--force]
+cacophony bundle inspect FILE [--json]
+cacophony bundle import  FILE -d DIR [--force]</code></pre>
+
+<h1 class="appendix">Exit codes and the environment</h1>
+
+<table class="compact">
+  <caption>Exit codes</caption>
+  <thead><tr><th class="num">Code</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="num mono">0</td><td>Success</td></tr>
+    <tr><td class="num mono">1</td><td>Lint errors</td></tr>
+    <tr><td class="num mono">2</td><td>Bad schema or bad arguments</td></tr>
+    <tr><td class="num mono">3</td><td>Generation failure</td></tr>
+    <tr><td class="num mono">4</td><td>Run cancelled rather than failed</td></tr>
+  </tbody>
+</table>
+
+<table class="compact">
+  <caption>Environment variables</caption>
+  <thead><tr><th>Variable</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">CACOPHONY_SECRET_&lt;ID&gt;</td><td>Resolves a provider's logical secret</td></tr>
+    <tr><td class="mono">CACOPHONY_CONTROLLER_TOKEN</td><td>Shared token for distributed generation</td></tr>
+    <tr><td class="mono">CACOPHONY_NO_PLUGINS</td><td><code>1</code> skips plugin loading</td></tr>
+    <tr><td class="mono">CACOPHONY_BACKEND</td><td>Which backend the desktop shell spawns</td></tr>
+    <tr><td class="mono">CACOPHONY_TEST_OLLAMA</td><td rowspan="3">Base URLs for the live provider contract tests, which are skipped when unset</td></tr>
+    <tr><td class="mono">CACOPHONY_TEST_INVOKEAI</td></tr>
+    <tr><td class="mono">CACOPHONY_TEST_PIPER</td></tr>
+  </tbody>
+</table>
+
+<h1 class="appendix">Glossary</h1>
+
+<dl class="options">
+  <dt id="term-asset">asset</dt><dd>A generated file &mdash; image, audio or document &mdash; written under <code>assets/</code> with a line in the manifest tying it to its record.</dd>
+  <dt id="term-attainment">attainment</dt><dd>In a stream, the achieved rate as a fraction of the requested one, integrated over time.</dd>
+  <dt id="term-bundle">bundle</dt><dd>A <code>.cacophony</code> file: a project and everything it references, with a hash manifest.</dd>
+  <dt id="term-capability">capability</dt><dd>Something a shard needs or a worker has: <code>deterministic</code>, <code>language_model</code>, <code>image</code>, <code>speech</code>, <code>document</code>. Never declared; always derived.</dd>
+  <dt id="term-chaos">chaos</dt><dd>Deliberate damage: data the schema forbids, injected at a stated rate.</dd>
+  <dt id="term-checkpoint">checkpoint</dt><dd>How many records a job has finished. One integer, because seeds come from positions.</dd>
+  <dt id="term-cost-class">cost class</dt><dd>What a generator costs to run: <code>cpu</code>, <code>llm</code> or <code>gpu</code>. Used by the scheduler and by the distributed controller.</dd>
+  <dt id="term-edge-case">edge case</dt><dd>A legal value that naive code mishandles anyway. Distinct from chaos.</dd>
+  <dt id="term-entity">entity</dt><dd>A record type: a table, a document collection, a log stream.</dd>
+  <dt id="term-lease">lease</dt><dd>A time-limited grant of one shard to one worker, renewed while it works.</dd>
+  <dt id="term-patch-rule">patch rule</dt><dd>An edit recorded in the project rather than applied to a file, so it survives regeneration.</dd>
+  <dt id="term-plan">plan</dt><dd>The compiled result: entities in dependency order, and per field its generator, cost, determinism and dependencies.</dd>
+  <dt id="term-provenance">provenance</dt><dd>Recorded facts about how data came to exist, at five levels of detail.</dd>
+  <dt id="term-recipe">recipe</dt><dd>A named group of fields, expanded into an entity before anything else looks at the schema.</dd>
+  <dt id="term-run">run</dt><dd>One execution of <code>generate</code>, recorded in the store with its jobs, checkpoints and events.</dd>
+  <dt id="term-scenario">scenario</dt><dd>A behavioural overlay applied to a fraction of subjects over a window of their history.</dd>
+  <dt id="term-seed-tree">seed tree</dt><dd>The hierarchy from which every value's randomness is derived by position rather than by sequence.</dd>
+  <dt id="term-shard">shard</dt><dd>A contiguous index range, generated independently and joined without a seam.</dd>
+  <dt id="term-simulation">simulation</dt><dd>An entity declared to be events belonging to subjects, with state folded over each subject's block.</dd>
+  <dt id="term-subject">subject</dt><dd>Whoever an event belongs to: a user, an account, a device.</dd>
+  <dt id="term-world">world</dt><dd>A named seed plus the schema it goes with, checked when used.</dd>
+</dl>
+
+<h1 class="appendix">Lint rules</h1>
+
+<p class="lead">Nineteen rules at three severities. <code>--strict</code> makes
+warnings fatal.</p>
+
+<table class="compact">
+  <caption>Rules</caption>
+  <thead><tr><th>Code</th><th>Severity</th><th>Fires when</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">unique-exhaustion</td><td>error</td><td>A field is marked unique but its generator cannot produce that many distinct values</td></tr>
+    <tr><td class="mono">reference-to-empty-entity</td><td>error</td><td>A reference points at an entity with no records</td></tr>
+    <tr><td class="mono">unique-reference-overflow</td><td>error</td><td>A unique reference needs more parents than exist</td></tr>
+    <tr><td class="mono">missing-provider</td><td>error</td><td>A field names a provider that is not configured</td></tr>
+    <tr><td class="mono">empty-entity</td><td>warning</td><td><code>count</code> is 0, so no records will be produced</td></tr>
+    <tr><td class="mono">self-reference</td><td>warning</td><td>An entity references itself; check it points backwards and is nullable</td></tr>
+    <tr><td class="mono">llm-without-semantics</td><td>warning</td><td>A model field has no <code>semantic</code>, so the prompt has nothing to say</td></tr>
+    <tr><td class="mono">bulk-media</td><td>warning</td><td>Media generation at a record count that will take a very long time</td></tr>
+    <tr><td class="mono">bulk-llm</td><td>warning</td><td>The same, for model calls</td></tr>
+    <tr><td class="mono">unrealistic-distribution</td><td>warning</td><td>Distribution parameters that will produce implausible values</td></tr>
+    <tr><td class="mono">reference-to-nonunique-key</td><td>warning</td><td>A reference points at a column that is not unique, so the join is ambiguous</td></tr>
+    <tr><td class="mono">chaos-referential</td><td>warning</td><td>Referential chaos with an output that enforces foreign keys</td></tr>
+    <tr><td class="mono">no-primary-key</td><td>info</td><td>No primary key is declared and the entity has more than one record</td></tr>
+    <tr><td class="mono">unbounded-text</td><td>info</td><td>A long text field has no <code>max_length</code>, so prose size is unpredictable</td></tr>
+    <tr><td class="mono">mostly-null</td><td>info</td><td>Half or more of the values will be null</td></tr>
+    <tr><td class="mono">uniform-reference</td><td>info</td><td>A reference is uniform, which almost nothing in the world is</td></tr>
+    <tr><td class="mono">unused-provider</td><td>info</td><td>A provider is configured but never used</td></tr>
+    <tr><td class="mono">chaos-absolute</td><td>info</td><td>The <code>absolute</code> preset damages so much that most records are unusable</td></tr>
+  </tbody>
+</table>
+
+<h1 class="appendix">Where the design document went</h1>
+
+<p class="lead">Cacophony was built from a 112-section design document. This maps
+its numbered sections to the chapters here, for anyone reading both.</p>
+
+<table class="compact">
+  <thead><tr><th>Sections</th><th>Subject</th><th>Here</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">8, 12, 13, 66</td><td>Generators, prompt compilation, model trust</td><td>Chapters&nbsp;11&ndash;16</td></tr>
+    <tr><td class="mono">15, 25, 26</td><td>References, timelines, partitioned folds</td><td>Chapters&nbsp;17&ndash;18</td></tr>
+    <tr><td class="mono">16, 17</td><td>Worlds and scenarios</td><td>Chapters&nbsp;19, 22</td></tr>
+    <tr><td class="mono">18, 20, 23, 19, 81</td><td>Images, speech, documents, asset provenance</td><td>Chapter&nbsp;16</td></tr>
+    <tr><td class="mono">24, 78, 79</td><td>Chaos and edge cases</td><td>Chapters&nbsp;20, 33</td></tr>
+    <tr><td class="mono">28, 31, 32, 33, 37</td><td>Planning, streaming writes, checkpoints, formats</td><td>Chapters&nbsp;5, 10, 27</td></tr>
+    <tr><td class="mono">35, 94</td><td>Live streams</td><td>Chapter&nbsp;28</td></tr>
+    <tr><td class="mono">36, 43</td><td>Providers and adapters</td><td>Chapter&nbsp;26</td></tr>
+    <tr><td class="mono">41</td><td>The desktop application</td><td>Chapter&nbsp;38</td></tr>
+    <tr><td class="mono">44</td><td>Plugins</td><td>Chapter&nbsp;39</td></tr>
+    <tr><td class="mono">45&ndash;56, 48, 73, 74</td><td>The API, the Studio, schema revisions</td><td>Chapters&nbsp;36&ndash;37</td></tr>
+    <tr><td class="mono">57, 58, 59</td><td>Validation and duplication</td><td>Chapters&nbsp;31&ndash;32</td></tr>
+    <tr><td class="mono">62, 63, 87</td><td>Safe identifiers, credentials, provenance retention</td><td>Chapter&nbsp;6</td></tr>
+    <tr><td class="mono">67</td><td>Model benchmarking</td><td>Chapter&nbsp;34</td></tr>
+    <tr><td class="mono">72</td><td>Bundles</td><td>Chapter&nbsp;23</td></tr>
+    <tr><td class="mono">75</td><td>Hierarchical positional seeds</td><td>Chapter&nbsp;4</td></tr>
+    <tr><td class="mono">80, 106</td><td>Recipes and the catalogue</td><td>Chapter&nbsp;21, appendix&nbsp;B</td></tr>
+    <tr><td class="mono">84, 95</td><td>Distributed generation and leases</td><td>Chapter&nbsp;29</td></tr>
+    <tr><td class="mono">102</td><td>Linting</td><td>Appendix&nbsp;I</td></tr>
+    <tr><td class="mono">104, 105</td><td>Patch rules and transformations</td><td>Chapter&nbsp;35</td></tr>
+  </tbody>
+</table>
+
+<h1 class="appendix">Index</h1>
+
+<p class="lead">Generators, commands, schema keys, operations and terms, with the
+page each is defined on.</p>
+
+<!--INDEX-->
+
+<p class="colophon-end">Cacophony 0.1.0 &mdash; the complete manual. Free
+software under the GNU Affero General Public License, version 3 or later.</p>

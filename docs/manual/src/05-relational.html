@@ -1,0 +1,360 @@
+<section class="part-page">
+  <h1>Relations and time</h1>
+  <p class="part-blurb">References that resolve and cost nothing, events that
+  fall where events fall, subjects with histories, incidents buried in them, and
+  damage on purpose.</p>
+</section>
+
+<h1 id="gen-reference">References</h1>
+
+<p class="lead">A reference is a foreign key that resolves. It is also, in
+Cacophony, arithmetic rather than bookkeeping &mdash; which is why a hundred
+million events pointing at five thousand employees costs the same memory as
+five.</p>
+
+<h2>Declaring one</h2>
+
+<div class="signature">generator: reference &nbsp;·&nbsp; aliases: fk, foreign_key, belongs_to</div>
+<dl class="options">
+  <dt>entity</dt><dd><span class="type">string</span> Required. Which entity to point at. Aliases <code>to</code>, <code>references</code>.</dd>
+  <dt>field</dt><dd><span class="type">string</span> Which column of the target. Defaults to its primary key. Alias <code>key</code>.</dd>
+  <dt>distribution</dt><dd><span class="type">enum</span> <code>uniform</code> (default), <code>skewed</code>, <code>sequential</code>, <code>round_robin</code>.</dd>
+  <dt>skew</dt><dd><span class="type">number</span> How steep <code>skewed</code> is. Default <code>1.6</code>.</dd>
+  <dt>unique</dt><dd><span class="type">boolean</span> One child per parent. Forces <code>sequential</code>.</dd>
+  <dt>expose</dt><dd><span class="type">boolean</span> Make the parent's other fields readable by templates and expressions.</dd>
+  <dt>on_unavailable</dt><dd><span class="type">enum</span> What to do when the target has no records.</dd>
+</dl>
+
+<pre><code class="language-yaml">order:
+  count: 45000
+  fields:
+    customer:
+      generator: reference
+      entity: customer
+      distribution: skewed
+      skew: 1.9</code></pre>
+
+<p>A reference with no declared <code>type</code> takes the type of the key it
+points at, because an integer key referenced by a string column joins to
+nothing.</p>
+
+<h2>How it works</h2>
+
+<p>Pick a parent index from this record's derived seed, then generate the
+transitive closure of that parent's key field &mdash; that is, produce just
+enough of the parent to know its identifier. Nothing is held in a pool and
+nothing is looked up. The consequence is that references are free at any scale
+and work identically in a shard on another machine, where no parent has ever
+been generated.</p>
+
+<h2>Distribution is the option that decides whether the data resembles anything</h2>
+
+<table>
+  <caption>Reference distributions</caption>
+  <thead><tr><th>Value</th><th>Behaviour</th><th>Use for</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">uniform</td><td>Every parent equally likely</td><td>Almost nothing in real life. The default because it is the least surprising.</td></tr>
+    <tr><td class="mono">skewed</td><td>A power law: the head of the range attracts most references</td><td>Support tickets, orders, logins, API calls &mdash; anything people do.</td></tr>
+    <tr><td class="mono">sequential</td><td>Parent <code>record_index % count</code></td><td>Guaranteeing every parent appears.</td></tr>
+    <tr><td class="mono">round_robin</td><td>The same thing under its other name</td><td>&mdash;</td></tr>
+  </tbody>
+</table>
+
+<table class="compact">
+  <caption>What <code>skew</code> does: share of references taken by the busiest tenth of parents</caption>
+  <thead><tr><th class="num">skew</th><th>Top 10% take</th><th>Looks like</th></tr></thead>
+  <tbody>
+    <tr><td class="num mono">1.0</td><td>10%</td><td>Uniform</td></tr>
+    <tr><td class="num mono">1.6</td><td>24%</td><td>The default: mild realism</td></tr>
+    <tr><td class="num mono">2.0</td><td>32%</td><td>A busy support queue</td></tr>
+    <tr><td class="num mono">3.3</td><td>50%</td><td>Half the traffic from a tenth of users</td></tr>
+    <tr><td class="num mono">7.2</td><td>80%</td><td>The Pareto cliché, and some systems really do this</td></tr>
+  </tbody>
+</table>
+
+<h2>Reading the parent's other fields</h2>
+
+<pre><code class="language-yaml">employee:
+  fields:
+    employer:
+      generator: reference
+      entity: company
+    email:
+      generator: template
+      template: "{first_name|lower}@{company.domain}"    # this row's company</code></pre>
+
+<p>The compiler orders <code>email</code> after <code>employer</code> on its own.
+Where a field and the entity it points at share a name &mdash; a
+<code>customer:</code> field holding a reference to the <code>customer</code>
+entity &mdash; a dotted read means the related record, not the key.</p>
+
+<h2>Self-references</h2>
+
+<pre><code class="language-yaml">  manager:
+    generator: reference
+    entity: $self          # in a recipe; write the entity's own name directly
+    nullable: true</code></pre>
+
+<p>A self-reference points <strong>backwards</strong>: record <em>n</em> may
+only point at a record before it, and record 0 gets null. That is not a
+stylistic choice. A forward-pointing self-reference makes the graph cyclic,
+which means no valid insertion order exists, which means an enforced foreign key
+in the SQLite output fails on the first row. Backwards-only gives you a real
+management hierarchy that loads into a real database.</p>
+
+<h2>Uniqueness</h2>
+
+<p><code>unique: true</code> gives each parent exactly one child and forces
+<code>sequential</code>, which is how you model a one-to-one extension table.
+The linter refuses the arithmetic impossibility &mdash; more children than
+parents with <code>unique</code> set is <code>unique-reference-overflow</code>,
+an error, before you spend an hour generating.</p>
+
+<h1 id="key-timeline">Timelines and simulation</h1>
+
+<p class="lead">A dataset of events wants two things a flat random window cannot
+give it: events that fall when events actually fall, and subjects whose
+histories accumulate. <code>timeline:</code> handles the first,
+<code>simulation:</code> the second.</p>
+
+<h2>The project timeline</h2>
+
+<pre><code class="language-yaml">timeline:
+  start: "2026-01-01"
+  end: "2026-04-01"
+  shape: business_hours       # flat, business_hours, office, retail, evening
+  holidays: ["2026-01-01", "2026-02-16"]
+  holiday_weight: 0.05        # 0.0 silences a holiday entirely
+  months: {december: 2.5}     # seasonality, by name or number
+  spikes:
+    - {start: "2026-03-01", end: "2026-03-07", multiplier: 8}
+  growth: 1.4                 # activity at the end relative to the start</code></pre>
+
+<table class="compact">
+  <caption>timeline keys</caption>
+  <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">start, end</td><td>The window. ISO dates or datetimes.</td></tr>
+    <tr><td class="mono">shape</td><td>The daily and weekly rhythm: <code>flat</code>, <code>business_hours</code>, <code>office</code>, <code>retail</code>, <code>evening</code>.</td></tr>
+    <tr><td class="mono">holidays</td><td>Dates whose weight is multiplied by <code>holiday_weight</code>.</td></tr>
+    <tr><td class="mono">holiday_weight</td><td>Default is a small fraction; <code>0.0</code> silences the day completely.</td></tr>
+    <tr><td class="mono">months</td><td>Seasonal multipliers, by name or number.</td></tr>
+    <tr><td class="mono">spikes</td><td>Windows with a multiplier: a campaign, an outage, a sale.</td></tr>
+    <tr><td class="mono">growth</td><td>End-to-start activity ratio, applied smoothly across the window.</td></tr>
+  </tbody>
+</table>
+
+<h2>How events land, and why they are already sorted</h2>
+
+<p>The shape is compiled into a cumulative distribution function once. Drawing
+the <em>k</em>-th of <em>n</em> events at quantile <em>k/n</em> and inverting the
+CDF yields events that are already in chronological order
+<span class="sec">section&nbsp;25</span>.</p>
+
+<p>No sort. That is not a micro-optimisation: sorting is the step that makes a
+streaming generator hold the whole dataset, and avoiding it is why a hundred
+million timestamped events cost the same memory as a hundred.</p>
+
+<h2 id="key-simulation">Simulation</h2>
+
+<pre><code class="language-yaml">transaction:
+  count: 500000
+  simulation:
+    subject: account          # whose events these are
+    distribution: skewed      # uniform, skewed, zipf
+    skew: 1.9
+    minimum: 4                # events every subject gets before the rest
+    state:
+      balance:
+        initial: "500"
+        update: "balance + amount"
+        min: 0
+        precision: 2</code></pre>
+
+<p>Declaring <code>simulation:</code> turns an entity's records into a history.
+Three generators become available and are usually all you need:</p>
+
+<table class="compact">
+  <thead><tr><th>Generator</th><th>Produces</th></tr></thead>
+  <tbody>
+    <tr><td class="mono" id="gen-subject">subject</td><td>Whose event this is. The allocation already decided; this field reports it. <code>field:</code> chooses which column of the subject to point at.</td></tr>
+    <tr><td class="mono" id="gen-event-time">event_time</td><td>When it happened, drawn from the timeline. <code>jitter</code>, <code>offset</code>, <code>offset_field</code>, <code>spread</code> (<code>ordered</code> or <code>random</code>).</td></tr>
+    <tr><td class="mono" id="gen-state">state</td><td>A value folded over this subject's earlier events. <code>variable</code> names which one; it defaults to the field's own name.</td></tr>
+  </tbody>
+</table>
+
+<h2>Partitioned folds</h2>
+
+<p>Events are laid out in contiguous blocks per subject
+<span class="sec">section&nbsp;26</span>. Account 41's events are records
+912,000 to 912,338, in order. A running balance is therefore a linear fold over
+one block, needing no lookahead and no global state, and a resumed run replays
+one subject's block rather than the dataset.</p>
+
+<figure>
+<div class="diagram">records:  0 ─────────── 12 ──────── 27 ──────────────── 61 ─── …
+subject:  ├── account 1 ──┤├ account 2 ┤├──── account 3 ────┤
+state:    500 → 480 → 512   500 → 466    500 → 690 → 655 → 700
+timeline: each block spread across the project window by quantile,
+          so a subject's events are chronological without a sort</div>
+<figcaption>Contiguous blocks are what make a stateful simulation streamable.</figcaption>
+</figure>
+
+<p>State expressions use the same restricted evaluator as
+<code>expression</code>: no imports, no attribute access, no way to run code out
+of a shared project file. <code>min</code>, <code>max</code> and
+<code>precision</code> clamp and round the accumulated value, which is how a
+balance stays a two-decimal number that never goes negative.</p>
+
+<div class="callout quiet">
+  <span class="callout-title">Streaming is different, and says so</span>
+  <p>In a live stream, subjects interleave &mdash; that is what a stream
+  <em>is</em> &mdash; so per-subject state is held in memory rather than folded
+  over a contiguous block. The values are the same kind of thing; they are not
+  the same values as a batch run, and nothing pretends otherwise.</p>
+</div>
+
+<h1 id="key-scenarios">Scenarios</h1>
+
+<p class="lead">A scenario is a behavioural overlay: something that happens to a
+fraction of subjects, over a window of their history, changing what their events
+look like. It is how you bury an incident in a year of logs without writing the
+incident by hand.</p>
+
+<pre><code class="language-yaml">scenarios:
+  ransomware:
+    description: Access, then execution, then encryption.
+    applies_to: [authentication]
+    affects_fraction: 0.004
+    parameters:
+      subject: user
+      window: {at: 0.62, duration: 0.12}    # or [start, end]
+      rate_multiplier: 4.0
+      effects:
+        risk_score: 88
+      phases:
+        - name: initial_access
+          effects:
+            result: {success: 70, failure_bad_password: 30}
+        - name: encryption
+          effects:
+            application: Admin Console
+            risk_score: 99</code></pre>
+
+<table class="compact">
+  <caption>scenario keys</caption>
+  <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">applies_to</td><td>Which entities the overlay touches.</td></tr>
+    <tr><td class="mono">affects_fraction</td><td>What proportion of subjects are involved.</td></tr>
+    <tr><td class="mono">subject</td><td>Which subject dimension is affected.</td></tr>
+    <tr><td class="mono">window</td><td>A fraction of the subject's own history: <code>{at, duration}</code> or <code>[start, end]</code>.</td></tr>
+    <tr><td class="mono">rate_multiplier</td><td>How much busier the subject gets inside the window.</td></tr>
+    <tr><td class="mono">effects</td><td>Field values to impose. A mapping is a weighted choice; a string beginning <code>=</code> is an expression over the record.</td></tr>
+    <tr><td class="mono">phases</td><td>Ordered stages within the window, each with its own effects.</td></tr>
+  </tbody>
+</table>
+
+<h2>Who is affected, and why no list is held</h2>
+
+<p>Subjects are selected by hashing the project seed with the scenario's name.
+The same identities are affected on every run, in any order, at any scale, and
+no list of victims is ever materialised. Ask for four in a thousand out of ten
+million subjects and Cacophony does not build a set of forty thousand
+identifiers; it asks, per subject, whether this one is in.</p>
+
+<h2>Windows are the same calendar moment for everyone</h2>
+
+<p><code>window</code> is a fraction of the subject's history rather than a date.
+Because events are laid out by timeline quantile, 0.62 of the way through one
+subject's history is the same calendar moment as 0.62 of the way through
+another's &mdash; however many events each of them has. The incident happens
+across the population at once, which is what an incident does.</p>
+
+<h2>Reporting it</h2>
+
+<div class="signature">generator: scenario &nbsp;·&nbsp; aliases: incident, affected_by</div>
+<dl class="options">
+  <dt>report</dt><dd><span class="type">enum</span> <code>name</code> (default), <code>phase</code>, <code>involved</code>, <code>position</code>.</dd>
+  <dt>normal</dt><dd><span class="type">any</span> The value for a record no scenario touches.</dd>
+</dl>
+
+<pre><code class="language-yaml">  scenario:
+    type: string
+    generator: scenario
+    report: name
+    normal: null
+    nullable: true      # the label is absent for most records, and that is fine</code></pre>
+
+<p>A scenario field is the ground truth column: it says which records belong to
+the incident, which is exactly what you need to score a detection system and
+exactly what you must remember to remove before handing the data to one.</p>
+
+<div class="callout warning">
+  <span class="callout-title">Make the label nullable</span>
+  <p>Most records are not in any scenario, so a non-nullable
+  <code>scenario</code> field fails validation on ninety-nine per cent of the
+  dataset. Write <code>nullable: true</code>, or give <code>normal:</code> a
+  value like <code>"none"</code>.</p>
+</div>
+
+<h1 id="key-chaos">Chaos</h1>
+
+<p class="lead">Deliberate damage. Data your schema forbids, injected on purpose,
+so you can find out what your pipeline does with input that is wrong rather than
+merely unusual.</p>
+
+<pre><code class="language-yaml">chaos:
+  preset: realistic       # pristine, realistic, messy, hostile_qa, absolute
+  missing_data: 0.05      # anything stated explicitly overrides the preset</code></pre>
+
+<table>
+  <caption>Kinds of damage</caption>
+  <thead><tr><th>Kind</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">missing_data</td><td>Nulls a field that had a value</td></tr>
+    <tr><td class="mono">malformed_text</td><td>Whitespace, case, transpositions, truncation, stray tabs</td></tr>
+    <tr><td class="mono">unexpected_unicode</td><td>Zero-width spaces, RTL marks, combining accents, emoji</td></tr>
+    <tr><td class="mono">outliers</td><td>Numbers orders of magnitude out, sometimes negative</td></tr>
+    <tr><td class="mono">temporal_anomalies</td><td>Dates in the far future or past, or in another format entirely</td></tr>
+    <tr><td class="mono">referential_anomalies</td><td>A well-formed key that points at nothing</td></tr>
+    <tr><td class="mono">duplicates</td><td>Emits the record twice, the way a retried insert does</td></tr>
+  </tbody>
+</table>
+
+<table class="compact">
+  <caption>Presets, as fractions of records affected</caption>
+  <thead><tr>
+    <th>Kind</th><th class="num">pristine</th><th class="num">realistic</th>
+    <th class="num">messy</th><th class="num">hostile_qa</th><th class="num">absolute</th>
+  </tr></thead>
+  <tbody>
+    <tr><td class="mono">missing_data</td><td class="num">&mdash;</td><td class="num">0.02</td><td class="num">0.06</td><td class="num">0.10</td><td class="num">0.20</td></tr>
+    <tr><td class="mono">malformed_text</td><td class="num">&mdash;</td><td class="num">0.004</td><td class="num">0.03</td><td class="num">0.08</td><td class="num">0.20</td></tr>
+    <tr><td class="mono">unexpected_unicode</td><td class="num">&mdash;</td><td class="num">0.001</td><td class="num">0.01</td><td class="num">0.05</td><td class="num">0.15</td></tr>
+    <tr><td class="mono">outliers</td><td class="num">&mdash;</td><td class="num">0.005</td><td class="num">0.02</td><td class="num">0.05</td><td class="num">0.15</td></tr>
+    <tr><td class="mono">temporal_anomalies</td><td class="num">&mdash;</td><td class="num">0.0005</td><td class="num">0.005</td><td class="num">0.02</td><td class="num">0.08</td></tr>
+    <tr><td class="mono">referential_anomalies</td><td class="num">&mdash;</td><td class="num">&mdash;</td><td class="num">0.002</td><td class="num">0.01</td><td class="num">0.05</td></tr>
+    <tr><td class="mono">duplicates</td><td class="num">&mdash;</td><td class="num">0.001</td><td class="num">0.01</td><td class="num">0.02</td><td class="num">0.05</td></tr>
+  </tbody>
+</table>
+
+<h2>What chaos never touches</h2>
+
+<p>Primary keys and <code>scenario</code> fields. A damaged primary key is not a
+robustness test; it is a dataset whose joins have stopped resolving, after which
+every finding is about Cacophony rather than about your pipeline.</p>
+
+<h2>Damage is recorded</h2>
+
+<p>Every damaged field is noted in <code>_chaos</code> on the record and in
+provenance, and the validator skips those fields &mdash; otherwise a chaotic run
+is a wall of validation failures reporting the feature working, and
+<code>--drop-invalid</code> discards precisely what you asked for.</p>
+
+<h2>Chaos against a database output</h2>
+
+<p>See the warning at the end of chapter&nbsp;10: a run with chaos writes its
+tables without constraints and with indexes instead, because damaged data and
+enforced integrity are mutually exclusive by construction. This is stated when
+the run starts rather than discovered when it aborts.</p>

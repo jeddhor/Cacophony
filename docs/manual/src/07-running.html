@@ -1,0 +1,325 @@
+<section class="part-page">
+  <h1>Running it</h1>
+  <p class="part-blurb">Every command and every option; where the records go;
+  what a run records about itself; and how to point Cacophony at a model.</p>
+</section>
+
+<h1>The command line</h1>
+
+<p class="lead">Twenty-seven commands. This chapter is the complete reference,
+grouped by what you are trying to do; appendix&nbsp;F has the same material as a
+one-page synopsis.</p>
+
+<h2>Global behaviour</h2>
+
+<table class="compact">
+  <caption>Exit codes</caption>
+  <thead><tr><th class="num">Code</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="num mono">0</td><td>Success</td></tr>
+    <tr><td class="num mono">1</td><td>Lint errors</td></tr>
+    <tr><td class="num mono">2</td><td>Bad schema or bad arguments</td></tr>
+    <tr><td class="num mono">3</td><td>Generation failure</td></tr>
+    <tr><td class="num mono">4</td><td>Run cancelled rather than failed</td></tr>
+  </tbody>
+</table>
+
+<p>Errors go to standard error, so <code>cacophony preview --json | jq</code> is
+safe. Any command taking a project accepts <code>--seed</code> to override the
+project seed for that invocation.</p>
+
+<h2>Understanding a schema</h2>
+
+<h3 id="cmd-validate"><code>validate</code></h3>
+<div class="signature">cacophony validate PROJECT [--seed N]</div>
+<p>Compiles the schema and reports structural problems: unknown generators, bad
+options, unresolvable dependencies, cycles. Generates nothing.</p>
+
+<h3 id="cmd-lint"><code>lint</code></h3>
+<div class="signature">cacophony lint PROJECT [--strict]</div>
+<p>Nineteen rules about schemas that compile and will disappoint you.
+<code>--strict</code> exits non-zero on warnings as well as errors, which is the
+form to use in CI. Appendix&nbsp;I lists every rule.</p>
+
+<h3 id="cmd-plan"><code>plan</code></h3>
+<div class="signature">cacophony plan PROJECT [--seed N] [--json]</div>
+<p>The compiled truth: entities in dependency order, and per field its
+generator, cost class, determinism, dependencies and recipe attribution.</p>
+
+<h3 id="cmd-prompt"><code>prompt</code></h3>
+<div class="signature">cacophony prompt PROJECT [-e ENTITY] [--batch-size N] [--schema]</div>
+<p>Prints the prompts the compiler builds, and with <code>--schema</code> the
+JSON Schema used to constrain decoding.</p>
+
+<h3 id="cmd-generators"><code>generators</code>, <code>recipes</code>, <code>plugins</code></h3>
+<div class="signature">cacophony generators [--json]
+cacophony recipes [-p PROJECT] [--show NAME] [--group NAME] [--json]
+cacophony plugins [--show NAME] [--json]</div>
+<p>What is available in this installation: thirty generators, thirty-one recipes
+plus whatever the project adds, and any plugins installed.</p>
+
+<h2>Producing data</h2>
+
+<h3 id="cmd-preview"><code>preview</code></h3>
+<div class="signature">cacophony preview PROJECT [-e ENTITY] [-n COUNT] [--offset N]
+                  [-c COLUMNS] [--json] [--isolate]
+                  [--cache MODE] [--cache-path FILE] [--seed N]</div>
+<p>Shows exactly the records a real run would produce at those indices.
+<code>--offset</code> looks into the middle of a run you have not done;
+<code>--isolate</code> draws a <em>different</em> sample when you want variety
+rather than fidelity.</p>
+
+<h3 id="cmd-generate"><code>generate</code></h3>
+<div class="signature">cacophony generate PROJECT [options]</div>
+
+<table class="compact">
+  <caption>generate options</caption>
+  <thead><tr><th>Option</th><th>Default</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">-n, --records N</td><td>&mdash;</td><td>Override every entity's count</td></tr>
+    <tr><td class="mono">--seed N</td><td>project</td><td>Override the project seed</td></tr>
+    <tr><td class="mono">-o, --output FORMAT</td><td><code>jsonl</code></td><td>csv, json, jsonl, ndjson, parquet, sql, sqlite</td></tr>
+    <tr><td class="mono">-d, --out-dir DIR</td><td><code>out</code></td><td>Destination directory</td></tr>
+    <tr><td class="mono">-e, --entity NAME</td><td>all</td><td>Generate one entity</td></tr>
+    <tr><td class="mono">--batch-size N</td><td><code>1000</code></td><td>Records per write batch</td></tr>
+    <tr><td class="mono">--workers N</td><td><code>4</code></td><td>Entities generated concurrently</td></tr>
+    <tr><td class="mono">--provenance MODE</td><td><code>none</code></td><td>none, run, record, field, full</td></tr>
+    <tr><td class="mono">--on-failure POLICY</td><td><code>abort</code></td><td>What to do when a <em>generator</em> fails: retry, skip, placeholder, incomplete, abort</td></tr>
+    <tr><td class="mono">--drop-invalid</td><td>off</td><td>Discard records that fail <em>validation</em>, which are otherwise written and counted</td></tr>
+    <tr><td class="mono">--no-validate</td><td>off</td><td>Skip validation entirely</td></tr>
+    <tr><td class="mono">--edge-cases FRACTION</td><td><code>0.0</code></td><td>Fraction of records given a legal-but-awkward value</td></tr>
+    <tr><td class="mono">--edge-categories LIST</td><td>all</td><td>Limit edge cases to these categories</td></tr>
+    <tr><td class="mono">--cache MODE</td><td><code>disabled</code></td><td>disabled, read_only, read_write</td></tr>
+    <tr><td class="mono">--cache-path FILE</td><td>&mdash;</td><td>Where the generation cache lives</td></tr>
+    <tr><td class="mono">-w, --world NAME</td><td>&mdash;</td><td>Generate against a named world</td></tr>
+    <tr><td class="mono">--assets-dir DIR</td><td><code>&lt;out&gt;/assets</code></td><td>Where generated media goes</td></tr>
+    <tr><td class="mono">--regenerate-assets</td><td>off</td><td>Redraw media already on disk</td></tr>
+    <tr><td class="mono">--llm-batch-size N</td><td><code>20</code></td><td>Records per model call in batch mode</td></tr>
+    <tr><td class="mono">--checkpoint-every N</td><td><code>10000</code></td><td>Records between checkpoints</td></tr>
+    <tr><td class="mono">--store FILE</td><td><code>.cacophony/</code></td><td>Path to the run store</td></tr>
+    <tr><td class="mono">--no-history</td><td>off</td><td>Do not record this run</td></tr>
+    <tr><td class="mono">--log-level LEVEL</td><td><code>warning</code></td><td>debug, info, warning, error</td></tr>
+    <tr><td class="mono">--log-format FORMAT</td><td><code>text</code></td><td>text or json</td></tr>
+  </tbody>
+</table>
+
+<h3 id="cmd-regenerate"><code>regenerate</code></h3>
+<div class="signature">cacophony regenerate PROJECT -r N|N-M [-e ENTITY] [-c COLUMNS] [--json] [--seed N]</div>
+<p>Re-derives specific records with no run and no dataset. Refuses more than a
+thousand and points at <code>generate</code>, which is the tool for that.</p>
+
+<h2>Runs</h2>
+
+<h3 id="cmd-runs"><code>runs</code>, <code>run</code>, <code>resume</code></h3>
+<div class="signature">cacophony runs [-p PROJECT] [--store FILE] [--state STATE] [--limit N] [--json]
+cacophony run RUN_ID [-p PROJECT] [--events N] [--json]
+cacophony resume [RUN_ID] [-p PROJECT] [--store FILE] [--log-level LEVEL]</div>
+<p><code>run</code> accepts a unique prefix of an id. <code>resume</code> with no
+id takes the most recent resumable run.</p>
+
+<h2>Serving</h2>
+
+<h3 id="cmd-serve"><code>serve</code></h3>
+<div class="signature">cacophony serve [--host H] [--port P] [--store FILE] [-p PROJECT]
+                [--studio DIR] [--reload] [--log-level LEVEL]</div>
+<p>The API, the live feed and the Studio, on <code>127.0.0.1:8765</code> by
+default. Interactive API documentation is at <code>/docs</code>.</p>
+
+<h3 id="cmd-desktop"><code>desktop</code></h3>
+<div class="signature">cacophony desktop [--store FILE] [-p PROJECT] [--studio DIR] [--host H]
+                  [--port N] [--no-token] [--keep-running] [--log-level LEVEL]</div>
+<p>The same application, with a handshake line on stdout and a lifetime tied to
+stdin. Chapter&nbsp;38.</p>
+
+<h2>Providers and models</h2>
+
+<h3 id="cmd-providers"><code>providers</code>, <code>models</code>, <code>benchmark</code></h3>
+<div class="signature">cacophony providers [PROJECT] [--test]
+cacophony models PROJECT [-p PROVIDER]
+cacophony benchmark PROJECT -m MODEL,MODEL [-e ENTITY] [-n N] [-p PROVIDER]
+                    [--sort-by FIELD] [--json] [--seed N]</div>
+
+<h2>Everything else</h2>
+
+<h3 id="cmd-propose"><code>propose</code></h3>
+<div class="signature">cacophony propose "a description" [-o FILE] [--providers PROJECT]
+                  [--adapter NAME] [--url URL] [-m MODEL] [--scale N]
+                  [--seed N] [--force]</div>
+<p>The model proposes entities, fields and relationships; Cacophony picks the
+generators, compiles the result and lints it before showing it. What comes back
+is a schema known to work, and a file to edit.</p>
+
+<h3 id="cmd-stream"><code>stream</code>, <code>cluster</code>, <code>controller</code>, <code>worker</code></h3>
+<p>Chapters&nbsp;28 and&nbsp;29.</p>
+
+<h3 id="cmd-transform"><code>transform</code></h3>
+<p>Chapter&nbsp;35.</p>
+
+<h1>Providers</h1>
+
+<p class="lead">A provider is a backend that generates something Cacophony
+cannot compute: prose, pictures or speech. They are declared in the project,
+referenced by name from fields, and never hold a credential.</p>
+
+<pre><code class="language-yaml">providers:
+  local_llm:
+    type: language_model        # language_model, image, speech, custom
+    adapter: ollama
+    base_url: http://localhost:11434
+    model: llama3.1:8b
+    secret: my-secret-id        # a logical id, never a credential
+    concurrency: 4
+    timeout_seconds: 120
+    options:
+      structured_output: auto</code></pre>
+
+<h2>Language-model adapters</h2>
+
+<table>
+  <caption>Language-model adapters</caption>
+  <thead><tr><th>Adapter</th><th>Aliases</th><th>Endpoint</th><th>Structured output</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">ollama</td><td>&ndash;</td><td class="mono">/api/generate</td><td>JSON Schema, enforced during decoding</td></tr>
+    <tr><td class="mono">llamacpp</td><td class="mono">llama.cpp, llama_cpp</td><td class="mono">/completion</td><td>JSON Schema, via a GBNF grammar</td></tr>
+    <tr><td class="mono">openai_compatible</td><td class="mono">openai, vllm, lmstudio, tgi</td><td class="mono">/v1/chat/completions</td><td>Negotiated: <code>json_schema</code>, then <code>json_object</code>, then prompt-only</td></tr>
+    <tr><td class="mono">mock</td><td class="mono">fake, mock_llm</td><td>none &mdash; in process</td><td>Synthesised from the schema</td></tr>
+  </tbody>
+</table>
+
+<p><code>openai_compatible</code> takes <code>structured_output</code>:
+<code>auto</code> (default), <code>json_schema</code>, <code>json_object</code>
+or <code>none</code>. <code>auto</code> discovers what the server supports on
+the first call and remembers the answer.</p>
+
+<p><code>mock</code> takes <code>failure_rate</code>,
+<code>malformed_rate</code>, <code>latency_ms</code>, <code>responses</code> and
+<code>healthy</code>. It is how you rehearse a run's shape without a GPU, and
+how you exercise the retry ladder deliberately.</p>
+
+<h2>Image and speech adapters</h2>
+
+<table>
+  <caption>Media adapters</caption>
+  <thead><tr><th>Adapter</th><th>Aliases</th><th>Type</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">invokeai</td><td class="mono">invoke</td><td>image</td><td>Submits a graph and polls the queue. <code>queue_id</code>, <code>scheduler</code>, <code>steps</code>, <code>guidance</code>, <code>negative_prompt</code>, <code>poll_timeout_seconds</code></td></tr>
+    <tr><td class="mono">procedural_image</td><td class="mono">procedural, placeholder_image</td><td>image</td><td>Draws in-process. <code>style</code>: identicon, portrait, card, document</td></tr>
+    <tr><td class="mono">piper</td><td class="mono">piper_http</td><td>speech</td><td><code>POST /synthesize</code> &mdash; piper1-gpl's web server</td></tr>
+    <tr><td class="mono">openai_speech</td><td class="mono">openai_tts, speech_api</td><td>speech</td><td><code>POST /v1/audio/speech</code> &mdash; openedai-speech, LocalAI, Kokoro-FastAPI</td></tr>
+    <tr><td class="mono">procedural_speech</td><td class="mono">tone, placeholder_speech</td><td>speech</td><td>Synthesises in-process. <code>sample_rate</code>, <code>voice</code></td></tr>
+  </tbody>
+</table>
+
+<pre><code class="language-yaml">providers:
+  pictures:
+    type: image
+    adapter: invokeai
+    base_url: http://diffusion-box:9090
+    model: Dreamshaper 8       # a name from the server's model list
+    concurrency: 1             # one GPU, one request
+    options:
+      steps: 24
+      guidance: 7.5
+      poll_timeout_seconds: 300
+
+  voices:
+    type: speech
+    adapter: piper
+    base_url: http://tts-box:5000</code></pre>
+
+<p>The InvokeAI adapter builds a text-to-image graph for the named model's
+architecture; SD-1, SD-2 and SDXL are covered. FLUX, Qwen-Image and Z-Image each
+have their own node topology, so those need a <code>workflow</code> exported
+from InvokeAI &mdash; and the adapter says so by name rather than submitting a
+graph that will fail. A Piper server hosts one voice, chosen when it starts, so
+a schema wanting several voices points each at its own provider.</p>
+
+<h2>Checking them</h2>
+
+<pre><code class="language-console">$ cacophony providers project.yaml --test
+$ cacophony models project.yaml -p local_llm</code></pre>
+
+<p>Both adapters that talk to real media servers are verified against real
+servers by the live contract tests:</p>
+
+<pre><code class="language-console">$ CACOPHONY_TEST_INVOKEAI=http://diffusion-box:9090 \
+  CACOPHONY_TEST_PIPER=http://tts-box:5000 \
+  CACOPHONY_TEST_OLLAMA=http://gpu-box:11434 \
+      pytest tests/test_provider_contracts.py -m live</code></pre>
+
+<h2>The generation cache</h2>
+
+<p><code>--cache read_write</code> stores model answers keyed by the prompt and
+the field's seed, so a re-run costs nothing and a nondeterministic generator
+becomes reproducible in practice. <code>read_only</code> uses what is there
+without adding to it. The benchmark forces the cache off, because with it on the
+second model would be scored on the first model's answers.</p>
+
+<h1>Runs</h1>
+
+<p class="lead">Every <code>generate</code> records a run: what was asked for,
+what happened, how far it got. The store is SQLite, by default
+<code>.cacophony/cacophony.db</code> beside the schema file, and it never
+contains the generated data itself.</p>
+
+<pre><code class="language-console">$ cacophony generate project.yaml -o parquet -d out/   # ^C at any point
+$ cacophony runs                                       # what has been run
+$ cacophony run 4f2a91c3 --events 20                   # the inspector
+$ cacophony resume 4f2a91c3                            # carry on</code></pre>
+
+<h2>What the store holds</h2>
+
+<p>Projects, schema revisions, runs, jobs, checkpoints, events and statistics.
+Every accepted Studio edit creates a schema revision
+<span class="sec">section&nbsp;73</span>, so a run is always associated with the
+exact text of the schema that produced it.</p>
+
+<table class="compact">
+  <caption>Run and job states</caption>
+  <thead><tr><th>Run</th><th>Job</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">queued · running · paused · completed · failed · cancelled</td>
+        <td class="mono">queued · running · paused · retrying · completed · failed · cancelled</td></tr>
+  </tbody>
+</table>
+
+<h2>Checkpoints</h2>
+
+<p>A job checkpoints after every batch. A checkpoint is one integer &mdash; how
+many records that job finished &mdash; because a record's seed is derived from
+its index and there is no RNG state to serialise.</p>
+
+<p>On resume the file on disk is <em>counted</em> and the checkpoint corrected to
+match it. A stale checkpoint would otherwise silently duplicate or skip records
+after an unclean stop, which is the classic way a resumable generator quietly
+corrupts a dataset.</p>
+
+<h2>Formats that cannot be appended to</h2>
+
+<p>A JSON array and a Parquet file cannot be extended in place, so a resumed run
+writes a new part: <code>employee.part0001.parquet</code>. Readers for both
+formats accept a directory of parts.</p>
+
+<h2>Resuming reuses the original configuration</h2>
+
+<p>The same seed, the same format, the same provenance mode, and the schema
+revision the run started with. Editing a schema and resuming would produce a
+dataset generated two different ways; start a new run instead. Cacophony will
+tell you if you try.</p>
+
+<h2>Events</h2>
+
+<p>The event log is structured and queryable, which is what makes a long run
+diagnosable after the fact:</p>
+
+<table class="compact">
+  <thead><tr><th>Kind</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">run.started · run.progress · run.paused · run.resumed · run.completed · run.failed · run.cancelled</td></tr>
+    <tr><td class="mono">job.started · job.progress · job.checkpoint · job.completed · job.failed</td></tr>
+    <tr><td class="mono">warning · error</td></tr>
+  </tbody>
+</table>
+
+<p><code>--no-history</code> skips the store entirely, for throwaway runs and for
+environments where writing a database beside the schema is unwelcome.</p>

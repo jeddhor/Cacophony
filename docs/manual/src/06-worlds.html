@@ -1,0 +1,191 @@
+<section class="part-page">
+  <h1>Reuse</h1>
+  <p class="part-blurb">Fragments you do not write twice, populations that
+  persist between datasets, projects that can be sent to somebody else, and
+  eight complete examples to steal from.</p>
+</section>
+
+<h1 id="key-recipes">Recipes</h1>
+
+<p class="lead">A recipe is a named group of fields. One line on an entity
+expands into the twelve fields you were about to type, and naming one of them
+again overrides it without restating the rest.</p>
+
+<pre><code class="language-yaml">entities:
+  employee:
+    count: 5000
+    recipes: [employee]        # twelve fields, one line
+    fields:
+      email:                   # override one without restating the rest
+        template: "{first_name|lower}.{last_name|lower}@acme.example"
+      cost_centre:             # and add your own
+        type: string
+        generator: pattern
+        pattern: "CC-{0000}"</code></pre>
+
+<pre><code class="language-console">$ cacophony recipes                    # every recipe, by group
+$ cacophony recipes --show employee    # its fields, and where each came from
+$ cacophony recipes --group security --json</code></pre>
+
+<h2>Expansion is visible</h2>
+
+<p>Every expanded field records the recipe it came from.
+<code>cacophony plan</code> prints <code>via employee</code> beside it and the
+Studio badges it in the field editor. A schema that silently gained eight fields
+would be a schema nobody can debug.</p>
+
+<h2>Overriding does not require forking</h2>
+
+<p>Naming a field the recipe defines overrides it key by key, <em>in the place
+the recipe put it</em>, so the record does not reorder. Naming a different
+<code>generator</code> replaces the generator and its options wholesale &mdash;
+merging <code>generator: llm</code> onto <code>generator: template</code> would
+leave the template's options behind as junk.</p>
+
+<h2>Where recipes come from</h2>
+
+<p>In increasing precedence: the built-in catalogue, a <code>recipes/</code>
+directory beside the project file, then the project's own
+<code>recipes:</code> block. A project may therefore replace a built-in by
+defining one with the same name.</p>
+
+<pre><code class="language-yaml">recipes:
+  cost_centre:
+    description: Our own coding.
+    fields:
+      cost_centre: {type: string, generator: pattern, pattern: "CC-{0000}"}</code></pre>
+
+<p>A recipe may <code>includes:</code> others; cycles are refused by name.
+<code>$self</code> is the only substitution &mdash; it becomes the name of the
+entity being expanded into, which is what a manager relationship needs.</p>
+
+<h2>The built-in catalogue</h2>
+
+<p>Thirty-one recipes in five groups <span class="sec">section&nbsp;106</span>.
+Every one compiles, generates and passes its own validation, asserted per recipe
+in the test suite: a catalogue is a promise, and a recipe that does not work is
+worse than no recipe. The full listing with fields is appendix&nbsp;B.</p>
+
+<table class="compact">
+  <caption>The catalogue at a glance</caption>
+  <thead><tr><th>Group</th><th>Recipes</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">identity</td><td class="mono">name · person · employee · customer · username · email · address</td></tr>
+    <tr><td class="mono">computing</td><td class="mono">hostname · ip · mac · os · browser · device · software_version</td></tr>
+    <tr><td class="mono">security</td><td class="mono">cvss_score · cve_identifier · alert_severity · logon_event · network_event · hash_value</td></tr>
+    <tr><td class="mono">commerce</td><td class="mono">product · sku · transaction · invoice · price · currency</td></tr>
+    <tr><td class="mono">operational</td><td class="mono">ticket · status · priority · comment · timestamp</td></tr>
+  </tbody>
+</table>
+
+<p>Everything is deterministic except <code>comment</code> and
+<code>ticket</code>, whose prose fields use a language model and carry
+<code>on_unavailable: placeholder</code> so a project with no model server still
+runs. Section&nbsp;62's reserved ranges hold throughout.</p>
+
+<h1 id="cmd-worlds">Worlds</h1>
+
+<p class="lead">A world is a name for a seed and the schema that goes with it.
+Generating against one produces the same people every time, so a dataset of
+logins made today and a dataset of tickets made next week describe the same
+company.</p>
+
+<pre><code class="language-console">$ cacophony worlds project.yaml --create acme-2026
+$ cacophony worlds project.yaml
+$ cacophony worlds project.yaml --show acme-2026
+$ cacophony generate project.yaml --world acme-2026 -o jsonl -d out/
+$ cacophony worlds project.yaml --delete acme-2026</code></pre>
+
+<p><code>--show</code> does more than print: it checks that the schema still
+matches the one the world was created from. A world whose schema has drifted no
+longer describes the same population, and being told so is the entire value of
+recording it.</p>
+
+<div class="callout">
+  <span class="callout-title">Why not just write down the seed</span>
+  <p>You can, and for a one-off that is enough. A world adds the thing a bare
+  integer cannot: the association with a specific schema, checked. Six months
+  later, "seed 20260816" tells you nothing about whether the file in front of
+  you is the one that produced the dataset in the ticket.</p>
+</div>
+
+<h1 id="cmd-bundle">Bundles</h1>
+
+<p class="lead">A project that can be sent to somebody else: one file holding
+the schema and everything it references, with an importer that treats the
+archive as the untrusted input it is.</p>
+
+<pre><code class="language-console">$ cacophony bundle export project.yaml -o team.cacophony
+$ cacophony bundle inspect team.cacophony
+$ cacophony bundle import team.cacophony -d ./team</code></pre>
+
+<h2>What is in one</h2>
+
+<p>A <code>.cacophony</code> file is a zip holding <code>project.yaml</code>, a
+manifest with a SHA-256 per entry, and the supporting directories
+section&nbsp;72 lists &mdash; <code>recipes/</code>, <code>schemas/</code>,
+<code>templates/</code>, <code>workflows/</code>, <code>scripts/</code>,
+<code>assets/</code> &mdash; plus <code>worlds/</code>, since a named world is
+part of what reproduces a dataset.</p>
+
+<h2>Four rules that make it work</h2>
+
+<ul>
+  <li><strong>Generated data is never included.</strong> Section&nbsp;72 is
+  explicit, and a project is kilobytes while a dataset is gigabytes.
+  <code>.jsonl</code>, <code>.parquet</code>, <code>.db</code> and friends are
+  excluded wherever they sit.</li>
+  <li><strong>Files the schema references are packed wherever they live.</strong>
+  A lookup table in <code>data/</code> is as much part of the project as one in
+  <code>templates/</code>, so export follows the paths in the <em>expanded</em>
+  project rather than guessing at directory names. The first bundle produced
+  during development went out without its own CSV, which is how this rule got
+  written.</li>
+  <li><strong>A path outside the project directory is refused, not dropped.</strong>
+  It cannot travel, and a bundle that quietly lost its lookup table would import
+  cleanly and fail on its first record.</li>
+  <li><strong>Import treats the archive as hostile.</strong> Path traversal,
+  absolute paths, Windows drive letters and symlink entries are refused; size
+  and entry-count ceilings apply; and the whole archive is checked before a byte
+  is written, so one bad entry leaves nothing behind rather than half a
+  project.</li>
+</ul>
+
+<h2><code>inspect</code> answers "will this work"</h2>
+
+<p>It writes nothing. It verifies every file against the manifest's hash, then
+extracts to a temporary directory and <em>compiles the whole project</em> &mdash;
+so you can decide whether to unpack something before unpacking it.</p>
+
+<h1>The shipped templates</h1>
+
+<p class="lead">Eight complete projects in <code>templates/</code>. None is a
+toy: each compiles, generates and validates in the test suite, and each was
+written to demonstrate a different part of the system.</p>
+
+<table>
+  <caption>templates/</caption>
+  <thead><tr><th>File</th><th>Demonstrates</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">corporate-directory.yaml</td><td>The basics done well: people, departments, a manager hierarchy that loads into a database.</td></tr>
+    <tr><td class="mono">helpdesk.yaml</td><td>Tickets, skewed references, model-written prose with a placeholder fallback.</td></tr>
+    <tr><td class="mono">retail-commerce.yaml</td><td>Products, orders, line items; decimal money; a SQLite output whose foreign keys resolve.</td></tr>
+    <tr><td class="mono">security-operations.yaml</td><td>Authentication events on a timeline, subjects with state, and a ransomware scenario buried in them.</td></tr>
+    <tr><td class="mono">saas-application.yaml</td><td>Accounts, subscriptions, usage events; growth over the window; churn.</td></tr>
+    <tr><td class="mono">iot-telemetry.yaml</td><td>Devices emitting metrics; per-metric units chosen coherently; very high record counts.</td></tr>
+    <tr><td class="mono">multimodal-support.yaml</td><td>Images, speech and documents together, with the procedural adapters so it runs anywhere.</td></tr>
+    <tr><td class="mono">conversational-ai.yaml</td><td>Turn-structured dialogue for training or evaluation sets.</td></tr>
+  </tbody>
+</table>
+
+<pre><code class="language-console">$ cacophony plan templates/security-operations.yaml
+$ cacophony preview templates/iot-telemetry.yaml -n 5
+$ cacophony generate templates/retail-commerce.yaml -o sqlite -d out/</code></pre>
+
+<div class="callout quiet">
+  <span class="callout-title">Read them in this order</span>
+  <p><code>corporate-directory</code> for the schema language,
+  <code>retail-commerce</code> for relational structure,
+  <code>security-operations</code> for timelines, simulation and scenarios all
+  at once. The other five are variations once those three make sense.</p>
+</div>

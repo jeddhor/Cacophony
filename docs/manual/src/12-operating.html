@@ -1,0 +1,171 @@
+<section class="part-page">
+  <h1>Operating</h1>
+  <p class="part-blurb">What goes wrong, what it means, and the habits that keep
+  a synthetic dataset trustworthy.</p>
+</section>
+
+<h1>Troubleshooting</h1>
+
+<p class="lead">Symptoms, in the order people meet them.</p>
+
+<h2>The schema will not compile</h2>
+
+<table>
+  <thead><tr><th>Message</th><th>Usually means</th></tr></thead>
+  <tbody>
+    <tr><td>Unknown generator <code>x</code></td><td>A typo, or a plugin that is not installed. <code>cacophony generators</code> lists what exists.</td></tr>
+    <tr><td>Option <code>x</code> is required</td><td>A generator needs something you did not give it &mdash; <code>reference</code> without <code>entity</code>, <code>tts</code> without <code>source</code>.</td></tr>
+    <tr><td>Cycle: <code>a → b → a</code></td><td>Two fields each depend on the other, usually through templates. Break it with a literal or a different source field.</td></tr>
+    <tr><td>Provider <code>x</code> is referenced but not configured</td><td>A field names a provider with no entry under <code>providers:</code>.</td></tr>
+    <tr><td>Plugin <code>x</code> is required and not installed</td><td><code>requires.plugins</code> names something absent. This is deliberate: better now than three million records in.</td></tr>
+  </tbody>
+</table>
+
+<h2>The run reports validation failures</h2>
+
+<p>They are counted in the summary, and the records were written anyway &mdash;
+see chapter&nbsp;31, which is the most important paragraph in this manual for
+anyone about to trust a generated file. Three questions, in order: is the
+constraint right; is the generator producing what the constraint expects; and is
+a model involved, in which case the answer is usually a length limit that is too
+tight. See the note on clipping in chapter&nbsp;15.</p>
+
+<p>A common one in a schema that grew: a <code>unique</code> field whose domain
+is smaller than the record count. Two hundred and fifty employees drawn from
+Faker's name lists produce distinct addresses; a hundred thousand do not, and
+the run reports thirty thousand duplicates. <code>cacophony lint</code> catches
+the arithmetic cases before the run; the collision cases only show up at
+scale.</p>
+
+<p>If the data is <em>meant</em> to be broken, you want <code>chaos:</code> and
+not a validation failure; chaos-damaged fields are skipped by the validator
+precisely so that this distinction stays clear.</p>
+
+<h2>A database output fails to load</h2>
+
+<p>If <code>chaos</code> is enabled, the tables are written without constraints
+by design, and a loader expecting them will complain. Generate without chaos for
+a database whose constraints hold. If chaos is not enabled and a foreign key
+still fails, check for a self-reference that points forwards &mdash; a
+Cacophony-generated self-reference always points backwards, so this indicates a
+hand-written key column rather than a <code>reference</code> generator.</p>
+
+<h2>The dataset does not look real</h2>
+
+<p>Four culprits, in the order they matter:</p>
+
+<ol>
+  <li><strong>Uniform references.</strong> Set <code>distribution: skewed</code>
+  and a <code>skew</code> around 1.9. Nothing else changes a dataset's character
+  as much.</li>
+  <li><strong>Uniform timestamps.</strong> Use a <code>timeline:</code> with a
+  <code>shape</code>, so nights and weekends are quiet.</li>
+  <li><strong>Uniform categories.</strong> A <code>weighted</code> generator with
+  real-looking weights instead of <code>random</code>.</li>
+  <li><strong>Repetitive prose.</strong> Turn on duplication measurement and look
+  at the number; if it is high, the model is looping and needs more context or a
+  higher temperature.</li>
+</ol>
+
+<h2>Generation is slow</h2>
+
+<p>Run <code>cacophony plan</code> and read the cost classes. If any field is
+<code>llm</code> or <code>gpu</code>, that is where all the time is going and
+nothing else is worth measuring. See chapter&nbsp;30.</p>
+
+<h2>A resumed run refuses</h2>
+
+<p>The schema has changed since the run started. That is not obstinacy: a
+dataset generated half under one schema and half under another is not one
+dataset. Start a new run.</p>
+
+<h2>The desktop window says the backend is missing</h2>
+
+<p>The shell looks for <code>CACOPHONY_BACKEND</code>, then a bundled
+<code>cacophony-backend</code> beside the executable, then <code>cacophony</code>
+on <code>PATH</code>. In a checkout, point it at the virtualenv:</p>
+
+<pre><code class="language-console">$ CACOPHONY_BACKEND=$PWD/.venv/bin/cacophony \
+      ./desktop/src-tauri/target/debug/cacophony-desktop</code></pre>
+
+<h2>The Studio is a blank page</h2>
+
+<p>The front-end has not been built. <code>npm --prefix frontend run build</code>
+writes it into the package where the server looks for it.</p>
+
+<h1>Operating notes</h1>
+
+<p class="lead">Habits that keep a synthetic dataset defensible six months
+later, and a short list of the things worth putting in a runbook.</p>
+
+<h2>Reproducibility checklist</h2>
+
+<ul>
+  <li>Pin <code>project.seed</code> explicitly.</li>
+  <li>Record the schema, not the output &mdash; a project is kilobytes and a
+  dataset is gigabytes.</li>
+  <li>Prefer a named world to a bare seed when several datasets must describe
+  the same population.</li>
+  <li>Keep edits as <code>patches:</code> rules, never as edits to output files.</li>
+  <li>Use <code>cacophony bundle export</code> to hand the whole thing to
+  somebody else, and <code>bundle inspect</code> on anything you receive.</li>
+  <li>Run <code>cacophony lint --strict</code> in CI.</li>
+  <li>Note the Cacophony version alongside the dataset; a generator's behaviour
+  is part of what reproduces it.</li>
+</ul>
+
+<h2>Environment variables</h2>
+
+<table class="compact">
+  <thead><tr><th>Variable</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">CACOPHONY_SECRET_&lt;ID&gt;</td><td>Resolves a provider's logical secret</td></tr>
+    <tr><td class="mono">CACOPHONY_CONTROLLER_TOKEN</td><td>Shared token between a distributed controller and its workers</td></tr>
+    <tr><td class="mono">CACOPHONY_NO_PLUGINS</td><td><code>1</code> skips plugin loading entirely</td></tr>
+    <tr><td class="mono">CACOPHONY_BACKEND</td><td>Which backend executable the desktop shell spawns</td></tr>
+    <tr><td class="mono">CACOPHONY_TEST_OLLAMA</td><td>Base URL for the live provider contract tests</td></tr>
+    <tr><td class="mono">CACOPHONY_TEST_INVOKEAI</td><td>As above, for image generation</td></tr>
+    <tr><td class="mono">CACOPHONY_TEST_PIPER</td><td>As above, for speech</td></tr>
+  </tbody>
+</table>
+
+<h2>Where things live on disk</h2>
+
+<table class="compact">
+  <thead><tr><th>Path</th><th>What</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">.cacophony/cacophony.db</td><td>The run store, beside the schema file. Never contains generated data.</td></tr>
+    <tr><td class="mono">&lt;out-dir&gt;/&lt;entity&gt;.&lt;ext&gt;</td><td>The records</td></tr>
+    <tr><td class="mono">&lt;out-dir&gt;/assets/</td><td>Generated media, with <code>manifest.jsonl</code></td></tr>
+    <tr><td class="mono">&lt;out-dir&gt;/&lt;entity&gt;.part&lt;n&gt;.&lt;ext&gt;</td><td>Parts from a resumed or distributed run</td></tr>
+    <tr><td class="mono">&lt;file&gt;.transform.json</td><td>What a transform did to a file</td></tr>
+  </tbody>
+</table>
+
+<h2>Handing data to somebody else</h2>
+
+<p>Three things to check before a synthetic dataset leaves the building, none of
+which Cacophony can decide for you:</p>
+
+<ol>
+  <li><strong>Remove the ground truth.</strong> A <code>scenario</code> field is
+  the answer key. Leaving it in a dataset given to a detection team makes the
+  exercise meaningless.</li>
+  <li><strong>Say that it is synthetic.</strong> In the filename, in the manifest,
+  in the ticket. Cacophony labels generated media <code>synthetic: true</code>
+  and cannot label your CSV for you.</li>
+  <li><strong>Check the identifiers are still safe.</strong> If any field carries
+  <code>safe: false</code>, know why, and know that those values look real
+  because they are shaped exactly like real ones.</li>
+</ol>
+
+<h2>Testing your own changes</h2>
+
+<pre><code class="language-console">$ ruff check backend tests && ruff format --check backend tests
+$ mypy backend/cacophony
+$ pytest tests/                       # 1,560 tests, about 90 seconds
+$ npm --prefix frontend run typecheck && npm --prefix frontend test</code></pre>
+
+<p>The live provider contract tests are marked and skipped unless the
+<code>CACOPHONY_TEST_*</code> variables point at real servers, so the default
+suite needs no GPU and no network.</p>

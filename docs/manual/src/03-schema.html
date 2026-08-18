@@ -1,0 +1,305 @@
+<section class="part-page">
+  <h1>The schema language</h1>
+  <p class="part-blurb">One file, up to eleven top-level keys, and a field model
+  that turns anything it does not recognise into an option for the generator.</p>
+</section>
+
+<h1>The project file</h1>
+
+<p class="lead">A Cacophony project is a single YAML or JSON document. Two keys
+are required and the rest are opt-in, so the smallest useful project is about
+six lines and the largest shipped example is under three hundred.</p>
+
+<h2>The top level</h2>
+
+<pre><code class="language-yaml">project:        # metadata, seed, locale, provenance mode      (required)
+entities:       # the record types to generate                 (required)
+relationships:  # documentation of connections between entities
+providers:      # generation backends: models, image, speech
+timeline:       # when this project's events happen
+scenarios:      # behavioural overlays applied to a fraction of subjects
+chaos:          # deliberate damage
+quality:        # duplication thresholds worth measuring
+recipes:        # this project's own reusable fragments
+requires:       # what the project needs that it does not carry
+patches:        # edits recorded as rules
+outputs:        # named output profiles</code></pre>
+
+<h2 id="key-project"><code>project</code></h2>
+
+<table>
+  <caption>project keys</caption>
+  <thead><tr><th>Key</th><th>Type</th><th>Default</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">name</td><td>string</td><td><em>required</em></td><td>Project name. Used for the SQLite filename and in the run store.</td></tr>
+    <tr><td class="mono">description</td><td>string</td><td>&ndash;</td><td>Free text.</td></tr>
+    <tr><td class="mono">version</td><td>integer</td><td><code>1</code></td><td>Schema revision, recorded in provenance.</td></tr>
+    <tr><td class="mono">seed</td><td>integer</td><td><code>0</code></td><td>Root of the seed hierarchy.</td></tr>
+    <tr><td class="mono">locale</td><td>string</td><td><code>en_US</code></td><td>Default Faker locale; also stated to a language model.</td></tr>
+    <tr><td class="mono">profile</td><td>enum</td><td><code>balanced</code></td><td><code>quick_mock</code>, <code>balanced</code>, <code>high_realism</code>, <code>maximum_chaos</code></td></tr>
+    <tr><td class="mono">provenance</td><td>enum</td><td><code>none</code></td><td><code>none</code>, <code>run</code>, <code>record</code>, <code>field</code>, <code>full</code></td></tr>
+  </tbody>
+</table>
+
+<div class="callout quiet">
+  <span class="callout-title">What profile actually does</span>
+  <p>Honestly: it adjusts the system prompt given to language models, and
+  nothing else. <code>high_realism</code> asks for specific plausible detail
+  over generic phrasing; <code>quick_mock</code> asks for short plain answers
+  because the data is for smoke tests. It does not change chaos rates, record
+  counts or generator choice. If you want messier data, write
+  <code>chaos:</code>; if you want less of it, write <code>count:</code>.</p>
+</div>
+
+<h2 id="key-entities"><code>entities</code></h2>
+
+<pre><code class="language-yaml">entities:
+  employee:
+    count: 10000
+    description: A person employed by the company.
+    primary_key: employee_id
+    seed: 991                 # optional: detach this entity's seed
+    tags: [core]
+    recipes: [employee]       # expand a catalogue fragment
+    simulation: { ... }       # turn these records into a history
+    fields:
+      ...</code></pre>
+
+<table class="compact">
+  <caption>entity keys</caption>
+  <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">count</td><td>How many records. <code>generate --records N</code> overrides every entity.</td></tr>
+    <tr><td class="mono">primary_key</td><td>Which field identifies a record. May also be set with <code>primary_key: true</code> on the field.</td></tr>
+    <tr><td class="mono">seed</td><td>Detaches this entity from the project seed, so editing another entity cannot change these records.</td></tr>
+    <tr><td class="mono">description</td><td>Free text; offered to a language model as context about the record type.</td></tr>
+    <tr><td class="mono">tags</td><td>Free labels, carried into the plan and the Studio.</td></tr>
+    <tr><td class="mono">recipes</td><td>Catalogue fragments to expand into this entity's fields. Chapter&nbsp;21.</td></tr>
+    <tr><td class="mono">simulation</td><td>Declares these records to be events belonging to subjects. Chapter&nbsp;18.</td></tr>
+    <tr><td class="mono">fields</td><td>The fields, in the order they will appear in the output.</td></tr>
+  </tbody>
+</table>
+
+<h1>Fields</h1>
+
+<p class="lead">A field says what it means, what type it is, what values are
+acceptable, and &mdash; optionally &mdash; how to produce them. Leave the
+generator out and one is recommended from the meaning and the type.</p>
+
+<h2>The full form</h2>
+
+<pre><code class="language-yaml">fields:
+  employee_id:
+    type: string
+    semantic: "The employee's unique staff number"
+    description: "Documentation for humans."
+    generator: sequence
+    format: "EMP-{000000}"       # an unrecognised key: a generator option
+    primary_key: true
+    unique: true
+    nullable: false
+    null_probability: 0.0
+    depends_on: []
+    context: []
+    examples: []
+    tone: null
+    locale: null
+    constraints:
+      pattern: "^EMP-\\d{6}$"</code></pre>
+
+<table>
+  <caption>field keys</caption>
+  <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">type</td><td>One of the 28 types below. Default <code>string</code>.</td></tr>
+    <tr><td class="mono">semantic</td><td>What the field <strong>means</strong>, in natural language. Drives generator recommendation and is the backbone of a compiled prompt.</td></tr>
+    <tr><td class="mono">description</td><td>Documentation. Falls back to <code>semantic</code> when that is absent.</td></tr>
+    <tr><td class="mono">generator</td><td>Which strategy produces the value. Omit it to have one chosen.</td></tr>
+    <tr><td class="mono">unique</td><td>Enforced by the validator. The linter rejects a domain too small to satisfy it.</td></tr>
+    <tr><td class="mono">nullable</td><td><code>true</code> alone means 5% null.</td></tr>
+    <tr><td class="mono">null_probability</td><td>An explicit fraction, 0.0&ndash;1.0.</td></tr>
+    <tr><td class="mono">depends_on</td><td>Extra dependencies beyond those the generator declares. Rarely needed.</td></tr>
+    <tr><td class="mono">context</td><td>Sibling fields or related entities a generator may consult. For <code>llm</code>, what the model is shown.</td></tr>
+    <tr><td class="mono">primary_key</td><td>Marks the record identifier.</td></tr>
+    <tr><td class="mono">constraints</td><td>What counts as a valid value. See below.</td></tr>
+    <tr><td class="mono">examples</td><td>Sample values, shown to a model as exemplars.</td></tr>
+    <tr><td class="mono">tone</td><td>A style instruction for prose fields.</td></tr>
+    <tr><td class="mono">locale</td><td>Overrides the project locale for this field.</td></tr>
+  </tbody>
+</table>
+
+<h2>Unrecognised keys are generator options</h2>
+
+<p>This is the single most important convenience in the schema language and the
+one most likely to confuse. A key the field model does not recognise is passed
+to the generator:</p>
+
+<pre><code class="language-yaml">  hostname:
+    type: hostname
+    generator: pattern
+    pattern: "srv-{a-z:3}-{0000}"     # 'pattern' is an option of 'pattern'
+    upper: false                      # so is this</code></pre>
+
+<p>The fully explicit form means the same thing and is available when the flat
+form would be ambiguous:</p>
+
+<pre><code class="language-yaml">  hostname:
+    type: hostname
+    generator:
+      type: pattern
+      pattern: "srv-{a-z:3}-{0000}"</code></pre>
+
+<div class="callout warning">
+  <span class="callout-title">Options are not constraints</span>
+  <p><code>min:</code> and <code>max:</code> written at the top level of a field
+  are options for the generator; written under <code>constraints:</code> they
+  are rules the validator enforces. They usually agree, and when they do not,
+  the validator wins and the generator gets blamed. If you mean "no salary above
+  310,000 may exist", write it under <code>constraints</code>. If you mean "draw
+  from this range", write it as an option. Writing both is the clearest.</p>
+</div>
+
+<h2 id="key-types">Types</h2>
+
+<p>Twenty-eight of them. A type constrains what counts as a valid value and
+what a writer does with it; it does not decide how the value is produced.</p>
+
+<table class="compact">
+  <caption>The type vocabulary</caption>
+  <thead><tr><th>Group</th><th>Types</th></tr></thead>
+  <tbody>
+    <tr><td>Text</td><td class="mono">string · text · enum</td></tr>
+    <tr><td>Numeric</td><td class="mono">integer · float · decimal</td></tr>
+    <tr><td>Logical</td><td class="mono">boolean</td></tr>
+    <tr><td>Identity</td><td class="mono">uuid</td></tr>
+    <tr><td>Temporal</td><td class="mono">date · time · datetime · duration</td></tr>
+    <tr><td>Structured</td><td class="mono">array · object · json</td></tr>
+    <tr><td>Binary and media</td><td class="mono">binary · image · audio · file</td></tr>
+    <tr><td>Network</td><td class="mono">ip_address · cidr · mac_address · hostname · uri</td></tr>
+    <tr><td>Contact</td><td class="mono">email · phone</td></tr>
+    <tr><td>Spatial</td><td class="mono">geo_point</td></tr>
+    <tr><td>Escape hatch</td><td class="mono">custom</td></tr>
+  </tbody>
+</table>
+
+<p>Three of these change behaviour elsewhere and are worth calling out.
+<code>text</code> marks a field as long-form prose, which makes it a default
+candidate for duplication measurement. <code>decimal</code> is carried as a
+decimal all the way to the writer, so money does not acquire binary floating
+point error on its way to a CSV. <code>image</code>, <code>audio</code> and
+<code>file</code> put a path in the record and the bytes under
+<code>assets/</code>.</p>
+
+<h2 id="key-constraints">Constraints</h2>
+
+<pre><code class="language-yaml">constraints:
+  min: 18                       # numbers, dates, and string lengths
+  max: 65
+  min_length: 40
+  max_length: 300
+  pattern: "^EMP-\\d{6}$"       # a regular expression the value must match
+  enum: [active, suspended]     # the only permitted values
+  forbidden: [test, TODO]       # values that must not appear
+  multiple_of: 5
+  precision: 2                  # decimal places</code></pre>
+
+<p><code>min</code> and <code>max</code> work on numbers, on dates (written as
+ISO strings) and on string lengths. Constraints are enforced after generation,
+and they are also read <em>backwards</em>: several generators consult them so
+that what they produce is valid in the first place, and the edge-case injector
+uses them to find the boundaries worth testing.</p>
+
+<h2>Nullability</h2>
+
+<pre><code class="language-yaml">  manager:
+    nullable: true              # 5% null
+  discount_code:
+    null_probability: 0.85      # 85% null, explicitly</code></pre>
+
+<p>Nulls introduced this way are part of the design and are not damage: the
+validator expects them and the linter will tell you, at <code>info</code>, when
+half a column or more is null in case that was a stray decimal point.</p>
+
+<h2>Dependencies and ordering</h2>
+
+<p>Field order in the output is the order you wrote them. <em>Generation</em>
+order is computed. A field is generated after everything it depends on, and
+dependencies come from three places:</p>
+
+<ol class="tight">
+  <li>What the generator declares &mdash; <code>reference</code> depends on its
+  target entity, <code>tts</code> on its <code>source</code> field.</li>
+  <li>What a template or expression mentions &mdash;
+  <code>"{first_name|lower}.{last_name|lower}@example.com"</code> creates two
+  dependencies.</li>
+  <li><code>depends_on:</code>, for the cases the first two cannot see.</li>
+</ol>
+
+<p>A cycle is a compile error that names the cycle. <code>cacophony plan</code>
+prints the resolved order with the reason beside each field.</p>
+
+<h1 id="key-relationships">Relationships, and what really makes one</h1>
+
+<p class="lead">There is a <code>relationships:</code> block, and it is
+documentation. What actually creates a foreign key is a field with
+<code>generator: reference</code>.</p>
+
+<pre><code class="language-yaml">relationships:
+  - from: company
+    to: employee
+    cardinality: one_to_many    # one_to_one, one_to_many, many_to_one, many_to_many
+    field: company_id
+    required: true</code></pre>
+
+<p>Declaring a relationship affects entity ordering and is carried into the plan
+and the Studio's graph view, which is a real benefit when a reader is trying to
+understand a large schema. It creates nothing. A project with references and no
+<code>relationships:</code> block generates identical data; a project with the
+block and no reference fields generates unrelated entities that merely claim to
+be related.</p>
+
+<h1 id="key-outputs">Outputs</h1>
+
+<p class="lead">Where records go and in what shape. The command line names one
+format; the <code>outputs:</code> block names several profiles, so one project
+can serve fixtures and an analytics table without editing.</p>
+
+<pre><code class="language-yaml">outputs:
+  analytics:
+    format: parquet
+    path: out/analytics
+    partition_by: [year, month, day]
+  fixtures:
+    format: jsonl
+    path: out/fixtures</code></pre>
+
+<table>
+  <caption>Output formats</caption>
+  <thead><tr><th>Format</th><th>Writes</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">jsonl</td><td>One JSON object per line, one file per entity</td><td>The default. Appendable, streamable, resumable in place.</td></tr>
+    <tr><td class="mono">ndjson</td><td>Identical to <code>jsonl</code></td><td>An alias, for tools that expect the name.</td></tr>
+    <tr><td class="mono">json</td><td>One JSON array per entity</td><td>Cannot be appended, so a resume opens a new part file.</td></tr>
+    <tr><td class="mono">csv</td><td>One file per entity, header row included</td><td>Nested values are JSON-encoded in the cell.</td></tr>
+    <tr><td class="mono">parquet</td><td>Columnar, optionally partitioned</td><td>Needs <code>pip install 'cacophony[parquet]'</code>. Resume opens a new part.</td></tr>
+    <tr><td class="mono">sqlite</td><td>One database for the whole project</td><td>Every entity a table, every reference an enforced <code>FOREIGN KEY</code>.</td></tr>
+    <tr><td class="mono">sql</td><td>A portable <code>CREATE TABLE</code> plus <code>INSERT</code> script per entity</td><td>For a database Cacophony has no adapter for.</td></tr>
+  </tbody>
+</table>
+
+<pre><code class="language-console">$ cacophony generate project.yaml -o sqlite -d out/
+$ sqlite3 out/retail-commerce.db "PRAGMA foreign_key_check"   # silent</code></pre>
+
+<div class="callout warning">
+  <span class="callout-title">Chaos and a database schema cannot both be had</span>
+  <p>Entropy injection nulls required fields, mangles keys and re-emits whole
+  records the way a retried insert does. Every one of those a declared
+  constraint would reject, aborting the run on its first damaged row. A run with
+  <code>chaos</code> enabled therefore writes its tables <em>without</em>
+  primary keys, uniqueness, <code>NOT NULL</code> or <code>FOREIGN KEY</code>,
+  creates indexes on the key and reference columns instead so the joins still
+  work, and says so when it starts.</p>
+  <p>Generate without chaos for a database whose constraints hold; generate with
+  it for a corrupted one to test a loader against. Asking for both silently
+  would give you neither.</p>
+</div>

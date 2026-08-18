@@ -1,0 +1,237 @@
+<section class="part-page">
+  <h1>Interfaces</h1>
+  <p class="part-blurb">Three front doors onto one application: an HTTP API, a
+  browser interface, and a window.</p>
+</section>
+
+<h1 id="the-api" data-index="API">The API</h1>
+
+<p class="lead">Everything the command line does, over HTTP, plus the live
+progress feeds the Studio is built on. One application serves the API and the
+interface, which is what keeps them from drifting apart.</p>
+
+<pre><code class="language-console">$ pip install 'cacophony[api]'
+$ cacophony serve --port 8765
+# interactive documentation at http://127.0.0.1:8765/docs</code></pre>
+
+<h2>Projects and schemas</h2>
+
+<table class="compact">
+  <thead><tr><th>Method</th><th>Route</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">GET</td><td class="mono">/api/projects</td><td>List registered projects</td></tr>
+    <tr><td class="mono">POST</td><td class="mono">/api/projects</td><td>Register one, by <code>path</code> or inline <code>source</code></td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/projects/{id}</td><td>A project with its schema revisions</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/projects/{id}/plan</td><td>The compiled generation plan</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/projects/{id}/lint</td><td>Linter findings</td></tr>
+    <tr><td class="mono">POST</td><td class="mono">/api/projects/{id}/preview</td><td>Sample records, with column sources</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/projects/{id}/schema</td><td>Source text plus the compiled shape</td></tr>
+    <tr><td class="mono">PATCH</td><td class="mono">/api/projects/{id}/schema</td><td>Targeted edits, preserving the document</td></tr>
+    <tr><td class="mono">PUT</td><td class="mono">/api/projects/{id}/schema</td><td>Replace the whole document</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/schema/types</td><td>Types and generators, for the editor controls</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/schema/operations</td><td>The edit operations and their arguments</td></tr>
+  </tbody>
+</table>
+
+<h2>Runs</h2>
+
+<table class="compact">
+  <thead><tr><th>Method</th><th>Route</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">POST</td><td class="mono">/api/projects/{id}/runs</td><td>Start a run</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/runs</td><td>List runs, filterable by state</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/runs/{id}</td><td>A run, plus live metrics while it executes</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/runs/{id}/jobs</td><td>Jobs and their checkpoints</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/runs/{id}/events</td><td>Structured event log</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/runs/{id}/quality</td><td>Referential, distribution and duplication scores</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/runs/{id}/assets</td><td>Generated files, filterable by kind and entity</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/runs/{id}/assets/file</td><td>One file, refusing paths outside the run</td></tr>
+    <tr><td class="mono">POST</td><td class="mono">/api/runs/{id}/pause</td><td>Pause at the next batch boundary</td></tr>
+    <tr><td class="mono">POST</td><td class="mono">/api/runs/{id}/resume</td><td>Unpause, or restart from checkpoints</td></tr>
+    <tr><td class="mono">POST</td><td class="mono">/api/runs/{id}/cancel</td><td>Cancel, checkpointing on the way out</td></tr>
+    <tr><td class="mono">DELETE</td><td class="mono">/api/runs/{id}</td><td>Delete a finished run</td></tr>
+    <tr><td class="mono">WS</td><td class="mono">/api/runs/{id}/stream</td><td>Live progress</td></tr>
+  </tbody>
+</table>
+
+<h2>Streams</h2>
+
+<table class="compact">
+  <thead><tr><th>Method</th><th>Route</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">POST</td><td class="mono">/api/projects/{id}/streams</td><td>Start a live stream</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/streams</td><td>Streams this server is running</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/streams/{id}</td><td>Rates, attainment, destinations, per-entity counters</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/streams/{id}/records</td><td>The bounded window of what it just produced</td></tr>
+    <tr><td class="mono">POST</td><td class="mono">/api/streams/{id}/retarget</td><td>Change one entity's rate while it runs</td></tr>
+    <tr><td class="mono">POST</td><td class="mono">/api/streams/{id}/pause</td><td>Hold, keeping the indices</td></tr>
+    <tr><td class="mono">POST</td><td class="mono">/api/streams/{id}/resume</td><td>Carry on</td></tr>
+    <tr><td class="mono">POST</td><td class="mono">/api/streams/{id}/stop</td><td>Stop, waiting for destinations to close</td></tr>
+    <tr><td class="mono">DELETE</td><td class="mono">/api/streams/{id}</td><td>Stop and forget</td></tr>
+    <tr><td class="mono">WS</td><td class="mono">/api/streams/{id}/feed</td><td>Status, pushed twice a second</td></tr>
+  </tbody>
+</table>
+
+<h2>Providers, plugins and the system</h2>
+
+<table class="compact">
+  <thead><tr><th>Method</th><th>Route</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">GET</td><td class="mono">/api/providers</td><td>Adapters, and a project's configured providers</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/providers/{id}/models</td><td>Models a provider serves</td></tr>
+    <tr><td class="mono">POST</td><td class="mono">/api/providers/{id}/test</td><td>Health check</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/generators</td><td>The generator registry</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/plugins</td><td>Installed plugins and what they contribute</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/system</td><td>Version and store statistics</td></tr>
+    <tr><td class="mono">POST</td><td class="mono">/api/system/prune</td><td>Remove finished runs older than a cutoff</td></tr>
+  </tbody>
+</table>
+
+<h2>Schema editing</h2>
+
+<p>A <code>PATCH</code> body is a list of operations applied as one
+transaction:</p>
+
+<pre><code class="language-json">{
+  "operations": [
+    {"op": "set_entity", "entity": "employee", "key": "count", "value": 10000},
+    {"op": "set_field", "entity": "employee", "field": "biography",
+     "key": "semantic", "value": "A short professional biography."}
+  ]
+}</code></pre>
+
+<table class="compact">
+  <caption>Edit operations</caption>
+  <thead><tr><th>Operation</th><th>Arguments</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">set_project</td><td class="mono">key, value</td></tr>
+    <tr><td class="mono">set_entity</td><td class="mono">entity, key, value</td></tr>
+    <tr><td class="mono">add_entity / remove_entity</td><td class="mono">name</td></tr>
+    <tr><td class="mono">set_field / unset_field</td><td class="mono">entity, field, key, value</td></tr>
+    <tr><td class="mono">add_field</td><td class="mono">entity, name, [value], [index]</td></tr>
+    <tr><td class="mono">remove_field</td><td class="mono">entity, name</td></tr>
+    <tr><td class="mono">rename_field</td><td class="mono">entity, field, name</td></tr>
+    <tr><td class="mono">move_field</td><td class="mono">entity, name, index</td></tr>
+  </tbody>
+</table>
+
+<p>A <code>value</code> of <code>null</code> removes the key rather than writing
+<code>null</code>, because that is what clearing a control in a form means.</p>
+
+<p>Edits are applied to the YAML document <em>in place</em>, so comments,
+ordering and formatting survive. The result must load and compile or the whole
+patch is refused and the file is untouched. Every accepted patch creates a
+schema revision.</p>
+
+<h1>The Studio</h1>
+
+<p class="lead">A browser interface over the same API: schemas, runs, live
+streams, assets, providers and plugins. Its distinguishing property is what it
+does <em>not</em> do &mdash; it never rewrites your schema file.</p>
+
+<h2>The pages</h2>
+
+<table class="compact">
+  <thead><tr><th>Page</th><th>What it is for</th></tr></thead>
+  <tbody>
+    <tr><td>Projects</td><td>Register, open and compare projects; schema revisions.</td></tr>
+    <tr><td>Studio</td><td>The schema editor: entity list, field editor, a graph of relationships, live preview and lint.</td></tr>
+    <tr><td>Generate</td><td>Start a run with the options <code>generate</code> takes, and watch it.</td></tr>
+    <tr><td>Runs / Run</td><td>History, progress, events, jobs, quality scores, pause and cancel.</td></tr>
+    <tr><td>Stream</td><td>Start and steer a live stream; rates, attainment, destinations, recent records.</td></tr>
+    <tr><td>Assets</td><td>Generated media, filterable, with the manifest metadata beside each file.</td></tr>
+    <tr><td>Providers</td><td>Configured providers, their models, and a health check button.</td></tr>
+    <tr><td>Plugins</td><td>What is installed, what it contributes, and anything that failed to load.</td></tr>
+    <tr><td>Settings</td><td>Store location, pruning, and the server's own version information.</td></tr>
+  </tbody>
+</table>
+
+<h2>Why it never rewrites your file</h2>
+
+<p>A form that saved by re-serialising its own model would produce a correct
+file with every comment and every deliberate ordering stripped out. Edits are
+sent as the targeted operations above and applied to the YAML document in place,
+so the only thing that changes is the thing you changed
+<span class="sec">sections&nbsp;48, 74</span>.</p>
+
+<h2>Live preview</h2>
+
+<p>The field editor previews as you type, using the same positional-seed
+mechanism as <code>cacophony preview</code>. Because previewing disturbs
+nothing, this is safe to do continuously against a project that is mid-run.</p>
+
+<h1>The desktop application</h1>
+
+<p class="lead">A Tauri window hosting the Studio, with the backend as a child
+process. There is no desktop mode in the backend: <code>cacophony desktop</code>
+serves the same application <code>cacophony serve</code> serves.</p>
+
+<pre><code class="language-console">$ ./desktop/build.sh            # a shell that uses `cacophony` from PATH
+$ ./desktop/build.sh --bundle   # an installer, with the backend frozen inside</code></pre>
+
+<h2>The handshake</h2>
+
+<pre class="small"><code class="language-console">$ cacophony desktop
+CACOPHONY_HANDSHAKE {"version":1,"url":"http://127.0.0.1:41287","token":"…","pid":8123}</code></pre>
+
+<p>One line of JSON on stdout, then the server runs. The shell spawns that,
+reads the line, and opens a window at the URL. Any other line the backend prints
+is its own logging and is passed through.</p>
+
+<table>
+  <caption>Four properties, and why each one</caption>
+  <thead><tr><th>Property</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>A port the OS chose</td><td>A fixed 8765 collides with the <code>cacophony serve</code> somebody already has running.</td></tr>
+    <tr><td>Printed after binding</td><td>A shell that opened a window on a guessed URL would work on fast machines and fail on slow ones &mdash; the worst kind of bug.</td></tr>
+    <tr><td>A per-launch token</td><td>A loopback server is reachable by every process on the machine. A browser tab is an explicit act by a person; a window is not.</td></tr>
+    <tr><td>Dies when stdin closes</td><td>The one shutdown path that survives the shell being <code>SIGKILL</code>ed, which no signal handler does.</td></tr>
+  </tbody>
+</table>
+
+<h2>The token</h2>
+
+<p>It guards <code>/api</code> over <strong>both</strong> HTTP and WebSockets.
+The Studio itself is served unauthenticated: static files carrying no data, and
+the window has to load before it can present anything. The token travels in the
+query string once; the page reads it, stores it, and strips it from the address
+bar so it does not end up in a screenshot.</p>
+
+<div class="callout warning">
+  <span class="callout-title">The hole that a WebSocket walks through</span>
+  <p>The first version of the gate used Starlette's HTTP middleware, which only
+  sees <code>scope["type"] == "http"</code>. A WebSocket handshake passed
+  straight through it, leaving the two socket routes open while every other
+  route was guarded. A gap in a security control is worse than no control,
+  because the control is what stops anyone looking. The gate is pure ASGI for
+  this reason, and it was found by connecting a socket rather than by reasoning
+  about the code.</p>
+</div>
+
+<h2>Building a release</h2>
+
+<p>The shell is the easy half; the runtime is the hard one. A user who
+double-clicks an icon must not need Python, so a bundle freezes an interpreter
+and the backend into one executable with PyInstaller, which the shell finds
+beside itself as <code>cacophony-backend</code>. <code>CACOPHONY_BACKEND</code>
+overrides that, which is how a checkout points at its own virtualenv.</p>
+
+<p>Neither half cross-compiles &mdash; Tauri needs the platform's own webview
+and PyInstaller needs the platform's own interpreter &mdash; so a release is
+built once per platform. The repository's workflow does that for Linux, macOS
+and Windows, and smoke-tests each frozen backend by reading its handshake.</p>
+
+<div class="callout">
+  <span class="callout-title">Signing is not configured, and is deliberately not faked</span>
+  <p>macOS notarisation needs an Apple Developer identity and Windows needs a
+  code-signing certificate; both are secrets a repository owner supplies. A
+  workflow that pretended to sign would produce installers that fail on first
+  launch with a message about an unidentified developer.</p>
+</div>
+
+<h2>Web deployment is unaffected</h2>
+
+<p><code>cacophony serve</code> passes no token and behaves exactly as it always
+has. The design document requires that web deployment remain possible, and the
+cheapest way to guarantee it is to have no second application to keep in
+step.</p>

@@ -1,0 +1,261 @@
+<section class="part-page">
+  <h1>Scale</h1>
+  <p class="part-blurb">A workload rather than a file; a run spread across
+  machines with byte-identical output; and what any of it costs.</p>
+</section>
+
+<h1 id="cmd-stream">Streaming</h1>
+
+<p class="lead">The same schema, delivered continuously at a rate you choose,
+until you stop it. This is Cacophony as a workload generator rather than a
+dataset generator, and the difference changes several behaviours in ways worth
+knowing.</p>
+
+<pre><code class="language-console">$ cacophony stream templates/security-operations.yaml \
+      --rate authentication=250/s --rate security_finding=8/minute \
+      --to syslog://siem.internal:514</code></pre>
+
+<h2>Options</h2>
+
+<table class="compact">
+  <caption>stream options</caption>
+  <thead><tr><th>Option</th><th>Default</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">-r, --rate ENTITY=RATE</td><td>&mdash;</td><td>Repeatable. <code>250/s</code>, <code>8 per minute</code>, <code>1200/hour</code>, or a bare number meaning per second</td></tr>
+    <tr><td class="mono">-t, --to DESTINATION</td><td><code>stdout</code></td><td>Repeatable; every destination gets every record</td></tr>
+    <tr><td class="mono">-s, --seconds N</td><td>forever</td><td>Stop after this long</td></tr>
+    <tr><td class="mono">-n, --records N</td><td>&mdash;</td><td>Stop after this many records</td></tr>
+    <tr><td class="mono">--batch-size N</td><td><code>100</code></td><td>Records per delivery</td></tr>
+    <tr><td class="mono">--flush SECONDS</td><td><code>1.0</code></td><td>Deliver a partial batch after this long</td></tr>
+    <tr><td class="mono">--from N</td><td><code>0</code></td><td>Start indices here, to continue a previous stream</td></tr>
+    <tr><td class="mono">--follow-shape</td><td>off</td><td>Modulate the rate by the timeline's shape: quiet at night</td></tr>
+    <tr><td class="mono">--historical</td><td>off</td><td>Keep generated timestamps instead of stamping with the wall clock</td></tr>
+    <tr><td class="mono">--scenario-cycle SECONDS</td><td><code>3600</code></td><td>How often a scenario window recurs</td></tr>
+    <tr><td class="mono">--on-error POLICY</td><td><code>continue</code></td><td><code>continue</code> or <code>abort</code> when a destination rejects records</td></tr>
+    <tr><td class="mono">-q, --quiet</td><td>off</td><td>No dashboard; useful when piping</td></tr>
+  </tbody>
+</table>
+
+<h2>Destinations</h2>
+
+<table>
+  <caption>--to</caption>
+  <thead><tr><th>Destination</th><th>Form</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>Standard output</td><td class="mono">stdout</td><td>One JSON object per line. The dashboard moves to stderr, so piping to <code>jq</code> works.</td></tr>
+    <tr><td>File</td><td class="mono">file://path.jsonl</td><td>Rotates by size; <code>rotate_bytes</code> and <code>keep</code> are options.</td></tr>
+    <tr><td>Syslog</td><td class="mono">syslog://host:514<br>syslog+tcp://host:601</td><td>RFC 5424 by default, <code>rfc: 3164</code> available. TCP uses octet-counted framing.</td></tr>
+    <tr><td>HTTP</td><td class="mono">https://host/ingest</td><td>POSTs an ndjson batch per delivery; <code>array</code> and <code>single</code> body styles available.</td></tr>
+    <tr><td>Kafka</td><td class="mono">kafka://broker:9092/topic</td><td>Needs <code>pip install 'cacophony[kafka]'</code>. <code>key_field</code> partitions by a field.</td></tr>
+    <tr><td>Memory</td><td class="mono">memory://200</td><td>A bounded window of recent records for the API and the Studio to read back. Useless from the CLI, where stdout already does this.</td></tr>
+  </tbody>
+</table>
+
+<h2>What differs from a batch run</h2>
+
+<ul>
+  <li><strong>Indices keep going</strong> rather than stopping at a count, so
+  <code>--from N</code> continues a previous stream instead of replaying it. The
+  summary prints the number to use.</li>
+  <li><strong>Timestamps come from the wall clock</strong>, because a stream is
+  happening now. <code>--historical</code> keeps the generated ones.</li>
+  <li><strong>Subjects interleave</strong>, so per-subject state is held in
+  memory rather than folded over a contiguous block.</li>
+  <li><strong>Scenario windows recur</strong> every <code>--scenario-cycle</code>
+  seconds. An incident declared at <code>window: {at: 0.62}</code> has no meaning
+  in an endless stream, so it happens again each cycle.</li>
+</ul>
+
+<h2>Attainment</h2>
+
+<p>The dashboard shows the achieved rate against the requested one. Below 95%
+means generation or a destination could not keep up, and it is reported rather
+than hidden: a workload generator that quietly under-delivers is measuring the
+wrong thing.</p>
+
+<div class="callout quiet">
+  <span class="callout-title">Attainment is integrated, not averaged</span>
+  <p>When a rate is changed while the stream runs, the denominator is the
+  integral of the requested rate over time rather than the rate at start-up.
+  Without that, retargeting 250/s down to 100/s produced a reported attainment
+  of 182% &mdash; a lifetime mean divided by the current target, which is a
+  number about nothing.</p>
+</div>
+
+<h1 id="cmd-cluster">Distributed generation</h1>
+
+<p class="lead">A run cut into shards &mdash; contiguous index ranges &mdash;
+and handed out as leases. The joined output is byte-identical to what one
+machine would have written, and that is a consequence of the seed design rather
+than an effort.</p>
+
+<pre><code class="language-console"># One machine, several workers
+$ cacophony cluster templates/security-operations.yaml -o out/ --workers 8
+
+# Several machines
+$ cacophony controller templates/security-operations.yaml --port 8787
+$ cacophony worker templates/security-operations.yaml \
+      -c http://controller:8787 -o /mnt/shared</code></pre>
+
+<h2>Everyone runs the same project</h2>
+
+<p>Every worker must run the same project file, and the same
+<code>--seed</code>, <code>--records</code> and <code>--format</code> as the
+controller. A worker whose schema hashes differently is refused at registration
+rather than allowed to contribute records from a different world.</p>
+
+<h2>Capabilities</h2>
+
+<p>Neither side declares anything. A shard's requirements are read off its
+compiled generators; a worker's are read off its configured providers.</p>
+
+<table>
+  <caption>Capabilities</caption>
+  <thead><tr><th>Capability</th><th>A shard needs it when</th><th>A worker has it when</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">deterministic</td><td>always</td><td>always</td></tr>
+    <tr><td class="mono">language_model</td><td>a field uses <code>llm</code></td><td>a <code>language_model</code> provider is configured</td></tr>
+    <tr><td class="mono">image</td><td>a field uses <code>image</code></td><td>an <code>image</code> provider is configured</td></tr>
+    <tr><td class="mono">speech</td><td>a field uses <code>tts</code></td><td>a <code>speech</code> provider is configured</td></tr>
+    <tr><td class="mono">document</td><td>a field uses <code>document</code></td><td>always &mdash; rendering is in-process</td></tr>
+  </tbody>
+</table>
+
+<p><code>--capabilities deterministic,image</code> overrides detection, for a
+node whose model server is reachable but which you want kept off model work.</p>
+
+<h2>Leases</h2>
+
+<p>A shard is granted for <code>--lease-seconds</code> (default 30). The worker
+renews halfway through each interval while it generates. If a lease expires the
+shard is offered to somebody else, and the original holder is told its lease is
+stale and discards what it wrote. After <code>--max-attempts</code> failures
+(default 3) a shard is marked failed and the run reports it rather than retrying
+forever.</p>
+
+<p>A re-leased shard is <em>regenerated</em>, not resumed. The second attempt
+produces exactly the bytes the first would have, so a dead worker's partial file
+is simply overwritten. This is why a shard needs no checkpoint: if it does not
+finish, it is simply done again.</p>
+
+<h2>Output</h2>
+
+<p>Each shard writes <code>entity.part&lt;offset&gt;.&lt;ext&gt;</code> &mdash;
+zero-padded, so an ordinary directory listing is already in dataset order.
+<code>jsonl</code>, <code>csv</code> and <code>json</code> parts join back into
+one file; <code>cluster</code> does it automatically and
+<code>--no-join</code> keeps the parts. <code>parquet</code> parts are left as a
+directory, which every reader for that format accepts.</p>
+
+<div class="callout warning">
+  <span class="callout-title">sqlite and sql are refused</span>
+  <p>A relational output split across shards is not a relational output: its
+  foreign keys would not resolve, because each shard knows only its own index
+  range. Generate parts and load them, or use <code>cacophony generate</code>.
+  Cacophony refuses with that explanation rather than producing databases that
+  look fine and are not.</p>
+</div>
+
+<h2>Shared artifacts</h2>
+
+<p>Point every worker's <code>--assets-dir</code> at one mounted directory.
+Assets are content-addressed, so two nodes producing the same file produce the
+same name with the same bytes. Each node appends to its own
+<code>manifest.&lt;node&gt;.jsonl</code>; readers read all of them as one
+run.</p>
+
+<h2>Authentication</h2>
+
+<p>Set <code>CACOPHONY_CONTROLLER_TOKEN</code> on the controller to require it,
+and the same variable on each worker to send it. It is read from the environment
+rather than taken as a flag, so it never lands in a shell history or a process
+listing.</p>
+
+<h2>Controller routes</h2>
+
+<table class="compact">
+  <thead><tr><th>Method</th><th>Route</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">POST</td><td class="mono">/register</td><td>A worker announces itself and its capabilities</td></tr>
+    <tr><td class="mono">POST</td><td class="mono">/lease</td><td>Ask for a shard</td></tr>
+    <tr><td class="mono">POST</td><td class="mono">/renew</td><td>Keep a lease alive</td></tr>
+    <tr><td class="mono">POST</td><td class="mono">/complete</td><td>Report a shard done</td></tr>
+    <tr><td class="mono">POST</td><td class="mono">/fail</td><td>Report a shard failed</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/status</td><td>Progress, per-worker health, throughput, reassignments, a <code>stalled</code> flag</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/shards?state=…</td><td>Shard states</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/health</td><td>Liveness</td></tr>
+  </tbody>
+</table>
+
+<p><code>/status</code> raises <code>stalled</code> when the remaining work needs
+a capability no live worker has &mdash; a cluster of deterministic-only nodes
+with model fields left to generate will otherwise sit there looking busy.</p>
+
+<div class="callout">
+  <span class="callout-title">A completion that arrives twice</span>
+  <p>The controller refuses a terminal lease. Without that, a
+  <code>complete</code> resent after a network hiccup counted its records
+  again and the run reported more output than it produced. Found by testing the
+  protocol over HTTP rather than by reasoning about it.</p>
+</div>
+
+<h2>What you give up</h2>
+
+<p><code>generate</code> remains the single-node path, and it is the one with
+run records, checkpoints and resume. The distributed commands trade that
+bookkeeping for parallelism.</p>
+
+<h1>Performance and memory</h1>
+
+<p class="lead">The design goal is that dataset size does not appear in the
+memory profile. It mostly does not, and the exceptions are listed here rather
+than discovered.</p>
+
+<h2>Everything streams</h2>
+
+<p>The engine yields bounded batches and writers flush them. A hundred million
+records cost what a hundred do, plus whatever the output format buffers.
+Measured on ordinary hardware: 124&nbsp;MB and 400,000 records delivered in
+5.4&nbsp;seconds at 69&nbsp;MB peak resident memory.</p>
+
+<h2>What does hold memory</h2>
+
+<table class="compact">
+  <thead><tr><th>Feature</th><th>Holds</th><th>Bounded by</th></tr></thead>
+  <tbody>
+    <tr><td>Near-duplicate detection</td><td>A sliding window of recent values</td><td><code>quality.duplication.window</code>, default 50,000</td></tr>
+    <tr><td>Exact duplicate detection</td><td>A Bloom filter</td><td>About 18&nbsp;MB for ten million values</td></tr>
+    <tr><td>Uniqueness validation</td><td>Seen values for unique fields</td><td>The number of unique fields &times; record count</td></tr>
+    <tr><td>Streaming simulation state</td><td>Per-subject state</td><td>Number of active subjects</td></tr>
+    <tr><td>Parquet writing</td><td>A row group</td><td><code>--batch-size</code></td></tr>
+    <tr><td>SQLite output</td><td>A transaction</td><td><code>--batch-size</code></td></tr>
+  </tbody>
+</table>
+
+<h2>Tuning</h2>
+
+<table class="compact">
+  <thead><tr><th>Knob</th><th>Raise it when</th><th>Lower it when</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">--batch-size</td><td>Writing Parquet or SQLite, where larger batches are much faster</td><td>Memory is tight, or you want finer checkpoints</td></tr>
+    <tr><td class="mono">--workers</td><td>Several independent entities and spare cores</td><td>One entity dominates; extra workers do nothing</td></tr>
+    <tr><td class="mono">--llm-batch-size</td><td>Prose volume matters more than nuance</td><td>Answers are drifting or being clipped</td></tr>
+    <tr><td class="mono">--checkpoint-every</td><td>Checkpointing shows up in the profile</td><td>An interrupted run must lose very little</td></tr>
+    <tr><td class="mono">provider concurrency</td><td>The model server has headroom</td><td>You have one GPU; set it to 1</td></tr>
+  </tbody>
+</table>
+
+<h2>Where the time actually goes</h2>
+
+<p>For a deterministic schema, in the writer and in the validator. For a schema
+with model fields, in the model &mdash; by two or three orders of magnitude.
+Before optimising anything, run <code>cacophony plan</code> and look at the cost
+classes: if any field says <code>llm</code> or <code>gpu</code>, nothing else in
+the pipeline is worth measuring.</p>
+
+<p>Three ways to make model work cost less, in order of effect: use
+<code>mode: batch</code> with a large <code>--llm-batch-size</code>; turn on
+<code>--cache read_write</code> so a re-run is free; and reconsider whether the
+field needs a model at all &mdash; a weighted choice over forty written phrases
+is indistinguishable from a model's output in most datasets, and generates a
+million records a second.</p>

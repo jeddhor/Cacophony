@@ -1,0 +1,330 @@
+<section class="part-page">
+  <h1>How it thinks</h1>
+  <p class="part-blurb">Three ideas carry most of the system: a seed derived
+  from position, a compile that happens before anything is generated, and a
+  refusal to invent identifiers that could belong to somebody real.</p>
+</section>
+
+<h1>Determinism and the seed tree</h1>
+
+<p class="lead">If you understand one chapter of this manual, make it this one.
+Nearly every convenience elsewhere &mdash; free previews, cheap resume,
+memoryless references, parallel generation with identical bytes, regenerating a
+single row a year later &mdash; is a consequence of one decision about where
+randomness comes from.</p>
+
+<h2>The usual way, and why it fails</h2>
+
+<p>The obvious design is a seeded random number generator threaded through
+generation. Seed it once, and the sequence of values is reproducible from the
+start.</p>
+
+<p>It is reproducible only <em>from the start</em>, and only <em>in the same
+order</em>. That single property costs you everything interesting. Record
+4,823,913 cannot be produced without producing the 4,823,912 before it.
+Previewing a sample advances the stream, so the preview changes what the run
+would have written. Two threads generating two entities interleave their draws,
+so the output depends on scheduling. Resuming needs the RNG's internal state
+serialised to disk and restored exactly. Generating on eight machines is out of
+the question.</p>
+
+<h2>What Cacophony does instead</h2>
+
+<p>A record's seed is a hash of its <em>position</em>. Nothing is carried
+forward; every seed is computed from the coordinates of the value being
+produced.</p>
+
+<figure>
+<div class="diagram">project seed          20260816
+      │
+      ├── entity "employee"          mix(project, "entity", hash("employee"))
+      │        │
+      │        ├── record 0          mix(entity, "record", 0)
+      │        ├── record 1          mix(entity, "record", 1)
+      │        └── record 4823913    mix(entity, "record", 4823913)
+      │                  │
+      │                  ├── field "first_name"   mix(record, "field", hash(name))
+      │                  ├── field "salary"
+      │                  └── field "portrait"
+      │                            │
+      │                            └── draw 0, 1, 2 …   mix(field, "draw", k)
+      │
+      └── entity "ticket"           …and so on, independently</div>
+<figcaption>The seed hierarchy of section&nbsp;75. Each level is derived from
+its parent and its own coordinate, so any node can be computed directly without
+computing its siblings.</figcaption>
+</figure>
+
+<p>The derivation uses BLAKE2b at the root and a SplitMix64 mixing step for each
+level below it. The details are not the point; the shape is. Because
+<code>mix(parent, salt, component)</code> is a pure function, the seed for
+<em>employee, record 4,823,913, field salary</em> can be computed on its own,
+on any machine, in any order, at any time, with nothing else in memory.</p>
+
+<h2>What that buys</h2>
+
+<table>
+  <caption>Consequences of positional seeding</caption>
+  <thead><tr><th>Property</th><th>Why it follows</th></tr></thead>
+  <tbody>
+    <tr><td>Previews cost nothing and disturb nothing</td><td>There is no shared stream to advance. <code>preview --offset N</code> shows exactly what a run would write at N.</td></tr>
+    <tr><td>Resume needs one integer</td><td>A checkpoint is a count of finished records. There is no RNG state to serialise, so no way for it to be stale or corrupt.</td></tr>
+    <tr><td>References cost no memory</td><td>A parent is reconstructed from its index rather than held in a pool. A hundred million events pointing at five thousand employees is the same state as five.</td></tr>
+    <tr><td>Parallelism is free and exact</td><td>A shard is an index range, and its output is a pure function of that range. Forty workers produce what one would have, byte for byte.</td></tr>
+    <tr><td>A failed shard is redone, not repaired</td><td>The second attempt produces exactly the bytes the first would have, so a dead worker's partial file is simply overwritten.</td></tr>
+    <tr><td>Regeneration is nearly free</td><td><code>cacophony regenerate -r 4823913</code> answers "is this row wrong" in milliseconds, with no dataset and no run.</td></tr>
+    <tr><td>Edge cases and chaos are reproducible</td><td>Which record gets damaged, and how, is derived from its index. A bug found once is found again.</td></tr>
+    <tr><td>Streams continue rather than repeat</td><td><code>--from N</code> resumes an endless stream at the next index instead of replaying the first one.</td></tr>
+  </tbody>
+</table>
+
+<h2>Where the world intrudes</h2>
+
+<p>Determinism is a property of the deterministic generators, which is
+twenty-six of the thirty. Four cannot promise it, and say so:</p>
+
+<ul>
+  <li><strong><code>llm</code></strong> &mdash; a language model on a server you
+  do not control. The prompt, the seed and the request are identical every time;
+  the answer may not be. The generation cache exists partly for this reason:
+  with <code>--cache read_write</code>, an answer once obtained is reused.</li>
+  <li><strong><code>image</code></strong> and <strong><code>tts</code></strong>
+  &mdash; the same, with a GPU attached. The <em>procedural</em> adapters for
+  both are fully deterministic and need no server, which is what makes a
+  multimodal schema designable on a laptop.</li>
+  <li><strong><code>document</code></strong> &mdash; renders in-process from the
+  record, but a PDF embeds a creation timestamp.</li>
+</ul>
+
+<p><code>cacophony plan</code> marks every field with its determinism and cost
+class, and the distributed controller reads shard requirements off exactly the
+same information. Nothing here is declared twice.</p>
+
+<h2>Seeds you can set</h2>
+
+<table class="compact">
+  <thead><tr><th>Where</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">project.seed</td><td>The root. Everything descends from it.</td></tr>
+    <tr><td class="mono">entities.&lt;name&gt;.seed</td><td>Detaches one entity, so it can be regenerated independently of changes elsewhere.</td></tr>
+    <tr><td class="mono">--seed N</td><td>Overrides the project seed for one command. The same schema with two seeds is two populations.</td></tr>
+    <tr><td class="mono">worlds</td><td>A name for a seed plus the schema it goes with, so today's logins and next week's tickets describe the same company. Chapter&nbsp;22.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <span class="callout-title">Pin your seed</span>
+  <p>Leaving <code>seed</code> unset still produces deterministic output &mdash;
+  the default is zero, not a clock reading &mdash; but a project that states its
+  seed says so to the next reader, and to the reviewer wondering whether the
+  dataset in the ticket is the one they are looking at.</p>
+</div>
+
+<h1>The pipeline, end to end</h1>
+
+<p class="lead">Between a project file and a row on disk there are seven stages.
+Each is separately inspectable from the command line, which is the difference
+between a system you can debug and one you can only rerun.</p>
+
+<h2>Load</h2>
+
+<p>The YAML or JSON is parsed into a specification model &mdash; typed, with
+defaults applied and unknown <em>structural</em> keys refused. Unknown keys on a
+<em>field</em> are not refused: they become generator options, which is what
+makes <code>generator: sequence</code> plus <code>format: "EMP-{000000}"</code>
+work without ceremony.</p>
+
+<p>Relative paths in a project resolve against the <strong>schema file</strong>,
+not the working directory. Without that rule a project only works from the
+directory it lives in, and a portable bundle is impossible.</p>
+
+<h2>Expand</h2>
+
+<p>Recipes expand here, before anything else looks at the schema. A recipe's
+fields become ordinary fields; nothing downstream knows a recipe existed except
+the <code>recipe:</code> attribution each expanded field carries for the benefit
+of <code>plan</code> and the Studio. That ordering is deliberate: validation,
+linting, planning and generation all see one kind of field.</p>
+
+<h2>Compile</h2>
+
+<p>Generators are resolved by name or alias, instantiated with their options,
+and asked to validate those options immediately &mdash; so a misspelled option
+is an error from <code>cacophony validate</code> rather than a surprise three
+million records into a run. Field dependencies are collected from three places:
+what the generator declares, what a template or expression mentions, and
+whatever <code>depends_on</code> adds by hand. The result is a graph.</p>
+
+<h2>Plan</h2>
+
+<p>The graph is topologically sorted &mdash; fields within an entity, entities
+within the project &mdash; and a cycle is an error naming the cycle. The plan
+records, per field, its generator, cost class (<code>cpu</code>,
+<code>llm</code>, <code>gpu</code>), determinism, and what it waits for.
+<code>cacophony plan --json</code> is that structure verbatim.</p>
+
+<h2>Generate</h2>
+
+<p>Records are produced in batches. Within a record, fields are produced in
+plan order, each with its own derived seed. Language-model fields may be
+batched across records to cut call counts; media fields are content-addressed so
+identical bytes are written once. Simulation folds state over a subject's
+contiguous block of events. Chaos damages a fraction of values. Edge cases
+substitute awkward-but-legal ones. Patch rules apply last, before validation, so
+what the validator checks is what reaches the file.</p>
+
+<h2>Validate</h2>
+
+<p>Types, constraints, uniqueness, referential integrity and &mdash; when the
+schema asks &mdash; duplication. Deliberately damaged fields are skipped, since
+a chaotic run would otherwise be a wall of failures reporting the feature
+working. Policy is <code>--on-failure</code>: <code>abort</code> (default),
+<code>retry</code>, <code>skip</code>, <code>placeholder</code> or
+<code>incomplete</code>; <code>--drop-invalid</code> discards failures silently
+and <code>--no-validate</code> switches the stage off.</p>
+
+<h2>Write</h2>
+
+<p>Writers consume bounded batches and flush them. Nothing accumulates: a
+dataset far larger than memory costs the same as a small one. A checkpoint is
+recorded after each batch, and the run store gets an event.</p>
+
+<figure>
+<div class="diagram">load ─▶ expand ─▶ compile ─▶ plan ─▶ generate ─▶ validate ─▶ write
+  │        │          │         │         │            │           │
+  │        │          │         │         │            │           └ csv/json/jsonl/
+  │        │          │         │         │            │             parquet/sqlite/sql
+  │        │          │         │         │            └ types · constraints · refs ·
+  │        │          │         │         │              uniqueness · duplication
+  │        │          │         │         └ seeds · llm batching · assets · simulation ·
+  │        │          │         │           chaos · edge cases · patch rules
+  │        │          │         └ cacophony plan
+  │        │          └ cacophony validate  (and generator option checks)
+  │        └ cacophony recipes --show
+  └ paths resolve against the schema file</div>
+<figcaption>Seven stages, five of them with a command that prints what they
+decided.</figcaption>
+</figure>
+
+<h2>Inspecting each stage</h2>
+
+<table class="compact">
+  <thead><tr><th>Question</th><th>Command</th></tr></thead>
+  <tbody>
+    <tr><td>Does this file make sense at all?</td><td><code>cacophony validate</code></td></tr>
+    <tr><td>Is it a sensible design?</td><td><code>cacophony lint</code></td></tr>
+    <tr><td>What did the recipe add?</td><td><code>cacophony recipes --show NAME</code></td></tr>
+    <tr><td>Which generator did each field get, and in what order?</td><td><code>cacophony plan</code></td></tr>
+    <tr><td>What exactly is being sent to the model?</td><td><code>cacophony prompt</code></td></tr>
+    <tr><td>What will the records look like?</td><td><code>cacophony preview</code></td></tr>
+    <tr><td>What did that run actually do?</td><td><code>cacophony run ID --events 50</code></td></tr>
+    <tr><td>Why is this one row wrong?</td><td><code>cacophony regenerate -r N</code></td></tr>
+  </tbody>
+</table>
+
+<h1>Safety, and the fiction</h1>
+
+<p class="lead">Synthetic data has two ways of hurting somebody. It can contain
+a real person's details, or it can be mistaken for a real observation. Cacophony
+takes both seriously by default, and both are switchable per field, because a
+default that cannot be turned off gets worked around.</p>
+
+<h2>Identifiers that cannot belong to anyone</h2>
+
+<p>Every generator that produces a real-world identifier draws from the range
+the relevant standards body reserved for documentation and fiction
+<span class="sec">section&nbsp;62</span>. This is on by default and controlled by
+<code>safe:</code> on the field.</p>
+
+<table>
+  <caption>Reserved ranges used by default</caption>
+  <thead><tr><th>Kind</th><th>Drawn from</th><th>Authority</th></tr></thead>
+  <tbody>
+    <tr><td>Email domains</td><td><code>example.com</code>, <code>example.org</code>, <code>example.net</code>, <code>*.example</code></td><td>RFC 2606</td></tr>
+    <tr><td>IPv4</td><td><code>192.0.2.0/24</code>, <code>198.51.100.0/24</code>, <code>203.0.113.0/24</code></td><td>RFC 5737</td></tr>
+    <tr><td>IPv6</td><td><code>2001:db8::/32</code></td><td>RFC 3849</td></tr>
+    <tr><td>MAC addresses</td><td>the documentation OUI</td><td>RFC 7042</td></tr>
+    <tr><td>Telephone numbers</td><td><code>555-0100</code> to <code>555-0199</code></td><td>the North American fiction block</td></tr>
+    <tr><td>Government identifiers</td><td>the never-issued 900 area</td><td>US SSA policy</td></tr>
+    <tr><td>Hostnames</td><td>documentation domains</td><td>RFC 2606</td></tr>
+    <tr><td>CVE identifiers</td><td>a year with none published</td><td>&mdash;</td></tr>
+  </tbody>
+</table>
+
+<p>The Faker generator is included in this: values that carry a domain are
+rewritten onto reserved domains unless the field says <code>safe: false</code>.
+Turning it off is a deliberate act on one field, which is the right size for
+that decision &mdash; a schema needing genuinely-valid-looking addresses for a
+geocoder test can have them without the whole project losing its guarantees.</p>
+
+<div class="callout warning">
+  <span class="callout-title">The CVE case</span>
+  <p>The <code>cve_identifier</code> recipe produces identifiers shaped exactly
+  like real ones, in a year for which none have been published. This is
+  deliberate. Synthetic security data that used real CVE numbers would, the
+  moment it leaked into a ticket or a report, be indistinguishable from threat
+  intelligence about a real vulnerability.</p>
+</div>
+
+<h2>Credentials are never in the file</h2>
+
+<p>A provider names a <em>logical</em> secret. The value is resolved at run time
+<span class="sec">section&nbsp;63</span>:</p>
+
+<pre><code class="language-yaml">providers:
+  hosted_llm:
+    type: language_model
+    adapter: openai_compatible
+    base_url: https://models.internal.example/v1
+    model: qwen3-8b
+    secret: models-internal        # a logical id, never a value</code></pre>
+
+<ol class="tight">
+  <li>The environment variable <code>CACOPHONY_SECRET_MODELS_INTERNAL</code>.</li>
+  <li>An environment variable named after the id itself.</li>
+  <li>The OS keychain, under the service name <code>cacophony</code>.</li>
+</ol>
+
+<p>The loader rejects a <code>secret:</code> whose value looks like a literal
+key rather than an identifier. The distributed controller's shared token is read
+from <code>CACOPHONY_CONTROLLER_TOKEN</code> for the same reason, rather than
+taken as a flag &mdash; a flag lands in shell history and in every process
+listing on the box.</p>
+
+<h2>Untrusted input is treated as such</h2>
+
+<p>Three places take input from outside and all three assume the worst.</p>
+
+<ul>
+  <li><strong>Bundles.</strong> Import refuses path traversal, absolute paths,
+  Windows drive letters and symlink entries, applies size and entry-count
+  ceilings, and checks the whole archive before writing a single byte &mdash; so
+  one bad entry leaves nothing behind rather than half a project.</li>
+  <li><strong>Expressions.</strong> Both the <code>expression</code> generator
+  and the <code>--where</code> filters are evaluated from a parsed syntax tree
+  against an allow-list of node types and functions. No <code>eval</code>, no
+  imports, no attribute access beyond dotted record lookups.</li>
+  <li><strong>Plugins.</strong> Discovered through installed entry points and
+  never from a project directory. The trust decision belongs to the person
+  running <code>pip install</code>, not to a program opening a file somebody
+  emailed them.</li>
+</ul>
+
+<h2>Provenance, and what it retains</h2>
+
+<p><code>--provenance</code> records how data came to exist. The highest level
+retains prompts and raw provider responses, which may contain content you would
+rather not keep, so it is always an explicit opt-in
+<span class="sec">section&nbsp;87</span>.</p>
+
+<table class="compact">
+  <caption>Provenance modes</caption>
+  <thead><tr><th>Mode</th><th>Records</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">none</td><td>Nothing. The default.</td></tr>
+    <tr><td class="mono">run</td><td>Run-level facts: schema hash, seed, versions, timings.</td></tr>
+    <tr><td class="mono">record</td><td>Per record: its index, its seed, the run that made it.</td></tr>
+    <tr><td class="mono">field</td><td>Per field: the generator, its seed, whether chaos touched it.</td></tr>
+    <tr><td class="mono">full</td><td>The above plus prompts and raw model responses. Opt in knowingly.</td></tr>
+  </tbody>
+</table>
