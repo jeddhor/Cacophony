@@ -1385,8 +1385,10 @@ WebKitGTK's DMA-BUF renderer, which segfaults the web process on many graphics
 stacks and is disabled at startup unless you set the variable yourself; and the
 environment of a snap-confined terminal such as VS Code's, whose `GTK_PATH`,
 `LOCPATH` and `GIO_MODULE_DIR` make WebKit's helper processes load that snap's C
-library and die on `undefined symbol: __libc_pthread_init`. Those variables are
-dropped when `SNAP` is set and the executable is not itself inside `/snap`.
+library and die on `undefined symbol: __libc_pthread_init`. Any of those
+variables whose *value* points into a snap is dropped, unless the executable
+itself lives under `/snap` — the marker variables are not the test, because
+VS Code's integrated terminal keeps the toolkit paths while dropping `SNAP`.
 
 **A missing Studio is explained rather than 404'd.** `npm run build` output is
 generated and not committed, so a fresh clone serves an API and no interface.

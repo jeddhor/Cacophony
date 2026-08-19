@@ -619,9 +619,27 @@ class TestTheShellSurvivesTheHostEnvironment:
         source = self._source()
         for name in ("GTK_PATH", "LOCPATH", "GIO_MODULE_DIR", "LD_LIBRARY_PATH"):
             assert name in source, name
-        # Guarded, so a genuine snap build of this application is left alone.
-        assert 'var_os("SNAP")' in source
+        # Guarded on our own location, so a genuine snap build of this
+        # application - where those paths are correct - is left alone.
+        assert "current_exe()" in source
         assert 'starts_with("/snap/")' in source
+
+    def test_it_does_not_wait_to_be_told_it_is_in_a_snap(self) -> None:
+        """The first version checked `SNAP`, and that was wrong where it counted.
+
+        VS Code's *integrated terminal* drops the `SNAP_*` bookkeeping variables
+        while keeping the toolkit paths, so the environment is poisoned without
+        announcing itself. Gating on the marker meant doing nothing in the one
+        place the problem actually appears — and it passed testing because the
+        shell it was tested from happened to have `SNAP` set.
+
+        The test is the value: does this variable point into a snap.
+        """
+        source = self._source()
+        escape = source[source.index("fn escape_somebody_elses_snap") :]
+        escape = escape[: escape.index("\n}\n")]
+        assert 'var_os("SNAP")' not in escape
+        assert "points_into_a_snap" in escape
 
     def test_both_run_before_anything_else(self) -> None:
         """Environment first: GTK reads it as it initialises."""

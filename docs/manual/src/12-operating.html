@@ -156,9 +156,21 @@ system's, and the network process dies:</p>
 ERROR: WebKit encountered an internal error. This is a WebKit bug.</code></pre>
 
 <p>It is not a WebKit bug. It is a program being handed another application's C
-library. The shell drops those variables when <code>SNAP</code> is set and its
-own executable is not inside <code>/snap</code> &mdash; that combination means
-the environment describes somebody else's confinement, not ours.</p>
+library. The shell drops any of those variables whose <em>value</em> points into
+a snap, unless its own executable lives there too &mdash; in which case the
+paths are its own and are correct.</p>
+
+<div class="callout warning">
+  <span class="callout-title">Test the value, not the marker</span>
+  <p>The first version of this checked whether <code>SNAP</code> was set, and
+  did nothing unless it was. That is wrong in precisely the case that matters:
+  VS Code's <em>integrated terminal</em> drops the <code>SNAP_*</code>
+  bookkeeping while keeping <code>GTK_PATH</code> and <code>LOCPATH</code>, so
+  the environment is poisoned without announcing itself. It passed its own
+  testing because the shell it was tested from happened to have
+  <code>SNAP</code> set &mdash; which is a good argument for reproducing the
+  reporter's environment rather than one that resembles it.</p>
+</div>
 
 <div class="callout quiet">
   <span class="callout-title">If you are on an older build</span>

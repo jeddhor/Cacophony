@@ -64,10 +64,10 @@ struct Ready {
     token: String,
 }
 
-/// Drop the library paths of a snap we are not part of.
+/// Drop library paths that point into a snap this program is not part of.
 ///
-/// Launching this from the terminal inside a snap-confined editor - VS Code
-/// being the common one - inherits that snap's environment: `GTK_PATH`,
+/// Launching from the terminal inside a snap-confined editor - VS Code being
+/// the common one - inherits that snap's toolkit environment: `GTK_PATH`,
 /// `LOCPATH`, `GIO_MODULE_DIR` and friends all point into `/snap/...`. WebKit's
 /// helper processes then load the snap's libraries in preference to the
 /// system's, and die on the mismatch:
@@ -82,47 +82,67 @@ struct Ready {
 /// It is not a WebKit bug. It is a program being told to use another
 /// application's C library.
 ///
-/// Only when the environment is lying: `SNAP` is set and this executable is not
-/// inside `/snap`, which means the variables describe somebody else's
-/// confinement rather than ours. A genuine snap build of this application is
-/// left alone.
+/// The test is the value, not a marker variable. The first version of this
+/// checked `SNAP` and did nothing unless it was set - which was wrong in
+/// exactly the case that matters: VS Code's *integrated terminal* drops the
+/// `SNAP_*` bookkeeping while keeping the toolkit paths, so the environment is
+/// poisoned without announcing itself. It passed its own testing because the
+/// shell it was tested from happened to have `SNAP` set.
+///
+/// A genuine snap build of this application is left alone: if our own
+/// executable lives under `/snap`, those paths are ours and are correct.
 #[cfg(target_os = "linux")]
 fn escape_somebody_elses_snap() {
-    let confined = std::env::var_os("SNAP").is_some();
     let ours = std::env::current_exe()
         .map(|path| path.starts_with("/snap/"))
         .unwrap_or(false);
-    if !confined || ours {
+    if ours {
         return;
     }
 
     for name in [
         "GTK_PATH",
+        "GTK_EXE_PREFIX",
+        "GTK_IM_MODULE_FILE",
         "GIO_MODULE_DIR",
         "GSETTINGS_SCHEMA_DIR",
         "GDK_PIXBUF_MODULEDIR",
         "GDK_PIXBUF_MODULE_FILE",
         "LOCPATH",
-        "GTK_IM_MODULE_FILE",
     ] {
-        std::env::remove_var(name);
+        if points_into_a_snap(&name) {
+            std::env::remove_var(name);
+        }
     }
 
-    // These are lists, and only the snap's entries are the problem: dropping
-    // the rest would take the system's own directories with them.
+    // Lists, where only the snap's entries are the problem: dropping the whole
+    // variable would take the system's own directories with it.
     for name in ["LD_LIBRARY_PATH", "XDG_DATA_DIRS"] {
         if let Ok(value) = std::env::var(name) {
             let kept: Vec<&str> = value
                 .split(':')
-                .filter(|entry| !entry.is_empty() && !entry.starts_with("/snap/"))
+                .filter(|entry| !entry.is_empty() && !is_snap_path(entry))
                 .collect();
             if kept.is_empty() {
                 std::env::remove_var(name);
-            } else {
+            } else if kept.len() != value.split(':').filter(|e| !e.is_empty()).count() {
                 std::env::set_var(name, kept.join(":"));
             }
         }
     }
+}
+
+/// Whether a variable's value names somewhere inside a snap.
+#[cfg(target_os = "linux")]
+fn points_into_a_snap(name: &str) -> bool {
+    std::env::var(name).map(|value| is_snap_path(&value)).unwrap_or(false)
+}
+
+/// `/snap/code/257/...` and `/home/jason/snap/code/common/...` are both a snap's
+/// own directories; the second is where a snap keeps per-user state.
+#[cfg(target_os = "linux")]
+fn is_snap_path(value: &str) -> bool {
+    value.starts_with("/snap/") || value.contains("/snap/")
 }
 
 #[cfg(not(target_os = "linux"))]
