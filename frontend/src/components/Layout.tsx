@@ -2,10 +2,9 @@
  * The application shell (design document sections 45, 46).
  *
  * Section 46's navigation, verbatim: Projects, Studio, Generate, Runs,
- * Providers, Assets, Plugins, Settings. Plugins belongs to a later phase and is
- * shown disabled rather than hidden - the shape of the product
- * is part of what the interface communicates, and a destination that appears
- * later without warning is more disorienting than one that was always visible.
+ * Providers, Assets, Plugins, Settings — plus Stream, which section 94 asks for.
+ * All of them are built; a destination is disabled only when it needs a project
+ * and none is selected, which is a state rather than a promise.
  */
 
 import type { ReactNode } from "react";
@@ -20,8 +19,6 @@ interface Destination {
   glyph: string;
   /** Needs a project selected before it means anything. */
   needsProject?: boolean;
-  /** Arrives in a later phase. */
-  later?: string;
 }
 
 const DESTINATIONS: Destination[] = [
@@ -77,9 +74,8 @@ export function Layout({ children }: { children: ReactNode }): ReactNode {
 
         <div className="nav">
           {DESTINATIONS.map((destination) => {
-            const blocked = destination.later
-              ? `Arrives in the ${destination.later}`
-              : destination.needsProject && projectId === null
+            const blocked =
+              destination.needsProject && projectId === null
                 ? "Select a project first"
                 : null;
 

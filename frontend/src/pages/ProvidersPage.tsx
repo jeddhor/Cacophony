@@ -17,6 +17,14 @@ import { PageHead } from "../components/Layout";
 import { Empty, ErrorNotice, Notice, Panel, Spinner } from "../components/ui";
 import { useStudio } from "../state/store";
 
+/** The order the headings appear in, and what to call each one. */
+const ADAPTER_KINDS = [
+  { key: "language_model", label: "Language models" },
+  { key: "image", label: "Images" },
+  { key: "speech", label: "Speech" },
+  { key: "custom", label: "Other" },
+] as const;
+
 export function ProvidersPage(): ReactNode {
   const projectId = useStudio((state) => state.projectId);
   const providers = useProviders(projectId ?? undefined);
@@ -34,15 +42,33 @@ export function ProvidersPage(): ReactNode {
       {providers.data && (
         <>
           <Panel title="Available adapters">
-            <div className="row" style={{ gap: 8 }}>
-              {providers.data.adapters.map((adapter) => (
-                <span key={adapter} className="badge badge-faker">
-                  {adapter}
-                </span>
-              ))}
-            </div>
+            {ADAPTER_KINDS.map(({ key, label }) => {
+              const names = providers.data.adapters.filter(
+                (adapter) => (providers.data.kinds?.[adapter] ?? "custom") === key,
+              );
+              if (names.length === 0) return null;
+              return (
+                <div key={key} style={{ marginBottom: 10 }}>
+                  <p
+                    className="faint"
+                    style={{ fontSize: "0.72rem", textTransform: "uppercase", margin: "0 0 4px" }}
+                  >
+                    {label}
+                  </p>
+                  <div className="row" style={{ gap: 8 }}>
+                    {names.map((adapter) => (
+                      <span key={adapter} className="badge badge-faker">
+                        {adapter}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
             <p className="faint" style={{ fontSize: "0.78rem", marginBottom: 0 }}>
-              Image and speech adapters arrive in the multimodal phase.
+              A provider names one of these under <code>providers:</code>. The two
+              procedural adapters need no server and no GPU, so a multimodal schema
+              can be designed and previewed anywhere.
             </p>
           </Panel>
 

@@ -815,6 +815,9 @@ def create_app(
         payload: dict[str, Any] = {
             "adapters": PROVIDER_REGISTRY.adapters(),
             "aliases": PROVIDER_REGISTRY.adapter_aliases(),
+            # What each adapter is for, so the Studio can group them rather than
+            # showing one undifferentiated list of names.
+            "kinds": PROVIDER_REGISTRY.adapter_kinds(),
             "configured": [],
         }
         if project_id is not None:

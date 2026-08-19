@@ -1002,3 +1002,39 @@ class TestStreams:
             time.sleep(0.05)
         assert status["stats"]["generated"] >= 40
         assert status["state"] not in ("queued", "running")
+
+
+class TestAdapterKinds:
+    """`/api/providers` says what each adapter is for.
+
+    The Studio used to caption its adapter list "Image and speech adapters
+    arrive in the multimodal phase" — while listing invokeai, piper and
+    openai_speech directly underneath. The caption was two phases stale and
+    read as a missing feature. Grouping them needs the kinds, so the API
+    reports them.
+    """
+
+    def test_every_adapter_has_a_kind(self, service) -> None:
+        with TestClient(create_app(service=service)) as client:
+            payload = client.get("/api/providers").json()
+        assert set(payload["kinds"]) == set(payload["adapters"])
+
+    def test_the_media_adapters_are_labelled_as_such(self, service) -> None:
+        with TestClient(create_app(service=service)) as client:
+            kinds = client.get("/api/providers").json()["kinds"]
+        assert kinds["invokeai"] == "image"
+        assert kinds["procedural_image"] == "image"
+        assert kinds["piper"] == "speech"
+        assert kinds["openai_speech"] == "speech"
+        assert kinds["ollama"] == "language_model"
+
+    def test_the_kind_comes_from_the_interface_not_a_label(self) -> None:
+        """So an adapter cannot be registered under the wrong heading."""
+        from cacophony.providers.base import ImageProvider
+        from cacophony.providers.registry import PROVIDER_REGISTRY
+
+        kinds = PROVIDER_REGISTRY.adapter_kinds()
+        for name, kind in kinds.items():
+            adapter = PROVIDER_REGISTRY.adapter_class(name)
+            if kind == "image":
+                assert issubclass(adapter, ImageProvider)

@@ -1,13 +1,14 @@
-"""Generators whose backends arrive in later phases.
+"""Generators that compile but cannot run, and the machinery for saying so.
 
-Section 111 is explicit: the architectural interfaces for image, speech,
-scenario and plugin providers should already exist, even if their
-implementations are initially empty, so that later multimodal work *extends*
-the platform rather than forcing a rewrite.
+Section 111 asked that the architectural interfaces for image, speech, scenario
+and plugin providers exist from the beginning, even where the implementations
+were initially empty, so that later work *extended* the platform rather than
+forcing a rewrite. That is what this module was for.
 
-These generators are therefore real, registered and compilable today. A schema
-that uses ``generator: image`` validates, lints, plans and estimates correctly -
-it simply cannot produce a value until the multimodal phase lands.
+Only ``script`` is left, and it is a different case: it waits on isolation
+rather than on a backend, which is a decision rather than a schedule. A
+``script`` field still validates, lints, plans and estimates, and
+``on_unavailable: placeholder`` runs the whole pipeline with a marked stand-in.
 
 ``llm``, ``reference``, ``image``, ``tts`` and ``document`` used to live here.
 All now have working implementations - in

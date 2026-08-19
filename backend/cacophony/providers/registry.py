@@ -60,6 +60,27 @@ class ProviderRegistry:
     def adapter_aliases(self) -> dict[str, str]:
         return dict(self._aliases)
 
+    def adapter_kinds(self) -> dict[str, str]:
+        """What each adapter is for: a language model, images, or speech.
+
+        Derived from the interface each one implements rather than declared
+        beside it, so an adapter cannot be registered under the wrong heading -
+        including one a plugin contributes (section 44).
+        """
+        from .base import ImageProvider, LanguageModelProvider, SpeechProvider
+
+        kinds: dict[str, str] = {}
+        for name, adapter in self._adapters.items():
+            if issubclass(adapter, LanguageModelProvider):
+                kinds[name] = "language_model"
+            elif issubclass(adapter, ImageProvider):
+                kinds[name] = "image"
+            elif issubclass(adapter, SpeechProvider):
+                kinds[name] = "speech"
+            else:
+                kinds[name] = "custom"
+        return dict(sorted(kinds.items()))
+
     def adapter_class(self, name: str) -> type[Provider]:
         canonical = self.resolve_adapter(name)
         adapter = self._adapters.get(canonical)

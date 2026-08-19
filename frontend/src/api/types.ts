@@ -441,6 +441,8 @@ export interface ProviderConfig {
 export interface ProvidersView {
   adapters: string[];
   aliases: Record<string, string>;
+  /** What each adapter is for: language_model, image, speech or custom. */
+  kinds: Record<string, string>;
   configured: ProviderConfig[];
 }
 
