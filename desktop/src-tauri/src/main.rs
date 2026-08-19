@@ -64,7 +64,101 @@ struct Ready {
     token: String,
 }
 
+/// Drop the library paths of a snap we are not part of.
+///
+/// Launching this from the terminal inside a snap-confined editor - VS Code
+/// being the common one - inherits that snap's environment: `GTK_PATH`,
+/// `LOCPATH`, `GIO_MODULE_DIR` and friends all point into `/snap/...`. WebKit's
+/// helper processes then load the snap's libraries in preference to the
+/// system's, and die on the mismatch:
+///
+/// ```text
+/// WebKitNetworkProcess: symbol lookup error:
+///   /snap/core20/current/lib/x86_64-linux-gnu/libpthread.so.0:
+///   undefined symbol: __libc_pthread_init, version GLIBC_PRIVATE
+/// ERROR: WebKit encountered an internal error. This is a WebKit bug.
+/// ```
+///
+/// It is not a WebKit bug. It is a program being told to use another
+/// application's C library.
+///
+/// Only when the environment is lying: `SNAP` is set and this executable is not
+/// inside `/snap`, which means the variables describe somebody else's
+/// confinement rather than ours. A genuine snap build of this application is
+/// left alone.
+#[cfg(target_os = "linux")]
+fn escape_somebody_elses_snap() {
+    let confined = std::env::var_os("SNAP").is_some();
+    let ours = std::env::current_exe()
+        .map(|path| path.starts_with("/snap/"))
+        .unwrap_or(false);
+    if !confined || ours {
+        return;
+    }
+
+    for name in [
+        "GTK_PATH",
+        "GIO_MODULE_DIR",
+        "GSETTINGS_SCHEMA_DIR",
+        "GDK_PIXBUF_MODULEDIR",
+        "GDK_PIXBUF_MODULE_FILE",
+        "LOCPATH",
+        "GTK_IM_MODULE_FILE",
+    ] {
+        std::env::remove_var(name);
+    }
+
+    // These are lists, and only the snap's entries are the problem: dropping
+    // the rest would take the system's own directories with them.
+    for name in ["LD_LIBRARY_PATH", "XDG_DATA_DIRS"] {
+        if let Ok(value) = std::env::var(name) {
+            let kept: Vec<&str> = value
+                .split(':')
+                .filter(|entry| !entry.is_empty() && !entry.starts_with("/snap/"))
+                .collect();
+            if kept.is_empty() {
+                std::env::remove_var(name);
+            } else {
+                std::env::set_var(name, kept.join(":"));
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn escape_somebody_elses_snap() {}
+
+/// Turn off the WebKit renderer that crashes, unless somebody asked for it.
+///
+/// WebKitGTK's DMA-BUF renderer segfaults the web process on a good number of
+/// Linux graphics stacks - drivers, compositors and virtual displays alike -
+/// and what a user sees is a window containing "WebKit encountered an internal
+/// error", which says nothing about any of this. It is the single most common
+/// complaint about Tauri applications on Linux.
+///
+/// Measured rather than assumed, on the machine this was written on: an AMD
+/// card with Mesa under Wayland, and a virtual X display with no DRI3, both
+/// segfault with the renderer on and both run with it off. Forcing software
+/// GL instead (`LIBGL_ALWAYS_SOFTWARE`) does *not* help, which is what says the
+/// fault is in that renderer rather than in the driver underneath it.
+///
+/// The cost is some rendering performance for a window that mostly displays
+/// forms and tables. Set the variable yourself - to `0`, or anything - and this
+/// leaves it alone, because a machine where the fast path works should be
+/// allowed to use it.
+#[cfg(target_os = "linux")]
+fn survive_webkit() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn survive_webkit() {}
+
 fn main() {
+    survive_webkit();
+    escape_somebody_elses_snap();
     match start_backend() {
         Ok((child, ready)) => run_window(child, ready),
         Err(message) => {

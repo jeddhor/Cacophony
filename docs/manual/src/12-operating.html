@@ -128,13 +128,45 @@ Point it at the backend explicitly:</p>
 <pre><code class="language-console">$ CACOPHONY_BACKEND=$PWD/.venv/bin/cacophony \
       ./desktop/src-tauri/target/release/cacophony-desktop</code></pre>
 
-<p>The other reason is the renderer. WebKitGTK's DMA-BUF path crashes on some
-driver and compositor combinations, which is the single most common Tauri
-complaint on Linux:</p>
+<p>The other two are environmental, and the shell now defends against both
+itself. They are recorded here because the symptom names none of them.</p>
 
-<pre><code class="language-console">$ WEBKIT_DISABLE_DMABUF_RENDERER=1 ./desktop/src-tauri/target/release/cacophony-desktop
-$ WEBKIT_DISABLE_COMPOSITING_MODE=1 ./desktop/src-tauri/target/release/cacophony-desktop
-$ GDK_BACKEND=x11 ./desktop/src-tauri/target/release/cacophony-desktop</code></pre>
+<h3>The DMA-BUF renderer segfaults</h3>
+
+<p>WebKitGTK's DMA-BUF path crashes the web process on a good number of Linux
+graphics stacks. Measured here on an AMD card with Mesa under Wayland, and on a
+virtual X display with no DRI3: both segfault with it on, both run with it off,
+and forcing software GL does not help &mdash; which is what places the fault in
+that renderer rather than in the driver under it. The shell sets
+<code>WEBKIT_DISABLE_DMABUF_RENDERER=1</code> at startup unless you have set the
+variable yourself, so a machine where the fast path works can still use it.</p>
+
+<h3>A snap's libraries, borrowed by accident</h3>
+
+<p>Launching the window from a terminal inside a snap-confined editor &mdash;
+VS Code's integrated terminal being the common one &mdash; inherits that snap's
+environment. <code>GTK_PATH</code>, <code>LOCPATH</code>,
+<code>GIO_MODULE_DIR</code> and friends all point into <code>/snap</code>,
+WebKit's helper processes load that snap's C library in preference to the
+system's, and the network process dies:</p>
+
+<pre class="small"><code class="language-text">WebKitNetworkProcess: symbol lookup error:
+  /snap/core20/current/lib/x86_64-linux-gnu/libpthread.so.0:
+  undefined symbol: __libc_pthread_init, version GLIBC_PRIVATE
+ERROR: WebKit encountered an internal error. This is a WebKit bug.</code></pre>
+
+<p>It is not a WebKit bug. It is a program being handed another application's C
+library. The shell drops those variables when <code>SNAP</code> is set and its
+own executable is not inside <code>/snap</code> &mdash; that combination means
+the environment describes somebody else's confinement, not ours.</p>
+
+<div class="callout quiet">
+  <span class="callout-title">If you are on an older build</span>
+  <p>Both defences are in the shell binary, so a stale one still fails. Rebuild
+  with <code>cargo build --release</code> in <code>desktop/src-tauri</code>, or
+  launch from a terminal outside the snap and with
+  <code>WEBKIT_DISABLE_DMABUF_RENDERER=1</code> set.</p>
+</div>
 
 <p>On Ubuntu 24.04 and later there is a third possibility worth ruling out:
 <code>kernel.apparmor_restrict_unprivileged_userns=1</code> stops WebKit's

@@ -1379,6 +1379,15 @@ without the virtualenv activated has none of them. The explanatory window it
 opens is built from a `data:` URL, so on a machine where that will not render,
 the window is not a diagnosis; stderr is.
 
+**Two Linux environments the shell defends itself against**, both of which
+otherwise present as "WebKit encountered an internal error" and name nothing:
+WebKitGTK's DMA-BUF renderer, which segfaults the web process on many graphics
+stacks and is disabled at startup unless you set the variable yourself; and the
+environment of a snap-confined terminal such as VS Code's, whose `GTK_PATH`,
+`LOCPATH` and `GIO_MODULE_DIR` make WebKit's helper processes load that snap's C
+library and die on `undefined symbol: __libc_pthread_init`. Those variables are
+dropped when `SNAP` is set and the executable is not itself inside `/snap`.
+
 **A missing Studio is explained rather than 404'd.** `npm run build` output is
 generated and not committed, so a fresh clone serves an API and no interface.
 `/` returns a page saying so and how to build one; `/api` keeps its own 404s.

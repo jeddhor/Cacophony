@@ -581,6 +581,66 @@ class TestAMissingStudioSaysSo:
         assert "no Studio has been built" in errors
 
 
+class TestTheShellSurvivesTheHostEnvironment:
+    """Two Linux failures that both present as "WebKit encountered an internal error".
+
+    Neither is a bug in this application, and both were measured on the machine
+    this was written on rather than taken from a forum post. What a user sees in
+    each case is a window containing a sentence about a WebKit bug, which is
+    worse than useless: it points away from the cause.
+    """
+
+    @staticmethod
+    def _source() -> str:
+        return (DESKTOP / "src" / "main.rs").read_text(encoding="utf-8")
+
+    def test_the_crashing_renderer_is_turned_off(self) -> None:
+        """WebKitGTK's DMA-BUF renderer segfaults the web process here.
+
+        Verified both ways: with it on, an AMD/Mesa Wayland session and a
+        virtual X display with no DRI3 both segfault; with it off, both run.
+        Forcing software GL does not help, which is what places the fault in
+        that renderer rather than in the driver under it.
+        """
+        source = self._source()
+        assert 'set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1")' in source
+        # Only when nobody has said otherwise: a machine where the fast path
+        # works should be allowed to use it.
+        assert 'var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()' in source
+
+    def test_another_snap_s_libraries_are_dropped(self) -> None:
+        """Launching from a snap-confined terminal poisons the environment.
+
+        VS Code's integrated terminal is the common case: GTK_PATH, LOCPATH and
+        friends point into /snap, WebKit's helper processes load that snap's
+        glibc in preference to the system's, and the network process dies with
+        `undefined symbol: __libc_pthread_init`.
+        """
+        source = self._source()
+        for name in ("GTK_PATH", "LOCPATH", "GIO_MODULE_DIR", "LD_LIBRARY_PATH"):
+            assert name in source, name
+        # Guarded, so a genuine snap build of this application is left alone.
+        assert 'var_os("SNAP")' in source
+        assert 'starts_with("/snap/")' in source
+
+    def test_both_run_before_anything_else(self) -> None:
+        """Environment first: GTK reads it as it initialises."""
+        source = self._source()
+        body = source[source.index("fn main() {") :]
+        assert body.index("survive_webkit()") < body.index("start_backend()")
+        assert body.index("escape_somebody_elses_snap()") < body.index("start_backend()")
+
+    @pytest.mark.skipif(
+        not (REPO / "desktop/src-tauri/target/release/cacophony-desktop").is_file(),
+        reason="no release binary built",
+    )
+    def test_the_built_binary_has_them(self) -> None:
+        """A source fix nobody compiled is a source fix nobody has."""
+        binary = (REPO / "desktop/src-tauri/target/release/cacophony-desktop").read_bytes()
+        assert b"WEBKIT_DISABLE_DMABUF_RENDERER" in binary
+        assert b"GIO_MODULE_DIR" in binary
+
+
 class TestTheShellReportsWhyItFailed:
     """A window that cannot render is not a diagnosis.
 
