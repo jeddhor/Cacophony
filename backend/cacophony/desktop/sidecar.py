@@ -178,6 +178,17 @@ def run_sidecar(
     chosen_token = token if token is not None else make_token()
 
     app = create_app(store_path=store_path, static_dir=studio, token=chosen_token or None)
+
+    if getattr(app.state, "studio_root", None) is None:
+        # On stderr, always - the shell passes our stderr through to the
+        # terminal it was launched from, and a window showing nothing but a
+        # 404 is the least useful way to learn this.
+        print(
+            "cacophony: no Studio has been built, so the window will have nothing to show.\n"
+            "           npm --prefix frontend install && npm --prefix frontend run build",
+            file=sys.stderr,
+            flush=True,
+        )
     config = uvicorn.Config(
         app,
         host=host,

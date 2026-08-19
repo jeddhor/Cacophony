@@ -67,7 +67,17 @@ struct Ready {
 fn main() {
     match start_backend() {
         Ok((child, ready)) => run_window(child, ready),
-        Err(message) => run_failure_window(&message),
+        Err(message) => {
+            // On stderr first, and unconditionally. The window below is a
+            // courtesy for somebody who double-clicked an icon; a terminal gets
+            // the reason whatever the webview then makes of it. Without this,
+            // a backend that could not be found produced no output at all and
+            // every symptom was whatever WebKit happened to say - which on a
+            // machine where the failure page will not render is "WebKit
+            // encountered an internal error", a sentence about nothing.
+            eprintln!("cacophony-desktop: {message}");
+            run_failure_window(&message);
+        }
     }
 }
 
@@ -242,7 +252,7 @@ fn run_failure_window(message: &str) {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("could not start the Cacophony window");
+        .expect("could not show the Cacophony error window; the reason is on stderr above");
 }
 
 fn html_escape(text: &str) -> String {

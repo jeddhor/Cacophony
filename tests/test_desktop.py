@@ -514,3 +514,84 @@ class TestServeIsUnchanged:
         )
         assert "from ..api.app import create_app" in cli
         assert "from ..api.app import create_app" in sidecar
+
+
+class TestAMissingStudioSaysSo:
+    """A fresh clone has no built Studio, and the window has to explain itself.
+
+    `npm run build` output is generated rather than committed, so the interface
+    is absent until somebody builds it. Answering `/` with FastAPI's
+    `{"detail":"Not Found"}` is true and reads as "the server is broken" — which
+    cost a day of looking in the wrong place.
+    """
+
+    def test_the_root_explains_rather_than_404s(self, store: Path) -> None:
+        from fastapi.testclient import TestClient
+
+        # A directory with no Studio in it, so the bundled one cannot be found.
+        with TestClient(app_with_token(store, None, studio=Path("/nonexistent/studio"))) as client:
+            response = client.get("/")
+            assert response.status_code == 200
+            assert "not built" in response.text
+            assert "npm" in response.text
+
+    def test_a_client_side_route_gets_the_same_explanation(self, store: Path) -> None:
+        from fastapi.testclient import TestClient
+
+        with TestClient(app_with_token(store, None, studio=Path("/nonexistent/studio"))) as client:
+            assert client.get("/runs/abc123").status_code == 200
+
+    def test_the_api_keeps_its_own_404s(self, store: Path) -> None:
+        """A client asking for a route that does not exist is told that."""
+        from fastapi.testclient import TestClient
+
+        with TestClient(app_with_token(store, None, studio=Path("/nonexistent/studio"))) as client:
+            response = client.get("/api/nothing-here")
+            assert response.status_code == 404
+            assert response.json() == {"detail": "Not Found"}
+
+    def test_the_api_still_works(self, store: Path) -> None:
+        from fastapi.testclient import TestClient
+
+        with TestClient(app_with_token(store, None, studio=Path("/nonexistent/studio"))) as client:
+            assert client.get("/api/system").status_code == 200
+
+    def test_the_sidecar_warns_on_stderr(self, tmp_path: Path) -> None:
+        """The shell passes our stderr through, so this reaches the terminal."""
+        process = subprocess.Popen(
+            [
+                str(CLI),
+                "desktop",
+                "--store",
+                str(tmp_path / "store.db"),
+                "--studio",
+                str(tmp_path / "no-studio-here"),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        try:
+            read_handshake(process)
+        finally:
+            process.stdin.close()  # type: ignore[union-attr]
+            _, errors = process.communicate(timeout=30)
+        assert "no Studio has been built" in errors
+
+
+class TestTheShellReportsWhyItFailed:
+    """A window that cannot render is not a diagnosis.
+
+    When the backend cannot be found the shell used to print nothing at all and
+    open a window built from a `data:` URL. On a machine where WebKit will not
+    render that, the only symptom is "WebKit encountered an internal error" —
+    a sentence about nothing. The reason goes to stderr first now.
+    """
+
+    def test_the_source_prints_before_it_opens_anything(self) -> None:
+        source = (REPO / "desktop/src-tauri/src/main.rs").read_text(encoding="utf-8")
+        failure = source[source.index("fn main()") : source.index("/// Spawn the backend")]
+        assert "eprintln!" in failure
+        assert failure.index("eprintln!") < failure.index("run_failure_window")

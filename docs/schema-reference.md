@@ -1372,6 +1372,17 @@ Run by hand in a terminal, the backend says as much and offers its URL and token
 for a browser. Run by the shell, which gives it pipes rather than a terminal, it
 says nothing but the handshake.
 
+**When the shell cannot find a backend it prints the reason to stderr** before
+it opens anything. It looks for `CACOPHONY_BACKEND`, then a bundled
+`cacophony-backend` beside itself, then `cacophony` on `PATH` — and a terminal
+without the virtualenv activated has none of them. The explanatory window it
+opens is built from a `data:` URL, so on a machine where that will not render,
+the window is not a diagnosis; stderr is.
+
+**A missing Studio is explained rather than 404'd.** `npm run build` output is
+generated and not committed, so a fresh clone serves an API and no interface.
+`/` returns a page saying so and how to build one; `/api` keeps its own 404s.
+
 | Property | Why |
 |---|---|
 | A port the OS chose | A fixed 8765 collides with the `cacophony serve` already running |

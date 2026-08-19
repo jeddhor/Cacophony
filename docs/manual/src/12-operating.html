@@ -93,10 +93,52 @@ on <code>PATH</code>. In a checkout, point it at the virtualenv:</p>
 <pre><code class="language-console">$ CACOPHONY_BACKEND=$PWD/.venv/bin/cacophony \
       ./desktop/src-tauri/target/debug/cacophony-desktop</code></pre>
 
-<h2>The Studio is a blank page</h2>
+<h2>The server answers <code>{"detail":"Not Found"}</code></h2>
 
-<p>The front-end has not been built. <code>npm --prefix frontend run build</code>
-writes it into the package where the server looks for it.</p>
+<p>That is FastAPI saying there is no route for <code>/</code>, which means no
+Studio is mounted. It is built by <code>npm --prefix frontend run build</code>
+and written into the package; a fresh clone has none, because generated output
+is not committed. The server now says so at <code>/</code> and on startup
+instead of returning a bare 404.</p>
+
+<p>If you <em>have</em> built it and still get this, check which package is
+being imported:</p>
+
+<pre><code class="language-console">$ python -c "import cacophony; print(cacophony.__file__)"</code></pre>
+
+<p>It should print a path under <code>backend/</code>. If it prints one under
+<code>site-packages/</code>, the install is a <em>copy</em> rather than an
+editable one &mdash; and that copy has no Studio in it, and no code you have
+edited since. <code>pip install -e .</code> puts it back.</p>
+
+<h2>The window shows "WebKit encountered an internal error"</h2>
+
+<p>That is the webview's web process failing, and there are two quite different
+reasons for it.</p>
+
+<p>The likelier one is that the shell never got a backend at all. It looks for
+<code>CACOPHONY_BACKEND</code>, then a bundled <code>cacophony-backend</code>
+beside itself, then <code>cacophony</code> on <code>PATH</code> &mdash; and a
+terminal without the virtualenv activated has none of the three. It then opens a
+window built from a <code>data:</code> URL to explain itself, and if
+<em>that</em> will not render, the only thing you see is WebKit's error page.
+The reason is printed to stderr as well now, so a terminal always tells you.
+Point it at the backend explicitly:</p>
+
+<pre><code class="language-console">$ CACOPHONY_BACKEND=$PWD/.venv/bin/cacophony \
+      ./desktop/src-tauri/target/release/cacophony-desktop</code></pre>
+
+<p>The other reason is the renderer. WebKitGTK's DMA-BUF path crashes on some
+driver and compositor combinations, which is the single most common Tauri
+complaint on Linux:</p>
+
+<pre><code class="language-console">$ WEBKIT_DISABLE_DMABUF_RENDERER=1 ./desktop/src-tauri/target/release/cacophony-desktop
+$ WEBKIT_DISABLE_COMPOSITING_MODE=1 ./desktop/src-tauri/target/release/cacophony-desktop
+$ GDK_BACKEND=x11 ./desktop/src-tauri/target/release/cacophony-desktop</code></pre>
+
+<p>On Ubuntu 24.04 and later there is a third possibility worth ruling out:
+<code>kernel.apparmor_restrict_unprivileged_userns=1</code> stops WebKit's
+sandbox starting its web process. <code>sysctl</code> says whether it is on.</p>
 
 <h1>Operating notes</h1>
 

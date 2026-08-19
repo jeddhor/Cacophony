@@ -435,10 +435,25 @@ class TestStaticStudio:
             # And the API must not be shadowed by the fallback.
             assert client.get("/api/system").status_code == 200
 
-    def test_nothing_is_mounted_without_a_build(self, service) -> None:
+    def test_without_a_build_the_root_explains_itself(self, service) -> None:
+        """It used to be a bare 404, which reads as "the server is broken".
+
+        The Studio is generated output and is not committed, so a fresh clone
+        genuinely has none - and being told `{"detail":"Not Found"}` when you
+        ask for the interface sends you looking at the wrong thing entirely.
+        """
         with TestClient(create_app(service=service, static_dir="/nonexistent")) as client:
             assert client.get("/api/system").status_code == 200
-            assert client.get("/").status_code == 404
+
+            page = client.get("/")
+            assert page.status_code == 200
+            assert "not built" in page.text
+            assert "npm" in page.text
+
+            # The API is a client of this server too, and keeps its own 404s.
+            missing = client.get("/api/nothing-here")
+            assert missing.status_code == 404
+            assert missing.json() == {"detail": "Not Found"}
 
 
 # --------------------------------------------------------------------------- #

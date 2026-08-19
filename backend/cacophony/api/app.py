@@ -892,6 +892,7 @@ def _mount_studio(app: FastAPI, static_dir: str | Path | None) -> None:
     """
     root = Path(static_dir) if static_dir else _bundled_studio()
     if root is None or not root.is_dir():
+        _explain_the_missing_studio(app, Path(static_dir) if static_dir else _studio_home())
         return
 
     from fastapi.responses import FileResponse
@@ -911,6 +912,49 @@ def _mount_studio(app: FastAPI, static_dir: str | Path | None) -> None:
         return FileResponse(index)
 
     app.state.studio_root = root
+
+
+def _studio_home() -> Path:
+    """Where a built Studio is expected to live inside the package."""
+    return Path(__file__).resolve().parent / "static"
+
+
+def _explain_the_missing_studio(app: FastAPI, expected: Path) -> None:
+    """Answer ``/`` with the reason there is nothing there.
+
+    The Studio is built by ``npm run build`` and is deliberately not committed,
+    so a fresh clone serves an API and no interface. Without this, asking for
+    the interface returns ``{"detail":"Not Found"}`` - which is FastAPI saying
+    there is no route, and reads to everybody else as "the server is broken".
+    The API is unaffected and keeps its own 404s.
+    """
+    from fastapi.responses import HTMLResponse, JSONResponse
+
+    page = f"""<!doctype html><meta charset="utf-8"><title>Cacophony</title>
+<style>body{{background:#12121a;color:#e8e8f0;font:15px/1.6 system-ui,sans-serif;
+margin:0;display:grid;place-items:center;height:100vh}}main{{max-width:40rem;padding:2rem}}
+h1{{font-size:1rem;letter-spacing:.14em;text-transform:uppercase;color:#b388ff}}
+code{{background:#1e1e2a;padding:.1em .4em;border-radius:3px}}
+p{{color:#c9c9d6}}</style>
+<main><h1>Cacophony</h1>
+<p>The API is running. The Schema Studio is not built, so there is no interface
+to show you.</p>
+<p>It is generated output rather than source, which is why a fresh clone does not
+have one. Build it:</p>
+<p><code>npm --prefix frontend install &amp;&amp; npm --prefix frontend run build</code></p>
+<p>It is written to <code>{expected}</code>, and this server picks it up on the
+next start. Meanwhile the API is at <code>/api</code> and its documentation at
+<code>/docs</code>.</p></main>"""
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def studio_missing(full_path: str) -> Any:
+        # The API keeps its own 404s: a client asking for a route that does not
+        # exist should be told that, not handed a web page.
+        if full_path.startswith("api"):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+        return HTMLResponse(page, status_code=200)
+
+    app.state.studio_root = None
 
 
 def _bundled_studio() -> Path | None:
