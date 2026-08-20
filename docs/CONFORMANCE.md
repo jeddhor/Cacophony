@@ -43,7 +43,7 @@ declined, with the reason recorded. Those are collected at the end.
 | 28 | Generation Planner | built |  |
 | 29 | Job System | built |  |
 | 30 | Parallelism | built |  |
-| 31 | Streaming Generation | built |  |
+| 31 | Streaming Generation | built | Everything streams, and the last structure whose size was the dataset - the set of values behind `unique: true` - is now bounded, spilling to a disk-backed index above a stated ceiling without giving up exactness. |
 | 32 | Checkpointing | built |  |
 | 33 | Output Formats | partial | The section's own "Initial support" list is complete, partitioned directories included. Its "Later" list is not built. Not built: PostgreSQL, MySQL/MariaDB, SQL Server, MongoDB. |
 | 34 | Output Profiles | built | `--output-profile`, with partitioning. |

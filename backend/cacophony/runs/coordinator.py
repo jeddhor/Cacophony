@@ -636,6 +636,7 @@ class Conductor:
                 run_id=self.run_id,
                 runtime=self.runtime,
                 assets=self.assets,
+                unique_memory_ceiling=self.config.limits.unique_memory_values,
                 edge_cases=self.config.edge_cases,
                 edge_categories=self.config.edge_categories,
                 # What this run will actually produce, which is not what the

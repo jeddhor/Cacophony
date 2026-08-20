@@ -1175,6 +1175,18 @@ concurrently), `--checkpoint-every N`, `--store FILE`, `--no-history`,
 `generate` also accepts `--edge-cases FRACTION` and
 `--edge-categories a,b,c` — see [Edge cases](#edge-cases) below.
 
+**Uniqueness is bounded.** Enforcing `unique: true` means remembering every
+value a field has produced. Those values live in memory up to
+`unique_memory_values` (250,000 per field by default) and then move to a
+disk-backed index with a unique constraint, which keeps the check exact while
+keeping the memory flat — section 31's requirement. A run that spills says so in
+its validation summary. Measured on a million short strings: 103.6 MB held
+entirely in memory in 3.9 s, against 25.9 MB and 7.3 s when spilling.
+
+Exact rather than probabilistic, deliberately: a Bloom filter would be smaller
+again and would sometimes report a duplicate that is not one, and a validator
+that cries wolf about a primary key is worse than no validator.
+
 Exit code `4` means a run was cancelled rather than failed.
 
 ---

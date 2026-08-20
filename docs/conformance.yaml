@@ -55,7 +55,12 @@ sections:
   - {section: 28, state: implemented}
   - {section: 29, state: implemented}
   - {section: 30, state: implemented}
-  - {section: 31, state: implemented}
+  - section: 31
+    state: implemented
+    note: >
+      Everything streams, and the last structure whose size was the dataset -
+      the set of values behind `unique: true` - is now bounded, spilling to a
+      disk-backed index above a stated ceiling without giving up exactness.
   - {section: 32, state: implemented}
   - section: 33
     state: partial

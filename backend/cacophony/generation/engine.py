@@ -41,6 +41,7 @@ from ..core.seeds import SeedChain
 from ..core.types import coerce_value
 from ..validation.pipeline import RecordValidator
 from ..validation.results import ValidationResult
+from ..validation.uniqueness import DEFAULT_MEMORY_CEILING
 from .relations import EntityResolver
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -146,6 +147,7 @@ class GenerationEngine:
         edge_cases: float = 0.0,
         edge_categories: list[str] | None = None,
         patches: bool = True,
+        unique_memory_ceiling: int = DEFAULT_MEMORY_CEILING,
     ) -> None:
         for name, policy in (("failure", failure_policy), ("validation", validation_policy)):
             if policy is not None and policy not in FailurePolicy.ALL:
@@ -192,6 +194,7 @@ class GenerationEngine:
         #: kept for the whole run: a repeat is only interesting relative to
         #: everything generated before it, so a per-batch detector would find
         #: almost nothing.
+        self.unique_memory_ceiling = max(1, unique_memory_ceiling)
         self._detectors: dict[str, Any] = {}
         self._judges: dict[str, Any] = {}
         self.detect_duplicates = detect_duplicates
@@ -1122,6 +1125,7 @@ class GenerationEngine:
                 resolver=self.resolver,
                 reference_sample_every=self.reference_sample_every,
                 privacy=self.compiled.spec.privacy,
+                unique_memory_ceiling=self.unique_memory_ceiling,
             )
             self._validators[entity.name] = validator
         return validator

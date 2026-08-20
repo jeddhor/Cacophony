@@ -31,6 +31,10 @@ class ResourceLimits:
     max_workers: int = 4
     #: Records held between writes. The real memory ceiling (section 31).
     batch_size: int = 1_000
+    #: Values one unique field may hold in memory before the check spills to a
+    #: disk-backed index (section 31). The check stays exact either way; this
+    #: decides where the memory goes.
+    unique_memory_values: int = 250_000
     #: Records per language-model call in batch mode.
     llm_batch_size: int = 20
     #: Refuse to start if the destination has less than this much space free.

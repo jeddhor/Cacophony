@@ -19,6 +19,7 @@ from .logical import LogicalValidator
 from .privacy import PrivacyValidator
 from .referential import ReferentialValidator, StatisticalValidator
 from .results import Severity, ValidationResult, ValidationStats
+from .uniqueness import DEFAULT_MEMORY_CEILING, UniqueTracker
 from .validators import ConstraintValidator, StructuralValidator
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -34,11 +35,12 @@ class RecordValidator:
     """Validates whole records for one entity.
 
     Also enforces field-level ``unique: true`` by remembering the values it has
-    seen. That set is bounded by the number of unique fields, not by the size
-    of the dataset, but it is still per-entity state - so a ten-million-row run
-    with a unique field will hold ten million hashes. The linter warns when a
-    generator provably cannot satisfy uniqueness; enforcing it at scale without
-    that memory is a job for the relational phase's key pools.
+    seen. That memory used to grow with the dataset - a ten-million-row run held
+    ten million values for its whole duration, which is exactly the shape section
+    31 says nothing here should have. It is now bounded: see
+    :class:`~cacophony.validation.uniqueness.UniqueTracker`, which holds values
+    in a set up to a stated ceiling and spills to a disk-backed index after that,
+    without giving up exactness.
     """
 
     def __init__(
@@ -49,6 +51,7 @@ class RecordValidator:
         resolver: EntityResolver | None = None,
         reference_sample_every: int = 1,
         privacy: PrivacySpec | None = None,
+        unique_memory_ceiling: int = DEFAULT_MEMORY_CEILING,
     ) -> None:
         self.entity = entity
         self.stats = ValidationStats()
@@ -85,7 +88,10 @@ class RecordValidator:
             if track_unique
             else []
         )
-        self._seen: dict[str, set[Any]] = {name: set() for name in self._unique_fields}
+        self._seen: dict[str, UniqueTracker] = {
+            name: UniqueTracker(name, memory_ceiling=unique_memory_ceiling)
+            for name in self._unique_fields
+        }
 
         #: What the most recently validated record added to ``_seen``, so that a
         #: record which is then discarded can give its values back.
@@ -162,8 +168,7 @@ class RecordValidator:
             value = record.values.get(name)
             if value is None:
                 continue
-            key = _hashable(value)
-            if key in self._seen[name]:
+            if not self._seen[name].add(value):
                 result.add(
                     "uniqueness",
                     f"duplicate value {value!r} for a field declared unique",
@@ -172,8 +177,7 @@ class RecordValidator:
                     value=value,
                 )
             else:
-                self._seen[name].add(key)
-                self._last_added.append((name, key))
+                self._last_added.append((name, value))
 
         self.stats.record(result)
         return result
@@ -186,14 +190,15 @@ class RecordValidator:
         address, and a later record that produced the same address would be
         rejected as a duplicate of a record nobody has.
         """
-        for name, key in self._last_added:
-            self._seen[name].discard(key)
+        for name, value in self._last_added:
+            self._seen[name].forget([value])
         self._last_added = []
 
     def reset(self) -> None:
         """Clear per-run state so the validator can be reused for another pass."""
         self.stats = ValidationStats()
-        self._seen = {name: set() for name in self._unique_fields}
+        for tracker in self._seen.values():
+            tracker.reset()
         self._last_added = []
         self.statistical = StatisticalValidator(self.entity)
 
@@ -204,21 +209,13 @@ class RecordValidator:
             data["referential"] = self.referential.to_dict()
         if self.privacy is not None and not self.privacy.is_noop:
             data["privacy"] = self.privacy.summary()
+        spilled = [
+            tracker.summary() for tracker in self._seen.values() if tracker.summary()["spilled"]
+        ]
+        if spilled:
+            # Worth saying: it is the one thing in a run whose memory profile
+            # changed shape, and somebody reading a slow run should know why.
+            data["uniqueness_spilled"] = spilled
         if not self.statistical.is_noop:
             data["statistical"] = self.statistical.to_dict()
         return data
-
-
-def _hashable(value: Any) -> Any:
-    """Make a generated value usable as a set member."""
-    if isinstance(value, (list, tuple)):
-        return tuple(_hashable(item) for item in value)
-    if isinstance(value, dict):
-        return tuple(sorted((key, _hashable(item)) for key, item in value.items()))
-    if isinstance(value, set):
-        return frozenset(_hashable(item) for item in value)
-    try:
-        hash(value)
-    except TypeError:
-        return repr(value)
-    return value

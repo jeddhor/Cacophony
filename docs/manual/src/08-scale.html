@@ -239,12 +239,43 @@ Measured on ordinary hardware: 124&nbsp;MB and 400,000 records delivered in
   <tbody>
     <tr><td>Near-duplicate detection</td><td>A sliding window of recent values</td><td><code>quality.duplication.window</code>, default 50,000</td></tr>
     <tr><td>Exact duplicate detection</td><td>A Bloom filter</td><td>About 18&nbsp;MB for ten million values</td></tr>
-    <tr><td>Uniqueness validation</td><td>Seen values for unique fields</td><td>The number of unique fields &times; record count</td></tr>
+    <tr><td>Uniqueness validation</td><td>Seen values, then a disk-backed index</td><td><code>--unique-memory</code>, default 250,000 values per field</td></tr>
     <tr><td>Streaming simulation state</td><td>Per-subject state</td><td>Number of active subjects</td></tr>
     <tr><td>Parquet writing</td><td>A row group</td><td><code>--batch-size</code></td></tr>
     <tr><td>SQLite output</td><td>A transaction</td><td><code>--batch-size</code></td></tr>
   </tbody>
 </table>
+
+<h2>The one that used to grow</h2>
+
+<p>Enforcing <code>unique: true</code> means remembering every value the field
+has produced, and a set of those is a structure whose size is the number of
+records &mdash; the one shape this chapter says nothing here has. A ten-million
+row run held ten million values for its whole duration.</p>
+
+<p>It is bounded now. Values live in a set up to a stated ceiling; after that the
+set is written to a disk-backed index with a unique constraint and every later
+value is asked of that. Measured on a million short strings:</p>
+
+<table class="compact">
+  <thead><tr><th></th><th class="num">Peak memory</th><th class="num">Time</th></tr></thead>
+  <tbody>
+    <tr><td>Held entirely in memory</td><td class="num">103.6 MB</td><td class="num">3.9 s</td></tr>
+    <tr><td>Spilling at 250,000</td><td class="num">25.9 MB</td><td class="num">7.3 s</td></tr>
+  </tbody>
+</table>
+
+<p>Four times less memory for twice the time, and the run says when it spilled so
+a slower run is explicable rather than mysterious. Most runs never reach the
+ceiling and pay neither.</p>
+
+<div class="callout quiet">
+  <span class="callout-title">Exactness was not the thing traded</span>
+  <p>A Bloom filter would be smaller and faster still, and would occasionally
+  report a duplicate that is not one. A validator that cries wolf about a primary
+  key is worse than no validator, so what is stored is the value rather than a
+  digest of it: a collision cannot be mistaken for a repeat.</p>
+</div>
 
 <h2>Tuning</h2>
 
@@ -254,6 +285,7 @@ Measured on ordinary hardware: 124&nbsp;MB and 400,000 records delivered in
     <tr><td class="mono">--batch-size</td><td>Writing Parquet or SQLite, where larger batches are much faster</td><td>Memory is tight, or you want finer checkpoints</td></tr>
     <tr><td class="mono">--workers</td><td>Several independent entities and spare cores</td><td>One entity dominates; extra workers do nothing</td></tr>
     <tr><td class="mono">--llm-batch-size</td><td>Prose volume matters more than nuance</td><td>Answers are drifting or being clipped</td></tr>
+    <tr><td class="mono">unique_memory_values</td><td>Memory is plentiful and a unique field is large</td><td>Memory is tight; the check moves to disk sooner</td></tr>
     <tr><td class="mono">--checkpoint-every</td><td>Checkpointing shows up in the profile</td><td>An interrupted run must lose very little</td></tr>
     <tr><td class="mono">provider concurrency</td><td>The model server has headroom</td><td>You have one GPU; set it to 1</td></tr>
   </tbody>
