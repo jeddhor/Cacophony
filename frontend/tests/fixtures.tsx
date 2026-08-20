@@ -14,8 +14,10 @@ import { MemoryRouter } from "react-router-dom";
 import type {
   EntityView,
   FieldView,
+  OutputsView,
   PlanView,
   PreviewResult,
+  ProvidersView,
   RunView,
   SchemaView,
 } from "../src/api/types";
@@ -188,6 +190,8 @@ export const planFixture: PlanView = {
         image_calls: 0,
         speech_calls: 0,
         estimated_bytes: 4_000_000,
+        llm_tokens: 1_100_000,
+        peak_memory_bytes: 12_000_000,
       },
     },
     {
@@ -203,6 +207,8 @@ export const planFixture: PlanView = {
         image_calls: 0,
         speech_calls: 0,
         estimated_bytes: 200_000,
+        llm_tokens: 0,
+        peak_memory_bytes: 3_000_000,
       },
     },
   ],
@@ -213,8 +219,107 @@ export const planFixture: PlanView = {
     image_calls: 0,
     speech_calls: 0,
     estimated_bytes: 4_200_000,
+    llm_tokens: 1_100_000,
+    peak_memory_bytes: 12_000_000,
   },
   warnings: [],
+};
+
+/** `GET /api/outputs?project_id=` for the corporate-directory template. */
+export const outputsFixture: OutputsView = {
+  formats: [
+    {
+      name: "jsonl",
+      extension: ".jsonl",
+      aliases: ["ndjson"],
+      single_file: false,
+      partitionable: true,
+      summary: "One JSON object per line - the default for large datasets.",
+    },
+    {
+      name: "csv",
+      extension: ".csv",
+      aliases: [],
+      single_file: false,
+      partitionable: true,
+      summary: "Comma-separated values.",
+    },
+    {
+      name: "json",
+      extension: ".json",
+      aliases: [],
+      single_file: false,
+      partitionable: true,
+      summary: "A single JSON array.",
+    },
+    {
+      name: "parquet",
+      extension: ".parquet",
+      aliases: [],
+      single_file: false,
+      partitionable: true,
+      summary: "Apache Parquet, written incrementally with PyArrow.",
+    },
+    {
+      name: "sqlite",
+      extension: ".db",
+      aliases: [],
+      single_file: true,
+      partitionable: false,
+      summary: "Write an entity into a table of a SQLite database.",
+    },
+    {
+      name: "sql",
+      extension: ".sql",
+      aliases: [],
+      single_file: false,
+      partitionable: true,
+      summary: "Write an entity as a SQL script.",
+    },
+  ],
+  profiles: [
+    {
+      name: "developer_db",
+      format: "jsonl",
+      path: "out/corporate",
+      entities: [],
+      partition_by: [],
+      options: {},
+    },
+    {
+      name: "analytics",
+      format: "parquet",
+      path: "out/corporate-analytics",
+      entities: [],
+      partition_by: ["department"],
+      options: {},
+    },
+  ],
+  chaos: false,
+};
+
+export const providersFixture: ProvidersView = {
+  adapters: ["mock", "ollama", "procedural_image", "procedural_speech"],
+  aliases: {},
+  kinds: {
+    mock: "language_model",
+    ollama: "language_model",
+    procedural_image: "image",
+    procedural_speech: "speech",
+  },
+  configured: [
+    {
+      id: "assistant",
+      type: "language_model",
+      adapter: "mock",
+      base_url: null,
+      model: "mock-1",
+      concurrency: 2,
+      timeout_seconds: 120,
+      secret_id: null,
+      options: {},
+    },
+  ],
 };
 
 export const previewFixture: PreviewResult = {

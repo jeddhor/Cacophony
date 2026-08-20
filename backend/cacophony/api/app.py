@@ -295,6 +295,36 @@ def create_app(
         registry = load_plugins(force=True)
         return {"categories": sorted(CATEGORIES), **registry.describe()}
 
+    @app.get("/api/outputs", tags=["system"])
+    async def outputs(project_id: int | None = Query(default=None)) -> dict[str, Any]:
+        """Where a run can write: the formats, and a project's declared layouts.
+
+        Formats come from the writer registry rather than a list written out
+        here, so the interface offers what the run would actually accept
+        (sections 33, 34).
+        """
+        from ..outputs import describe_formats
+
+        payload: dict[str, Any] = {"formats": describe_formats(), "profiles": []}
+        if project_id is not None:
+            compiled, _revision, _name = runs.load_for_run(project_id)
+            payload["profiles"] = [
+                {
+                    "name": name,
+                    "format": profile.format,
+                    "path": profile.path,
+                    "entities": list(profile.entities),
+                    "partition_by": list(profile.partition_by),
+                    "options": dict(profile.options),
+                }
+                for name, profile in compiled.spec.outputs.items()
+            ]
+            # Section 33's damage warning, decided here rather than in the
+            # browser: whether a schema injects damage is a property of the
+            # compiled project.
+            payload["chaos"] = compiled.spec.chaos.is_enabled()
+        return payload
+
     @app.get("/api/generators", tags=["system"])
     async def generators() -> list[dict[str, Any]]:
         from ..generation.registry import REGISTRY
@@ -503,7 +533,14 @@ def create_app(
     @app.post("/api/projects/{project_id}/runs", status_code=202, tags=["runs"])
     async def create_run(project_id: int, body: CreateRunRequest) -> dict[str, Any]:
         _found(runs.repository.get_project(project_id), "project")
-        return await runs.start_run(project_id, body.to_config())
+        # The output profiles are the project's, so the request cannot be
+        # turned into a run configuration without loading it first (section 34).
+        compiled, _revision, _name = runs.load_for_run(project_id)
+        try:
+            config = body.to_config(compiled.spec.outputs)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return await runs.start_run(project_id, config)
 
     # -- runs --------------------------------------------------------------- #
 
@@ -843,7 +880,9 @@ def create_app(
                     "base_url": spec.base_url,
                     "model": spec.model,
                     "concurrency": spec.concurrency,
+                    "timeout_seconds": spec.timeout_seconds,
                     "secret_id": spec.secret,
+                    "options": dict(spec.options),
                 }
                 for spec in compiled.spec.providers.values()
             ]

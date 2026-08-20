@@ -214,6 +214,47 @@ class TestRuns:
         )
         assert response.status_code == 422
 
+    def test_an_output_profile_decides_the_layout(
+        self, client, project_id, tmp_path, monkeypatch
+    ) -> None:
+        """Section 34: naming a layout is not the same as retyping it."""
+        # A profile's path is relative to wherever the server runs, which for
+        # this test needs to be somewhere disposable.
+        monkeypatch.chdir(tmp_path)
+        response = client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"output_profile": "developer_db", "records": 5, "entities": ["device"]},
+        )
+        assert response.status_code == 202, response.text
+        final = await_run(client, response.json()["id"])
+        assert final["state"] == "completed"
+        assert final["output_format"] == "jsonl"
+        assert final["config"]["output_profile"] == "developer_db"
+        assert (tmp_path / "out" / "corporate" / "device.jsonl").exists()
+
+    def test_an_explicit_directory_beats_the_profile(self, client, project_id, tmp_path) -> None:
+        """The precedence `generate --output-profile x -d here` already uses."""
+        response = client.post(
+            f"/api/projects/{project_id}/runs",
+            json={
+                "output_profile": "developer_db",
+                "output_dir": str(tmp_path / "elsewhere"),
+                "records": 5,
+                "entities": ["device"],
+            },
+        )
+        assert response.status_code == 202, response.text
+        await_run(client, response.json()["id"])
+        assert (tmp_path / "elsewhere" / "device.jsonl").exists()
+
+    def test_an_unknown_profile_names_the_declared_ones(self, client, project_id) -> None:
+        response = client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"output_profile": "nonesuch", "records": 5},
+        )
+        assert response.status_code == 422
+        assert "developer_db" in response.text
+
     def test_a_missing_run_is_a_404(self, client) -> None:
         assert client.get("/api/runs/nope").status_code == 404
 
@@ -494,6 +535,24 @@ class TestProvidersAndSystem:
     def test_an_unknown_provider_is_a_404(self, client, project_id) -> None:
         response = client.post("/api/providers/ghost/test", params={"project_id": project_id})
         assert response.status_code == 404
+
+    def test_output_formats_come_from_the_registry(self, client) -> None:
+        """Six formats, including the two the Studio used to leave out."""
+        body = client.get("/api/outputs").json()
+        formats = {entry["name"]: entry for entry in body["formats"]}
+        assert {"jsonl", "json", "csv", "parquet", "sqlite", "sql"} <= set(formats)
+        assert formats["sqlite"]["single_file"] is True
+        assert formats["sqlite"]["extension"] == ".db"
+        # An alias is folded into the format it names rather than offered twice.
+        assert "ndjson" in formats["jsonl"]["aliases"]
+        assert "ndjson" not in formats
+
+    def test_a_projects_declared_layouts_are_offered(self, client, project_id) -> None:
+        body = client.get("/api/outputs", params={"project_id": project_id}).json()
+        profiles = {entry["name"]: entry for entry in body["profiles"]}
+        assert profiles["analytics"]["format"] == "parquet"
+        assert profiles["developer_db"]["path"] == "out/corporate"
+        assert body["chaos"] is False
 
     def test_generators_are_listed(self, client) -> None:
         names = {row["name"] for row in client.get("/api/generators").json()}

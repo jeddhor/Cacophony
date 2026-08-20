@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ __all__ = [
     "align_to_records",
     "count_records",
     "create_writer",
+    "describe_formats",
     "output_path_for",
     "sql_type_for",
 ]
@@ -59,6 +61,46 @@ A relational output split across three files is not a relational output: the
 point of a SQLite database is that its foreign keys resolve, which they cannot
 do if each table lives in a separate file.
 """
+
+
+def describe_formats() -> list[dict[str, Any]]:
+    """Every registered format, as something an interface can offer.
+
+    The Studio used to carry a hand-written list of four, which is how it came
+    to omit the two database formats entirely. Derived from the registry
+    instead, so a format that exists is a format that can be chosen - including
+    one a plugin registers.
+
+    Aliases are folded into the format they name rather than listed beside it:
+    `ndjson` is `jsonl` under another name, and offering both as separate
+    choices only invites the question of how they differ.
+    """
+    by_writer: dict[type[FileWriter], dict[str, Any]] = {}
+    for name, writer_class in OUTPUT_FORMATS.items():
+        entry = by_writer.get(writer_class)
+        if entry is None:
+            by_writer[writer_class] = {
+                "name": name,
+                "extension": writer_class.extension,
+                "aliases": [],
+                "single_file": name in SINGLE_FILE_FORMATS,
+                "partitionable": name not in SINGLE_FILE_FORMATS,
+                "summary": _summary(writer_class),
+            }
+        else:
+            entry["aliases"].append(name)
+    return sorted(by_writer.values(), key=lambda entry: str(entry["name"]))
+
+
+def _summary(writer_class: type[FileWriter]) -> str:
+    """The first line of a writer's docstring, which is what it is for.
+
+    The design-document reference every docstring carries is for a reader of
+    the source, not for a menu, so it is trimmed here.
+    """
+    doc = (writer_class.__doc__ or "").strip().splitlines()
+    first = doc[0].strip() if doc else ""
+    return re.sub(r"\s*\((?:design document )?sections? [\d, and]+\)", "", first)
 
 
 def create_writer(fmt: str, path: str | Path, **options: Any) -> OutputWriter:

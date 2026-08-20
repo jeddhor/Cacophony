@@ -14,6 +14,7 @@ import type {
   JobView,
   LintReport,
   ModelInfo,
+  OutputsView,
   PlanView,
   PreviewResult,
   ProjectDetail,
@@ -143,6 +144,10 @@ export const api = {
   system: () => request<SystemInfo>("/system"),
   generators: () => request<GeneratorInfo[]>("/generators"),
   schemaTypes: () => request<SchemaTypesView>("/schema/types"),
+  outputs: (projectId?: number) =>
+    request<OutputsView>(
+      `/outputs${projectId !== undefined ? `?project_id=${projectId}` : ""}`,
+    ),
 
   // -- projects ---------------------------------------------------------- //
   projects: () => request<ProjectSummary[]>("/projects"),

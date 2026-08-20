@@ -47,6 +47,9 @@ OPERATIONS = (
     "remove_field",
     "rename_field",
     "move_field",
+    "add_provider",
+    "set_provider",
+    "remove_provider",
 )
 
 
@@ -318,6 +321,115 @@ def _move_field(document: Any, operation: EditOperation) -> None:
     _reorder(fields, name, operation.index)
 
 
+# -- providers (sections 43, 63, 85) ---------------------------------------- #
+
+
+def _providers(document: Any, *, create: bool = False) -> Any:
+    providers = document.get("providers")
+    if providers is None and create:
+        providers = document.setdefault("providers", CommentedMap())
+    if not isinstance(providers, dict):
+        raise SchemaError("the schema has no 'providers' mapping to edit")
+    return providers
+
+
+def _known_adapter(name: Any) -> str:
+    """Refuse an adapter this build cannot talk to, naming the ones it can.
+
+    A misspelled adapter compiles perfectly well and then decides, at run time,
+    that every language-model field is unavailable - which for a field with
+    `on_unavailable: placeholder` means a dataset of marked stand-ins rather
+    than an error. Caught here, where the person who typed it is still looking.
+    """
+    from ..providers.registry import PROVIDER_REGISTRY
+
+    text = str(name)
+    if PROVIDER_REGISTRY.resolve_adapter(text) not in PROVIDER_REGISTRY.adapters():
+        known = ", ".join(PROVIDER_REGISTRY.adapters()) or "<none registered>"
+        raise SchemaError(f"no adapter named '{text}'. Available adapters: {known}")
+    return text
+
+
+def _provider_users(document: Any, name: str) -> list[str]:
+    """Fields that name this provider, as ``entity.field``."""
+    users: list[str] = []
+    entities = document.get("entities")
+    if not isinstance(entities, dict):
+        return users
+    for entity_name, entity in entities.items():
+        fields = entity.get("fields") if isinstance(entity, dict) else None
+        if not isinstance(fields, dict):
+            continue
+        for field_name, field in fields.items():
+            if not isinstance(field, dict):
+                continue
+            options = field.get("options")
+            declared = field.get("provider") or (
+                options.get("provider") if isinstance(options, dict) else None
+            )
+            if declared == name:
+                users.append(f"{entity_name}.{field_name}")
+    return users
+
+
+def _add_provider(document: Any, operation: EditOperation) -> None:
+    name = operation.name
+    if not name:
+        raise SchemaError("add_provider needs a 'name'")
+    providers = _providers(document, create=True)
+    if name in providers:
+        raise SchemaError(f"provider '{name}' already exists")
+
+    payload = operation.value if isinstance(operation.value, dict) else {}
+    provider = CommentedMap()
+    # `adapter` decides what everything else means, so it is written first and
+    # is the one key a new provider cannot be missing.
+    provider["adapter"] = _known_adapter(payload.get("adapter", "ollama"))
+    for key, value in payload.items():
+        if key != "adapter" and value is not None:
+            provider[key] = value
+    providers[name] = provider
+
+
+def _set_provider(document: Any, operation: EditOperation) -> None:
+    if not operation.key:
+        raise SchemaError("set_provider needs a 'key'")
+    name = operation.name or operation.entity
+    if not name:
+        raise SchemaError("set_provider needs a 'name'")
+    providers = _providers(document)
+    if name not in providers:
+        known = ", ".join(providers) or "<none>"
+        raise SchemaError(f"no provider '{name}'. Configured providers: {known}")
+    if operation.key == "adapter" and operation.value is not None:
+        _known_adapter(operation.value)
+    _assign(providers[name], operation.key, operation.value)
+
+
+def _remove_provider(document: Any, operation: EditOperation) -> None:
+    name = operation.name or operation.entity
+    providers = _providers(document)
+    if name not in providers:
+        known = ", ".join(providers) or "<none>"
+        raise SchemaError(f"no provider '{name}'. Configured providers: {known}")
+
+    # A field whose provider disappears does not fail: depending on its
+    # `on_unavailable`, it emits placeholders. Removing one out from under the
+    # fields that name it would therefore be a silent change to the data.
+    users = _provider_users(document, str(name))
+    if users:
+        listed = ", ".join(users[:5]) + (f" and {len(users) - 5} more" if len(users) > 5 else "")
+        raise SchemaError(
+            f"provider '{name}' is used by {listed}. Point those fields elsewhere first."
+        )
+    del providers[name]
+    if not providers:
+        # An empty mapping with a comment still attached to it dumps as
+        # something YAML will not read back, and a `providers:` key with
+        # nothing under it says less than no key at all.
+        del document["providers"]
+
+
 def _reorder(mapping: Any, key: str, index: int) -> None:
     """Move ``key`` to ``index``, keeping every other key in order.
 
@@ -359,6 +471,9 @@ _HANDLERS = {
     "remove_field": _remove_field,
     "rename_field": _rename_field,
     "move_field": _move_field,
+    "add_provider": _add_provider,
+    "set_provider": _set_provider,
+    "remove_provider": _remove_provider,
 }
 
 
@@ -375,4 +490,7 @@ def describe_operations() -> list[dict[str, Any]]:
         {"op": "remove_field", "needs": ["entity", "name"]},
         {"op": "rename_field", "needs": ["entity", "field", "name"]},
         {"op": "move_field", "needs": ["entity", "name", "index"]},
+        {"op": "add_provider", "needs": ["name"], "optional": ["value"]},
+        {"op": "set_provider", "needs": ["name", "key"], "optional": ["value"]},
+        {"op": "remove_provider", "needs": ["name"]},
     ]

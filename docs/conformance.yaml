@@ -75,10 +75,8 @@ sections:
   - {section: 38, state: implemented}
   - {section: 39, state: implemented}
   - section: 40
-    state: partial
-    note: >
-      Every screen exists and the schema editor now has 48's and 49's
-      interactions. What is missing is 54's run controls, listed there.
+    state: implemented
+    note: "React, TypeScript, Vite, TanStack Query, Zustand and React Flow."
   - section: 41
     state: partial
     note: >
@@ -107,10 +105,11 @@ sections:
   - {section: 52, state: implemented}
   - {section: 53, state: implemented}
   - section: 54
-    state: partial
+    state: implemented
     note: >
-      The screen offers four of the six output formats, and its estimate omits
-      the units 69 names.
+      Every registered format, the project's declared output layouts, the
+      provider requirements the run actually has, and an estimate in 69's own
+      units - tokens and peak memory rather than a guess.
   - {section: 55, state: implemented}
   - {section: 56, state: implemented}
   - section: 57

@@ -356,3 +356,129 @@ def test_operations_are_documented_for_the_studio() -> None:
 def test_operation_from_dict_rejects_nonsense() -> None:
     with pytest.raises(SchemaError):
         EditOperation.from_dict({"op": "nope"})
+
+
+class TestProviders:
+    """Configuring a backend from the Studio (sections 43, 63, 85).
+
+    A provider is four lines of YAML, which is exactly the kind of thing people
+    get wrong once and then avoid. Editing it through the same patch mechanism
+    means the surrounding document survives, and that a mistake is refused
+    before it reaches the file rather than at run time.
+    """
+
+    WITH_PROVIDER = (
+        DOCUMENTED
+        + """
+providers:
+
+  # The local Ollama server.
+  local_llm:
+    adapter: ollama
+    base_url: http://localhost:11434
+    model: llama3.1:8b
+"""
+    )
+
+    def test_add_provider(self) -> None:
+        result = apply_patch(
+            DOCUMENTED,
+            [
+                {
+                    "op": "add_provider",
+                    "name": "local_llm",
+                    "value": {
+                        "adapter": "ollama",
+                        "base_url": "http://localhost:11434",
+                        "model": "llama3.1:8b",
+                        "concurrency": 4,
+                    },
+                }
+            ],
+        )
+        provider = parsed(result.source)["providers"]["local_llm"]
+        assert provider == {
+            "adapter": "ollama",
+            "base_url": "http://localhost:11434",
+            "model": "llama3.1:8b",
+            "concurrency": 4,
+        }
+        # First key, because it decides what the rest mean.
+        assert next(iter(provider)) == "adapter"
+
+    def test_set_provider_leaves_the_comment_alone(self) -> None:
+        result = apply_patch(
+            self.WITH_PROVIDER,
+            [{"op": "set_provider", "name": "local_llm", "key": "concurrency", "value": 8}],
+        )
+        assert parsed(result.source)["providers"]["local_llm"]["concurrency"] == 8
+        assert "# The local Ollama server." in result.source
+
+    def test_clearing_a_key_removes_it(self) -> None:
+        result = apply_patch(
+            self.WITH_PROVIDER,
+            [{"op": "set_provider", "name": "local_llm", "key": "model", "value": None}],
+        )
+        assert "model" not in parsed(result.source)["providers"]["local_llm"]
+
+    def test_remove_provider(self) -> None:
+        """The last one takes the empty block with it, or the file stops loading."""
+        result = apply_patch(self.WITH_PROVIDER, [{"op": "remove_provider", "name": "local_llm"}])
+        assert "providers" not in parsed(result.source)
+        assert load_project_data(parsed(result.source)).providers == {}
+
+    def test_an_unknown_adapter_is_refused_with_the_list(self) -> None:
+        """A misspelled adapter compiles, and then quietly produces nothing."""
+        with pytest.raises(SchemaError, match="Available adapters"):
+            apply_patch(
+                DOCUMENTED,
+                [{"op": "add_provider", "name": "local_llm", "value": {"adapter": "olama"}}],
+            )
+        with pytest.raises(SchemaError, match="Available adapters"):
+            apply_patch(
+                self.WITH_PROVIDER,
+                [{"op": "set_provider", "name": "local_llm", "key": "adapter", "value": "olama"}],
+            )
+
+    def test_a_provider_in_use_is_not_removed_from_under_its_fields(self) -> None:
+        source = apply_patch(
+            self.WITH_PROVIDER,
+            [
+                {
+                    "op": "add_field",
+                    "entity": "employee",
+                    "name": "biography",
+                    "value": {
+                        "type": "text",
+                        "semantic": "A short professional biography.",
+                        "generator": "llm",
+                        "provider": "local_llm",
+                    },
+                }
+            ],
+        ).source
+
+        with pytest.raises(SchemaError, match=r"employee\.biography"):
+            apply_patch(source, [{"op": "remove_provider", "name": "local_llm"}])
+
+    def test_a_credential_pasted_into_the_secret_field_is_refused(self) -> None:
+        """Section 63: project files hold secret ids, never secrets."""
+        with pytest.raises(SchemaError, match="logical secret id"):
+            apply_patch(
+                self.WITH_PROVIDER,
+                [
+                    {
+                        "op": "set_provider",
+                        "name": "local_llm",
+                        "key": "secret",
+                        "value": "sk-notarealkeybutlongenoughtolooklikeone",
+                    }
+                ],
+            )
+
+    def test_an_unknown_provider_is_named(self) -> None:
+        with pytest.raises(SchemaError, match="Configured providers"):
+            apply_patch(
+                self.WITH_PROVIDER,
+                [{"op": "set_provider", "name": "ghost", "key": "model", "value": "x"}],
+            )

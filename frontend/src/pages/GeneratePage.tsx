@@ -13,13 +13,31 @@
  * plan and warnings. The estimate reacts to the record override, because an
  * estimate for the schema's declared counts is misleading the moment someone
  * types a different number into the form.
+ *
+ * The formats and the output layouts come from the server rather than from a
+ * list kept here: this screen once offered four of the six registered formats
+ * and none of the layouts a project declares, which is what a hand-written
+ * list does the first time the registry gains something (sections 33, 34).
  */
 
 import { type ReactNode, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { useLint, usePlan, useProviders, useSchema, useStartRun } from "../api/hooks";
-import type { CreateRunBody, PlanView } from "../api/types";
+import {
+  useLint,
+  useOutputs,
+  usePlan,
+  useProviders,
+  useSchema,
+  useStartRun,
+} from "../api/hooks";
+import type {
+  CreateRunBody,
+  OutputProfileView,
+  PlanView,
+  ProviderConfig,
+  SchemaView,
+} from "../api/types";
 import { PageHead } from "../components/Layout";
 import {
   Empty,
@@ -35,10 +53,17 @@ import {
 } from "../components/ui";
 import { useStudio } from "../state/store";
 
-const FORMATS = ["jsonl", "csv", "json", "parquet"];
 const PROVENANCE = ["none", "run", "record", "field", "full"];
 const POLICIES = ["abort", "retry", "skip", "placeholder", "incomplete"];
+
 const CACHE_MODES = ["disabled", "read_only", "read_write"];
+
+/** Section 54's three provider headings, and what each one is called. */
+const REQUIREMENTS = [
+  { kind: "language_model", label: "LLM" },
+  { kind: "image", label: "Images" },
+  { kind: "speech", label: "Speech" },
+] as const;
 
 export function GeneratePage(): ReactNode {
   const navigate = useNavigate();
@@ -50,6 +75,7 @@ export function GeneratePage(): ReactNode {
   const plan = usePlan(projectId);
   const lint = useLint(projectId);
   const providers = useProviders(projectId ?? undefined);
+  const outputs = useOutputs(projectId ?? undefined);
   const start = useStartRun(projectId ?? -1);
 
   const override = form.records.trim() === "" ? null : Number(form.records);
@@ -74,13 +100,38 @@ export function GeneratePage(): ReactNode {
   if (!plan.data || !schema.data) return null;
 
   const blocking = lint.data?.issues.filter((issue) => issue.severity === "error") ?? [];
-  const needsProvider = estimate.llm_calls > 0 || estimate.image_calls > 0;
   const configured = providers.data?.configured ?? [];
+  const formats = outputs.data?.formats ?? [];
+  const profiles = outputs.data?.profiles ?? [];
+  const format = formats.find((entry) => entry.name === form.outputFormat);
+  const profile = profiles.find((entry) => entry.name === form.outputProfile);
+  const needed = requiredProviders(schema.data, selected, configured);
+  const unmet = needed.filter((requirement) => requirement.serving.length === 0);
+
+  /**
+   * Choosing a layout fills the controls it decides rather than hiding them:
+   * what a run is about to do should be visible in the form, and an edit
+   * afterwards is a deliberate override rather than a contradiction.
+   */
+  const chooseProfile = (name: string): void => {
+    const chosen = profiles.find((entry) => entry.name === name);
+    update({
+      outputProfile: name,
+      ...(chosen
+        ? {
+            outputDir: chosen.path,
+            outputFormat: chosen.format,
+            ...(chosen.entities.length > 0 ? { entities: [...chosen.entities] } : {}),
+          }
+        : {}),
+    });
+  };
 
   const submit = () => {
     const body: CreateRunBody = {
       output_dir: form.outputDir,
       output_format: form.outputFormat,
+      output_profile: form.outputProfile,
       entities: form.entities,
       records: override,
       seed: form.seed.trim() === "" ? null : Number(form.seed),
@@ -110,7 +161,7 @@ export function GeneratePage(): ReactNode {
         <Stat label="Records" value={formatNumber(estimate.records)} tone="violet" />
         <Stat
           label="Estimated tokens"
-          value={formatNumber(estimate.llm_calls * 180)}
+          value={formatNumber(estimate.llm_tokens)}
           note={`${formatNumber(estimate.llm_calls)} model calls`}
           tone="cyan"
         />
@@ -125,6 +176,13 @@ export function GeneratePage(): ReactNode {
           value={formatBytes(estimate.estimated_bytes)}
           note="approximate"
         />
+        {/* Section 69 asks for memory as well, and it is the figure that
+            decides whether a run of this size is possible on this machine. */}
+        <Stat
+          label="Peak memory"
+          value={formatBytes(estimate.peak_memory_bytes)}
+          note="one batch at a time"
+        />
       </div>
 
       <div style={{ height: 16 }} />
@@ -137,16 +195,54 @@ export function GeneratePage(): ReactNode {
         </Notice>
       )}
 
-      {needsProvider && configured.length === 0 && (
+      {unmet.length > 0 && (
         <Notice tone="warn">
-          This run needs a generation backend, but the project configures none.
-          Fields with <code>on_unavailable: placeholder</code> will emit marked
-          stand-ins; the rest will fail.
+          {unmet.map((requirement) => requirement.label).join(" and ")} generation is
+          requested by {unmet.flatMap((requirement) => requirement.fields).length} field
+          {unmet.flatMap((requirement) => requirement.fields).length === 1 ? "" : "s"}, and
+          the project configures nothing that serves it. Fields with{" "}
+          <code>on_unavailable: placeholder</code> will emit marked stand-ins; the rest
+          will fail. Configure one on the <Link to="/providers">Providers</Link> page.
+        </Notice>
+      )}
+
+      {/* The same warning `generate` prints, for the same reason: an enforced
+          schema and deliberate damage cannot both be had (section 33). */}
+      {outputs.data?.chaos && (format?.name === "sqlite" || format?.name === "sql") && (
+        <Notice tone="warn">
+          Chaos is enabled, so the tables carry no keys, uniqueness or NOT NULL —
+          the damage would be rejected by the constraints it is designed to
+          violate. Indexes are still created.
         </Notice>
       )}
 
       <div className="grid grid-2">
         <Panel title="Run">
+          {profiles.length > 0 && (
+            <div className="field-row">
+              <label htmlFor="out-profile">Layout</label>
+              <select
+                id="out-profile"
+                value={form.outputProfile}
+                onChange={(event) => chooseProfile(event.target.value)}
+              >
+                <option value="">no layout — choose below</option>
+                {profiles.map((entry) => (
+                  <option key={entry.name} value={entry.name}>
+                    {entry.name} · {entry.format}
+                  </option>
+                ))}
+              </select>
+              <div className="hint">
+                {profile ? (
+                  <ProfileSummary profile={profile} />
+                ) : (
+                  <>One of the layouts this project declares under <code>outputs:</code>.</>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="field-row">
             <label htmlFor="out-dir">Output directory</label>
             <input
@@ -154,7 +250,16 @@ export function GeneratePage(): ReactNode {
               value={form.outputDir}
               onChange={(event) => update({ outputDir: event.target.value })}
             />
-            <div className="hint">Resolved on the machine running the server.</div>
+            <div className="hint">
+              Resolved on the machine running the server.
+              {format?.single_file && (
+                <>
+                  {" "}
+                  Every entity becomes a table in one{" "}
+                  <code>cacophony{format.extension}</code> inside it.
+                </>
+              )}
+            </div>
           </div>
 
           <div className="row" style={{ gap: 10 }}>
@@ -165,12 +270,16 @@ export function GeneratePage(): ReactNode {
                 value={form.outputFormat}
                 onChange={(event) => update({ outputFormat: event.target.value })}
               >
-                {FORMATS.map((format) => (
-                  <option key={format} value={format}>
-                    {format}
+                {/* Offered by the writer registry rather than by a list kept
+                    here, which is how the two database formats came to be
+                    missing from this menu (sections 33, 54). */}
+                {formats.map((entry) => (
+                  <option key={entry.name} value={entry.name}>
+                    {entry.name}
                   </option>
                 ))}
               </select>
+              {format && <div className="hint">{format.summary}</div>}
             </div>
             <div className="field-row" style={{ flex: 1 }}>
               <label htmlFor="records">Records per entity</label>
@@ -308,19 +417,42 @@ export function GeneratePage(): ReactNode {
             Discard records that fail validation
           </label>
 
-          {configured.length > 0 && (
+          {/* Section 54 asks for provider *requirements*, not an inventory:
+              what this run needs, and what is configured to serve it. */}
+          {needed.length > 0 && (
             <div style={{ marginTop: 12 }}>
-              <div className="panel-title">Providers</div>
-              {configured.map((provider) => (
-                <div key={provider.id} className="row spread" style={{ fontSize: "0.8rem" }}>
-                  <span>{provider.id}</span>
-                  <span className="faint">
-                    {provider.adapter}
-                    {provider.model ? ` · ${provider.model}` : ""}
-                  </span>
+              <div className="panel-title">Provider requirements</div>
+              {needed.map((requirement) => (
+                <div
+                  key={requirement.kind}
+                  className="row spread"
+                  style={{ fontSize: "0.8rem" }}
+                  title={`${requirement.fields.length} field${
+                    requirement.fields.length === 1 ? "" : "s"
+                  }: ${requirement.fields.join(", ")}`}
+                >
+                  <span>{requirement.label}</span>
+                  {requirement.serving.length > 0 ? (
+                    <span className="faint">
+                      {requirement.serving
+                        .map((provider) =>
+                          [provider.id, provider.model].filter(Boolean).join(" / "),
+                        )
+                        .join(", ")}
+                    </span>
+                  ) : (
+                    <span style={{ color: "var(--red)" }}>none configured</span>
+                  )}
                 </div>
               ))}
             </div>
+          )}
+
+          {needed.length === 0 && configured.length > 0 && (
+            <p className="hint" style={{ marginBottom: 0 }}>
+              Nothing in this run needs a provider; the {configured.length} configured
+              {configured.length === 1 ? " one is" : " ones are"} idle.
+            </p>
           )}
         </Panel>
       </div>
@@ -378,6 +510,67 @@ export function GeneratePage(): ReactNode {
   );
 }
 
+/** What a chosen layout will do, said in one line rather than three fields. */
+function ProfileSummary({ profile }: { profile: OutputProfileView }): ReactNode {
+  return (
+    <>
+      Writes <code>{profile.format}</code> into <code>{profile.path}</code>
+      {profile.partition_by.length > 0 && (
+        <>
+          , partitioned by <code>{profile.partition_by.join(", ")}</code>
+        </>
+      )}
+      {profile.entities.length > 0 && <> · {profile.entities.join(", ")} only</>}.
+    </>
+  );
+}
+
+interface Requirement {
+  kind: string;
+  label: string;
+  /** Fields that need this kind of provider, as `entity.field`. */
+  fields: string[];
+  /** Configured providers that can serve it. */
+  serving: ProviderConfig[];
+}
+
+/**
+ * Which kinds of provider this run needs, and what is configured to serve
+ * them (section 54's "provider requirements").
+ *
+ * Read from the fields rather than from the estimate, because "5,000 model
+ * calls" does not say whether the project has a language model configured,
+ * and that is the question this screen is being asked.
+ */
+function requiredProviders(
+  schema: SchemaView | undefined,
+  entities: string[],
+  configured: ProviderConfig[] = [],
+): Requirement[] {
+  if (!schema) return [];
+  const chosen = new Set(entities);
+  const wanted = new Map<string, string[]>();
+
+  for (const name of schema.entity_order) {
+    if (chosen.size > 0 && !chosen.has(name)) continue;
+    const entity = schema.entities[name];
+    if (!entity) continue;
+    for (const field of Object.values(entity.fields)) {
+      if (!field.requires_provider) continue;
+      const fields = wanted.get(field.requires_provider) ?? [];
+      fields.push(`${name}.${field.name}`);
+      wanted.set(field.requires_provider, fields);
+    }
+  }
+
+  return REQUIREMENTS.filter(({ kind }) => wanted.has(kind)).map(({ kind, label }) => ({
+    kind,
+    label,
+    fields: wanted.get(kind) ?? [],
+    serving: configured.filter((provider) => provider.type === kind),
+  }));
+}
+
 const EMPTY_ESTIMATE = {
   records: 0,
   fields: 0,
@@ -385,6 +578,8 @@ const EMPTY_ESTIMATE = {
   image_calls: 0,
   speech_calls: 0,
   estimated_bytes: 0,
+  llm_tokens: 0,
+  peak_memory_bytes: 0,
 };
 
 function entityCount(plan: PlanView, entity: string): number {
@@ -417,6 +612,11 @@ function scaleEstimate(
         image_calls: total.image_calls + scaled.image_calls,
         speech_calls: total.speech_calls + scaled.speech_calls,
         estimated_bytes: total.estimated_bytes + scaled.estimated_bytes,
+        llm_tokens: total.llm_tokens + scaled.llm_tokens,
+        // Entities are written a batch at a time, so the memory a run needs is
+        // the largest entity's batch rather than the sum of all of them - the
+        // same arithmetic `WorkloadEstimate.merge` does (section 31).
+        peak_memory_bytes: Math.max(total.peak_memory_bytes, scaled.peak_memory_bytes),
       };
     }, EMPTY_ESTIMATE);
 }
@@ -429,6 +629,9 @@ function scale(estimate: typeof EMPTY_ESTIMATE, factor: number): typeof EMPTY_ES
     image_calls: Math.round(estimate.image_calls * factor),
     speech_calls: Math.round(estimate.speech_calls * factor),
     estimated_bytes: Math.round(estimate.estimated_bytes * factor),
+    llm_tokens: Math.round(estimate.llm_tokens * factor),
+    // Memory is a batch, and a batch does not grow with the record count.
+    peak_memory_bytes: estimate.peak_memory_bytes,
   };
 }
 

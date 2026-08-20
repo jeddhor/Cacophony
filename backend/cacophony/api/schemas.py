@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
@@ -10,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from ..core.provenance import ProvenanceMode
 from ..providers.cache import CacheMode
 from ..runs.config import ResourceLimits, RunConfig
+from ..schema.models import OutputProfileSpec
 
 __all__ = [
     "CreateProjectRequest",
@@ -61,6 +63,11 @@ class CreateRunRequest(BaseModel):
     #: Validated against the writer registry rather than pinned to a literal,
     #: so a newly registered format is offered here the moment it exists.
     output_format: str = "jsonl"
+    #: A layout declared under ``outputs:`` in the project (section 34). What
+    #: it sets - format, directory, entities, partitioning - applies unless
+    #: this request named the same thing itself, exactly as ``--output-profile``
+    #: behaves on the command line.
+    output_profile: str = ""
     entities: list[str] = Field(default_factory=list)
     records: int | None = Field(default=None, ge=0)
     seed: int | None = None
@@ -88,10 +95,26 @@ class CreateRunRequest(BaseModel):
             raise ValueError(f"unknown output format '{value}'. Available: {known}")
         return value.lower()
 
-    def to_config(self) -> RunConfig:
-        return RunConfig(
-            output_dir=Path(self.output_dir),
-            output_format=self.output_format,
+    def to_config(self, profiles: Mapping[str, OutputProfileSpec] | None = None) -> RunConfig:
+        """The run this request describes, with any named profile applied.
+
+        ``profiles`` is the project's ``outputs:`` block. An explicit field in
+        the request beats the profile and the profile beats the default, so
+        naming a profile and a directory writes the profile's layout where the
+        caller said - the precedence ``generate --output-profile`` uses.
+        """
+        profile = self._profile(profiles)
+        stated = self.model_fields_set
+
+        config = RunConfig(
+            output_dir=Path(
+                self.output_dir if "output_dir" in stated or profile is None else profile.path
+            ),
+            output_format=(
+                self.output_format
+                if "output_format" in stated or profile is None
+                else profile.format
+            ),
             entities=list(self.entities),
             records=self.records,
             seed=self.seed,
@@ -104,6 +127,28 @@ class CreateRunRequest(BaseModel):
             checkpoint_every=self.checkpoint_every,
             limits=self.limits.to_limits(),
         )
+
+        if profile is not None:
+            config.output_profile = profile.name or self.output_profile
+            config.partition_by = list(profile.partition_by)
+            config.output_options = dict(profile.options)
+            if not config.entities:
+                config.entities = list(profile.entities)
+        return config
+
+    def _profile(
+        self, profiles: Mapping[str, OutputProfileSpec] | None
+    ) -> OutputProfileSpec | None:
+        if not self.output_profile:
+            return None
+        declared = profiles or {}
+        profile = declared.get(self.output_profile)
+        if profile is None:
+            known = ", ".join(sorted(declared)) or "none are declared"
+            raise ValueError(
+                f"no output profile '{self.output_profile}'. Declared under 'outputs:': {known}"
+            )
+        return profile
 
 
 class PreviewRequest(BaseModel):

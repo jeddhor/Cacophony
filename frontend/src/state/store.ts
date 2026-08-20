@@ -16,6 +16,8 @@ import { persist } from "zustand/middleware";
 export interface GenerateForm {
   outputDir: string;
   outputFormat: string;
+  /** A layout declared under `outputs:`, or "" for none (section 34). */
+  outputProfile: string;
   records: string;
   seed: string;
   entities: string[];
@@ -33,6 +35,7 @@ export interface GenerateForm {
 export const DEFAULT_GENERATE_FORM: GenerateForm = {
   outputDir: "out",
   outputFormat: "jsonl",
+  outputProfile: "",
   records: "",
   seed: "",
   entities: [],

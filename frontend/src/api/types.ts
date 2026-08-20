@@ -158,6 +158,10 @@ export interface WorkloadEstimate {
   image_calls: number;
   speech_calls: number;
   estimated_bytes: number;
+  /** Completion tokens a model is asked to produce - section 69's unit. */
+  llm_tokens: number;
+  /** What the run holds at once: a write batch, not the dataset (section 31). */
+  peak_memory_bytes: number;
 }
 
 export interface PlanView {
@@ -168,6 +172,34 @@ export interface PlanView {
   steps: PlanStep[];
   estimate: WorkloadEstimate;
   warnings: string[];
+}
+
+/** One registered output format (sections 33, 34). */
+export interface OutputFormat {
+  name: string;
+  extension: string;
+  aliases: string[];
+  /** Every entity writes into one destination - SQLite, and nothing else yet. */
+  single_file: boolean;
+  partitionable: boolean;
+  summary: string;
+}
+
+/** A layout declared under `outputs:` in the project (section 34). */
+export interface OutputProfileView {
+  name: string;
+  format: string;
+  path: string;
+  entities: string[];
+  partition_by: string[];
+  options: Record<string, unknown>;
+}
+
+export interface OutputsView {
+  formats: OutputFormat[];
+  profiles: OutputProfileView[];
+  /** Whether the project injects damage - present only with a project. */
+  chaos?: boolean;
 }
 
 export interface LintIssue {
@@ -435,7 +467,10 @@ export interface ProviderConfig {
   base_url: string | null;
   model: string | null;
   concurrency: number;
+  timeout_seconds: number;
+  /** A logical secret id, never a credential (section 63). */
   secret_id: string | null;
+  options: Record<string, unknown>;
 }
 
 export interface ProvidersView {
@@ -507,7 +542,10 @@ export interface SchemaOperation {
     | "add_field"
     | "remove_field"
     | "rename_field"
-    | "move_field";
+    | "move_field"
+    | "add_provider"
+    | "set_provider"
+    | "remove_provider";
   entity?: string;
   field?: string;
   key?: string;
@@ -517,8 +555,10 @@ export interface SchemaOperation {
 }
 
 export interface CreateRunBody {
-  output_dir: string;
-  output_format: string;
+  output_dir?: string;
+  output_format?: string;
+  /** A layout declared under `outputs:`; what it sets, this body need not. */
+  output_profile?: string;
   entities?: string[];
   records?: number | null;
   seed?: number | null;

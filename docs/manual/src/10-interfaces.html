@@ -125,6 +125,7 @@ symlink both land where they really point rather than where they claim to.</p>
     <tr><td class="mono">GET</td><td class="mono">/api/providers/{id}/models</td><td>Models a provider serves</td></tr>
     <tr><td class="mono">POST</td><td class="mono">/api/providers/{id}/test</td><td>Health check</td></tr>
     <tr><td class="mono">GET</td><td class="mono">/api/generators</td><td>The generator registry</td></tr>
+    <tr><td class="mono">GET</td><td class="mono">/api/outputs</td><td>Registered formats, and a project's declared layouts</td></tr>
     <tr><td class="mono">GET</td><td class="mono">/api/plugins</td><td>Installed plugins and what they contribute</td></tr>
     <tr><td class="mono">GET</td><td class="mono">/api/system</td><td>Version and store statistics</td></tr>
     <tr><td class="mono">POST</td><td class="mono">/api/system/prune</td><td>Remove finished runs older than a cutoff</td></tr>
@@ -156,6 +157,9 @@ transaction:</p>
     <tr><td class="mono">remove_field</td><td class="mono">entity, name</td></tr>
     <tr><td class="mono">rename_field</td><td class="mono">entity, field, name</td></tr>
     <tr><td class="mono">move_field</td><td class="mono">entity, name, index</td></tr>
+    <tr><td class="mono">add_provider</td><td class="mono">name, [value]</td></tr>
+    <tr><td class="mono">set_provider</td><td class="mono">name, key, [value]</td></tr>
+    <tr><td class="mono">remove_provider</td><td class="mono">name</td></tr>
   </tbody>
 </table>
 
@@ -180,11 +184,11 @@ does <em>not</em> do &mdash; it never rewrites your schema file.</p>
   <tbody>
     <tr><td>Projects</td><td>Register, open and compare projects; schema revisions.</td></tr>
     <tr><td>Studio</td><td>The schema editor: entity list, field editor, a graph of relationships, live preview and lint.</td></tr>
-    <tr><td>Generate</td><td>Start a run with the options <code>generate</code> takes, and watch it.</td></tr>
+    <tr><td>Generate</td><td>Start a run with the options <code>generate</code> takes &mdash; format, layout, entities, policies &mdash; and watch it.</td></tr>
     <tr><td>Runs / Run</td><td>History, progress, events, jobs, quality scores, pause and cancel.</td></tr>
     <tr><td>Stream</td><td>Start and steer a live stream; rates, attainment, destinations, recent records.</td></tr>
     <tr><td>Assets</td><td>Generated media, filterable, with the manifest metadata beside each file.</td></tr>
-    <tr><td>Providers</td><td>Configured providers, their models, and a health check button.</td></tr>
+    <tr><td>Providers</td><td>Add, edit and remove providers; list their models; test that each one answers.</td></tr>
     <tr><td>Plugins</td><td>What is installed, what it contributes, and anything that failed to load.</td></tr>
     <tr><td>Settings</td><td>Store location, pruning, and the server's own version information.</td></tr>
   </tbody>
@@ -227,6 +231,63 @@ the same <code class="mono">move_field</code> operation the API takes
 <p>The field editor previews as you type, using the same positional-seed
 mechanism as <code>cacophony preview</code>. Because previewing disturbs
 nothing, this is safe to do continuously against a project that is mid-run.</p>
+
+<h2>The generate screen</h2>
+
+<p>Section&nbsp;54's list, in order: requested scale, estimated workload,
+provider requirements, disk estimate, the plan and the warnings &mdash; then one
+button. Three parts of it are worth knowing about.</p>
+
+<p><strong>The format menu is the writer registry.</strong> Every registered
+format is offered, database formats included, with the extension and the
+one-line description each writer carries. A format registered by a plugin
+appears without anything in the interface knowing it exists. Choosing SQLite
+says so: every entity becomes a table in one <code>cacophony.db</code>, rather
+than a file each.</p>
+
+<p><strong>A layout is chosen by name.</strong> If the project declares
+<code>outputs:</code> (chapter&nbsp;3), the layouts appear in a menu above the
+directory. Choosing one fills in the format, the directory and the entity
+selection it decides, and shows what it will do with them &mdash; including the
+partitioning, which has no control of its own. The controls stay editable
+afterwards, so an edit is an override rather than a contradiction: the same
+precedence <code>--output-profile analytics -d /tmp/scratch</code> has on the
+command line.</p>
+
+<p><strong>Provider requirements are requirements, not an inventory.</strong>
+The screen reads which fields need a language model, an image model or speech,
+and names the configured provider serving each. Anything needed and unserved is
+called out before the run rather than after it &mdash; a field with
+<code>on_unavailable: placeholder</code> does not fail, it quietly emits marked
+stand-ins, which is the failure worth catching early.</p>
+
+<p>The estimate uses section&nbsp;69's own units: completion tokens rather than
+a guess of so-many-per-call, and the memory the run holds at once, which is a
+write batch and not the dataset <span class="sec">sections&nbsp;31,
+69</span>. Both scale with the record override as you type it, because an
+estimate for the schema's declared counts while the form says something else is
+not inexact, it is wrong.</p>
+
+<h2>Configuring a provider</h2>
+
+<p>A provider is four lines of YAML that people get wrong once and then avoid,
+so the Providers page edits them: add one by name and adapter, set its URL,
+model, concurrency and timeout, or remove it. Each change is one targeted patch,
+so the comments around it survive.</p>
+
+<p>Three things are refused rather than written. An adapter this build does not
+have &mdash; because the misspelling compiles perfectly well and then decides,
+at run time, that every language-model field is unavailable. A provider still
+named by a field, which the message lists. And anything in the secret field that
+looks like a credential: a project file holds a logical secret id, resolved from
+the OS keychain, the environment or an encrypted store when the run starts, and
+never the credential itself <span class="sec">section&nbsp;63</span>.</p>
+
+<p>The adapter menu also keeps the declaration honest: changing the adapter
+changes the declared <code>type:</code> with it, in the same patch. Nothing
+dispatches on that field &mdash; but it is the one place a person would look to
+find out what a provider is for, and a provider labelled a language model while
+serving images is a lie in exactly that place.</p>
 
 <h1>The desktop application</h1>
 

@@ -46,6 +46,7 @@ export const keys = {
   runQuality: (id: string) => ["run-quality", id] as const,
   runAssets: (id: string, params: Record<string, unknown>) => ["run-assets", id, params] as const,
   providers: (id?: number) => ["providers", id ?? null] as const,
+  outputs: (id?: number) => ["outputs", id ?? null] as const,
 };
 
 export const useSystem = () => useQuery({ queryKey: keys.system, queryFn: api.system });
@@ -99,6 +100,14 @@ export const useProviders = (projectId?: number) =>
     ...EDITABLE,
   });
 
+/** Where a run can write (sections 33, 34). */
+export const useOutputs = (projectId?: number) =>
+  useQuery({
+    queryKey: keys.outputs(projectId),
+    queryFn: () => api.outputs(projectId),
+    ...EDITABLE,
+  });
+
 export function useRegisterProject() {
   const client = useQueryClient();
   return useMutation({
@@ -116,6 +125,10 @@ function useSchemaInvalidation(projectId: number) {
       keys.plan(projectId),
       keys.lint(projectId),
       keys.project(projectId),
+      // Providers and output layouts are part of the schema, so an edit to
+      // one of them has to invalidate the pages that show them.
+      keys.providers(projectId),
+      keys.outputs(projectId),
     ]) {
       void client.invalidateQueries({ queryKey: key });
     }
