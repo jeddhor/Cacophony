@@ -328,9 +328,22 @@ function GeneratorOptions({
               {name}
             </label>
             {complex ? (
-              <code className="faint" style={{ fontSize: "0.72rem" }}>
-                {JSON.stringify(value)}
-              </code>
+              <ComplexOption
+                id={inputId}
+                value={value}
+                editable={editable}
+                onCommit={(next) =>
+                  onPatch([
+                    {
+                      op: "set_field",
+                      entity: entity.name,
+                      field: field.name,
+                      key: name,
+                      value: next,
+                    },
+                  ])
+                }
+              />
             ) : (
               <input
                 id={inputId}
@@ -356,10 +369,240 @@ function GeneratorOptions({
           </div>
         );
       })}
-      <div className="hint">
-        Complex options - choices, bins, lists - are shown read-only here; edit
-        them in the source view.
-      </div>
+    </div>
+  );
+}
+
+/**
+ * An option whose value is not a single scalar: choices, histogram bins, lists.
+ *
+ * These were read-only for a long time, with a note pointing at the source view,
+ * which meant the two things people most often change - a weighted choice and a
+ * list of values - were the two things the editor could not do.
+ *
+ * The shape decides the editor. A mapping of scalars is the weighted-choice
+ * case and gets a value/weight table; a list of scalars gets one line each; and
+ * anything more complicated gets JSON with a parser attached, which is still an
+ * editor rather than a refusal.
+ */
+function ComplexOption({
+  id,
+  value,
+  editable,
+  onCommit,
+}: {
+  id: string;
+  value: unknown;
+  editable: boolean;
+  onCommit: (value: unknown) => void;
+}): ReactNode {
+  const isMapping =
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.values(value as Record<string, unknown>).every((entry) => !isObject(entry));
+
+  const isScalarList =
+    Array.isArray(value) && (value as unknown[]).every((entry) => !isObject(entry));
+
+  if (isMapping) {
+    return (
+      <WeightedChoices
+        id={id}
+        value={value as Record<string, unknown>}
+        editable={editable}
+        onCommit={onCommit}
+      />
+    );
+  }
+  if (isScalarList) {
+    return (
+      <ScalarList id={id} value={value as unknown[]} editable={editable} onCommit={onCommit} />
+    );
+  }
+  return <JsonOption id={id} value={value} editable={editable} onCommit={onCommit} />;
+}
+
+function isObject(value: unknown): boolean {
+  return value !== null && typeof value === "object";
+}
+
+/** A mapping of value to weight: `{Windows: 67, macOS: 18}`. */
+function WeightedChoices({
+  id,
+  value,
+  editable,
+  onCommit,
+}: {
+  id: string;
+  value: Record<string, unknown>;
+  editable: boolean;
+  onCommit: (value: unknown) => void;
+}): ReactNode {
+  const [rows, setRows] = useState<[string, string][]>(() =>
+    Object.entries(value).map(([key, weight]) => [key, String(weight ?? "")]),
+  );
+  useEffect(
+    () => setRows(Object.entries(value).map(([key, weight]) => [key, String(weight ?? "")])),
+    [value],
+  );
+
+  const commit = (next: [string, string][]): void => {
+    const built: Record<string, unknown> = {};
+    for (const [key, weight] of next) {
+      if (!key.trim()) continue;
+      built[key.trim()] = weight.trim() === "" ? 1 : coerce(weight.trim());
+    }
+    onCommit(built);
+  };
+
+  const total = rows.reduce((sum, [, weight]) => sum + (Number(weight) || 0), 0);
+
+  return (
+    <div className="option-editor" id={id}>
+      {rows.map(([key, weight], index) => (
+        <div className="option-row" key={`${index}-${key}`}>
+          <input
+            aria-label={`choice ${index + 1} value`}
+            value={key}
+            readOnly={!editable}
+            onChange={(event) => {
+              const next = rows.map<[string, string]>((row, at) =>
+                at === index ? [event.target.value, row[1]] : row,
+              );
+              setRows(next);
+            }}
+            onBlur={() => commit(rows)}
+          />
+          <input
+            aria-label={`choice ${index + 1} weight`}
+            className="option-weight"
+            value={weight}
+            readOnly={!editable}
+            onChange={(event) => {
+              const next = rows.map<[string, string]>((row, at) =>
+                at === index ? [row[0], event.target.value] : row,
+              );
+              setRows(next);
+            }}
+            onBlur={() => commit(rows)}
+          />
+          {/* The share is what a weight actually means, and nobody does this
+              arithmetic in their head while editing five of them. */}
+          <span className="faint option-share">
+            {total > 0 ? `${(((Number(weight) || 0) / total) * 100).toFixed(0)}%` : ""}
+          </span>
+          {editable && (
+            <button
+              type="button"
+              className="button-sm"
+              aria-label={`remove choice ${key || index + 1}`}
+              onClick={() => {
+                const next = rows.filter((_, at) => at !== index);
+                setRows(next);
+                commit(next);
+              }}
+            >
+              ×
+            </button>
+          )}
+        </div>
+      ))}
+      {editable && (
+        <button
+          type="button"
+          className="button-sm"
+          onClick={() => setRows([...rows, ["", "1"]])}
+        >
+          + choice
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** A list of scalars: `values`, `context`, `enum`, `forbidden`, histogram bins. */
+function ScalarList({
+  id,
+  value,
+  editable,
+  onCommit,
+}: {
+  id: string;
+  value: unknown[];
+  editable: boolean;
+  onCommit: (value: unknown) => void;
+}): ReactNode {
+  const asText = (items: unknown[]): string => items.map((item) => String(item)).join("\n");
+  const [draft, setDraft] = useState(() => asText(value));
+  useEffect(() => setDraft(asText(value)), [value]);
+
+  return (
+    <div className="option-editor">
+      <textarea
+        id={id}
+        rows={Math.min(8, Math.max(2, draft.split("\n").length))}
+        value={draft}
+        readOnly={!editable}
+        spellCheck={false}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          const items = draft
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line !== "")
+            .map(coerce);
+          if (asText(items) !== asText(value)) onCommit(items);
+        }}
+      />
+      <span className="hint">One per line.</span>
+    </div>
+  );
+}
+
+/** Anything with more structure than the two above: edited as JSON, parsed here. */
+function JsonOption({
+  id,
+  value,
+  editable,
+  onCommit,
+}: {
+  id: string;
+  value: unknown;
+  editable: boolean;
+  onCommit: (value: unknown) => void;
+}): ReactNode {
+  const rendered = JSON.stringify(value, null, 2);
+  const [draft, setDraft] = useState(rendered);
+  const [problem, setProblem] = useState<string | null>(null);
+  useEffect(() => {
+    setDraft(rendered);
+    setProblem(null);
+  }, [rendered]);
+
+  return (
+    <div className="option-editor">
+      <textarea
+        id={id}
+        rows={Math.min(10, Math.max(3, draft.split("\n").length))}
+        value={draft}
+        readOnly={!editable}
+        spellCheck={false}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          if (draft === rendered) return;
+          try {
+            const parsed: unknown = JSON.parse(draft);
+            setProblem(null);
+            onCommit(parsed);
+          } catch (error) {
+            // Reported here rather than sent: the server would reject it, but
+            // a message beside the box is the one that reaches the person.
+            setProblem(error instanceof Error ? error.message : "not valid JSON");
+          }
+        }}
+      />
+      {problem ? <span className="error-text">{problem}</span> : <span className="hint">JSON.</span>}
     </div>
   );
 }

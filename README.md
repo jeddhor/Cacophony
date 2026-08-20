@@ -168,8 +168,8 @@ python docs/manual/build.py
 ```
 
 **What is and is not built.** [docs/CONFORMANCE.md](docs/CONFORMANCE.md) is the
-design document section by section — <!-- claim:sections_implemented -->95<!-- /claim -->
-built, <!-- claim:sections_partial -->16<!-- /claim --> partial,
+design document section by section — <!-- claim:sections_implemented -->97<!-- /claim -->
+built, <!-- claim:sections_partial -->14<!-- /claim --> partial,
 <!-- claim:sections_deferred -->1<!-- /claim --> deferred, and
 <!-- claim:refusals -->6<!-- /claim --> sub-items deliberately refused with the
 reasoning recorded. It is generated from data and checked by CI, because the

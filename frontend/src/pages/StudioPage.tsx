@@ -303,7 +303,8 @@ function EntityPane({
   );
 }
 
-function FieldsPane({
+/** Exported so the reordering gestures can be tested without the whole page. */
+export function FieldsPane({
   entity,
   selected,
   editable,
@@ -316,6 +317,25 @@ function FieldsPane({
   onSelect: (name: string) => void;
   onPatch: (operations: SchemaOperation[]) => void;
 }): ReactNode {
+  /** The field being dragged, and where it would land. */
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [dropAt, setDropAt] = useState<number | null>(null);
+
+  const order = entity.field_order;
+
+  /**
+   * Field order is the order of the columns in the output, so this is a real
+   * edit rather than a view preference - it goes through `move_field` like any
+   * other change and lands in the document in place.
+   */
+  const move = (name: string, index: number): void => {
+    const clamped = Math.max(0, Math.min(order.length - 1, index));
+    if (order[clamped] === name) return;
+    onPatch([{ op: "move_field", entity: entity.name, name, index: clamped }]);
+  };
+
+  const nudge = (name: string, by: number): void => move(name, order.indexOf(name) + by);
+
   return (
     <Panel
       title={`${entity.name} · ${entity.field_order.length} fields`}
@@ -355,6 +375,12 @@ function FieldsPane({
         ) : undefined
       }
     >
+      {editable && (
+        <p className="hint" style={{ marginTop: 0 }}>
+          Drag a row to reorder the columns, or focus one and press Alt with the
+          up and down arrows.
+        </p>
+      )}
       <div className="table-scroll">
         <table>
           <thead>
@@ -367,14 +393,55 @@ function FieldsPane({
             </tr>
           </thead>
           <tbody>
-            {entity.field_order.map((name) => {
+            {entity.field_order.map((name, index) => {
               const field = entity.fields[name];
               if (!field) return null;
+              const classes = [
+                "field-row-button",
+                name === selected ? "selected" : "",
+                dragging === name ? "dragging" : "",
+                dropAt === index && dragging !== name ? "drop-target" : "",
+              ]
+                .filter(Boolean)
+                .join(" ");
               return (
                 <tr
                   key={name}
-                  className={`field-row-button ${name === selected ? "selected" : ""}`}
+                  className={classes}
                   onClick={() => onSelect(name)}
+                  // Reordering is available from the keyboard as well, because
+                  // a pointer gesture is not an interface on its own.
+                  tabIndex={0}
+                  onKeyDown={(event) => {
+                    if (!editable || !event.altKey) return;
+                    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                      event.preventDefault();
+                      onSelect(name);
+                      nudge(name, event.key === "ArrowUp" ? -1 : 1);
+                    }
+                  }}
+                  draggable={editable}
+                  onDragStart={(event) => {
+                    setDragging(name);
+                    event.dataTransfer.effectAllowed = "move";
+                    // Firefox will not start a drag without payload.
+                    event.dataTransfer.setData("text/plain", name);
+                  }}
+                  onDragOver={(event) => {
+                    if (!editable || dragging === null) return;
+                    event.preventDefault();
+                    setDropAt(index);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    if (dragging !== null) move(dragging, index);
+                    setDragging(null);
+                    setDropAt(null);
+                  }}
+                  onDragEnd={() => {
+                    setDragging(null);
+                    setDropAt(null);
+                  }}
                 >
                   <td>
                     {name}

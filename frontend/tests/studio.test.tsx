@@ -8,7 +8,7 @@
  * document.
  */
 
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -22,11 +22,13 @@ import {
   generatorLabel,
   renderCell,
 } from "../src/components/ui";
+import { FieldsPane } from "../src/pages/StudioPage";
 import { FieldEditor } from "../src/studio/FieldEditor";
 import { PreviewTable } from "../src/studio/PreviewTable";
 import {
   employeeEntity,
   employeeFields,
+  makeField,
   previewFixture,
   renderWithProviders,
 } from "./fixtures";
@@ -282,5 +284,182 @@ describe("formatting", () => {
     expect(renderCell(null)).toBe("null");
     expect(renderCell(42)).toBe("42");
     expect(renderCell(["a", "b"])).toBe('["a","b"]');
+  });
+});
+
+describe("reordering fields (section 48)", () => {
+  const paneProps = {
+    entity: employeeEntity,
+    selected: "email",
+    editable: true,
+    onSelect: vi.fn(),
+  };
+
+  /** A row by its field name, which is its first cell - the name also appears
+   *  in the "Reads" column of any field that depends on it. */
+  const row = (name: string): HTMLElement =>
+    screen
+      .getAllByRole("row")
+      .find((candidate) =>
+        (candidate as HTMLTableRowElement).cells[0]?.textContent?.trim().startsWith(name),
+      )!;
+
+  it("moves a field with Alt and an arrow key, not only with a pointer", async () => {
+    const onPatch = vi.fn();
+    renderWithProviders(<FieldsPane {...paneProps} onPatch={onPatch} />);
+
+    row("department").focus();
+    await userEvent.keyboard("{Alt>}{ArrowDown}{/Alt}");
+
+    expect(onPatch).toHaveBeenCalledWith([
+      { op: "move_field", entity: "employee", name: "department", index: 3 },
+    ]);
+  });
+
+  it("does not send a move that would change nothing", async () => {
+    const onPatch = vi.fn();
+    renderWithProviders(<FieldsPane {...paneProps} onPatch={onPatch} />);
+
+    row("employee_id").focus();
+    await userEvent.keyboard("{Alt>}{ArrowUp}{/Alt}");
+
+    expect(onPatch).not.toHaveBeenCalled();
+  });
+
+  it("drops a dragged field at the row it was released on", () => {
+    const onPatch = vi.fn();
+    renderWithProviders(<FieldsPane {...paneProps} onPatch={onPatch} />);
+
+    const data = { effectAllowed: "", setData: vi.fn(), getData: () => "biography" };
+    fireEvent.dragStart(row("biography"), { dataTransfer: data });
+    fireEvent.dragOver(row("first_name"), { dataTransfer: data });
+    fireEvent.drop(row("first_name"), { dataTransfer: data });
+
+    expect(onPatch).toHaveBeenCalledWith([
+      { op: "move_field", entity: "employee", name: "biography", index: 1 },
+    ]);
+  });
+
+  it("leaves a read-only schema alone", async () => {
+    const onPatch = vi.fn();
+    renderWithProviders(<FieldsPane {...paneProps} editable={false} onPatch={onPatch} />);
+
+    expect(row("department")).not.toHaveAttribute("draggable", "true");
+    row("department").focus();
+    await userEvent.keyboard("{Alt>}{ArrowDown}{/Alt}");
+    expect(onPatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("editing structured generator options (section 49)", () => {
+  const editorProps = {
+    entity: employeeEntity,
+    editable: true,
+    onPreview: vi.fn(),
+    pending: false,
+  };
+
+  const weighted = makeField({
+    name: "platform",
+    type: "enum",
+    generator: "weighted",
+    generator_options: { choices: { Windows: 67, macOS: 18, Linux: 15 } },
+  });
+
+  it("edits weighted choices as choices, and says what each weight is worth", async () => {
+    const onPatch = vi.fn();
+    renderWithProviders(<FieldEditor {...editorProps} field={weighted} onPatch={onPatch} />);
+
+    expect(screen.getByLabelText("choice 1 value")).toHaveValue("Windows");
+    expect(screen.getByLabelText("choice 1 weight")).toHaveValue("67");
+    expect(screen.getByText("67%")).toBeInTheDocument();
+
+    const weight = screen.getByLabelText("choice 3 weight");
+    await userEvent.clear(weight);
+    await userEvent.type(weight, "15.5");
+    await userEvent.tab();
+
+    expect(onPatch).toHaveBeenCalledWith([
+      {
+        op: "set_field",
+        entity: "employee",
+        field: "platform",
+        key: "choices",
+        value: { Windows: 67, macOS: 18, Linux: 15.5 },
+      },
+    ]);
+  });
+
+  it("removes a choice without touching the rest", async () => {
+    const onPatch = vi.fn();
+    renderWithProviders(<FieldEditor {...editorProps} field={weighted} onPatch={onPatch} />);
+
+    await userEvent.click(screen.getByLabelText("remove choice macOS"));
+
+    expect(onPatch).toHaveBeenCalledWith([
+      {
+        op: "set_field",
+        entity: "employee",
+        field: "platform",
+        key: "choices",
+        value: { Windows: 67, Linux: 15 },
+      },
+    ]);
+  });
+
+  it("edits a list of values one per line", async () => {
+    const onPatch = vi.fn();
+    const field = makeField({
+      name: "site",
+      generator: "lookup",
+      generator_options: { values: ["Austin", "Berlin"] },
+    });
+    renderWithProviders(<FieldEditor {...editorProps} field={field} onPatch={onPatch} />);
+
+    const box = screen.getByLabelText("values");
+    expect(box).toHaveValue("Austin\nBerlin");
+    await userEvent.type(box, "\nKyoto");
+    await userEvent.tab();
+
+    expect(onPatch).toHaveBeenCalledWith([
+      {
+        op: "set_field",
+        entity: "employee",
+        field: "site",
+        key: "values",
+        value: ["Austin", "Berlin", "Kyoto"],
+      },
+    ]);
+  });
+
+  it("reports bad JSON beside the box instead of sending it", async () => {
+    const onPatch = vi.fn();
+    const field = makeField({
+      name: "shape",
+      generator: "distribution",
+      generator_options: { distribution: [{ weight: 1, of: ["a"] }] },
+    });
+    renderWithProviders(<FieldEditor {...editorProps} field={field} onPatch={onPatch} />);
+
+    // Typed through fireEvent because user-event reads "{" and "[" as key
+    // descriptors, and JSON is mostly those.
+    const box = screen.getByLabelText("distribution");
+    fireEvent.change(box, { target: { value: "{ nope" } });
+    fireEvent.blur(box);
+
+    expect(onPatch).not.toHaveBeenCalled();
+    expect(screen.getByText(/JSON/i)).toBeInTheDocument();
+
+    fireEvent.change(box, { target: { value: "[1, 2]" } });
+    fireEvent.blur(box);
+    expect(onPatch).toHaveBeenCalledWith([
+      {
+        op: "set_field",
+        entity: "employee",
+        field: "shape",
+        key: "distribution",
+        value: [1, 2],
+      },
+    ]);
   });
 });

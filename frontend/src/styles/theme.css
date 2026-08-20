@@ -330,6 +330,58 @@ tbody tr:hover {
   overflow-x: auto;
 }
 
+/* Reordering fields. The row being dragged fades; the row it would land on
+   grows a line above it, which is the only part of the gesture that says where
+   the field will actually end up. */
+tr.field-row-button.dragging {
+  opacity: 0.45;
+}
+
+tr.field-row-button.drop-target td {
+  box-shadow: inset 0 2px 0 var(--brand);
+}
+
+/* Editing an option that is not one value: a weighted choice table, a list, or
+   JSON for the shapes that are neither. */
+.option-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.option-editor textarea {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.option-row {
+  display: grid;
+  grid-template-columns: 1fr 72px 40px auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.option-row .option-weight {
+  text-align: right;
+}
+
+.option-row .option-share {
+  font-size: 0.7rem;
+  text-align: right;
+}
+
+.error-text {
+  color: var(--red);
+  font-size: 0.72rem;
+}
+
+tr.field-row-button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+
 /* --------------------------------------------------------------------- */
 /* Controls                                                               */
 /* --------------------------------------------------------------------- */

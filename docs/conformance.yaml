@@ -76,7 +76,9 @@ sections:
   - {section: 39, state: implemented}
   - section: 40
     state: partial
-    note: "Every screen exists; the schema editor is missing the interactions in 48 and 49."
+    note: >
+      Every screen exists and the schema editor now has 48's and 49's
+      interactions. What is missing is 54's run controls, listed there.
   - section: 41
     state: partial
     note: >
@@ -91,11 +93,15 @@ sections:
   - {section: 46, state: implemented}
   - {section: 47, state: implemented}
   - section: 48
-    state: partial
-    note: "Field reordering is an API operation with no drag-and-drop in the interface."
+    state: implemented
+    note: >
+      Fields are dragged to reorder, and moved from the keyboard with Alt and an
+      arrow key; both send the same `move_field` edit as the API.
   - section: 49
-    state: partial
-    note: "Choices, histogram bins and lists are shown but not editable in the Studio."
+    state: implemented
+    note: >
+      Choices, bins and lists are edited in place - a weighted choice shows the
+      share each weight is worth.
   - {section: 50, state: implemented}
   - {section: 51, state: implemented}
   - {section: 52, state: implemented}

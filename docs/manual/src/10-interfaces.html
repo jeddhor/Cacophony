@@ -198,6 +198,30 @@ sent as the targeted operations above and applied to the YAML document in place,
 so the only thing that changes is the thing you changed
 <span class="sec">sections&nbsp;48, 74</span>.</p>
 
+<h2>Editing a field</h2>
+
+<p>The field panel is section&nbsp;49's, in its order: name, type, meaning,
+generation, context, length, tone, null probability, and a button that generates
+samples. What it shows follows the field &mdash; a length constraint on a boolean
+and a temperature on a sequence are noise, so neither appears.</p>
+
+<p>Structured options are edited as what they are rather than as text. A
+weighted choice is a list of value-and-weight rows, each showing the share that
+weight is actually worth, so you are not doing the arithmetic in your head while
+editing five of them; a list of values is one per line; anything with more shape
+than that is JSON, parsed when you leave the box and reported beside it if it
+will not parse, rather than sent to be refused
+<span class="sec">section&nbsp;49</span>.</p>
+
+<h2>Field order is an edit</h2>
+
+<p>Field order is the order of the columns in the output, so moving a field is a
+change to the schema, not a view preference. Drag a row in the field list to
+move it; or focus a row and press <kbd>Alt</kbd> with the up and
+down arrows, since a pointer gesture is not an interface on its own. Both send
+the same <code class="mono">move_field</code> operation the API takes
+<span class="sec">section&nbsp;48</span>.</p>
+
 <h2>Live preview</h2>
 
 <p>The field editor previews as you type, using the same positional-seed
