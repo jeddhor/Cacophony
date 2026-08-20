@@ -393,31 +393,33 @@ function StreamDashboard({
         }
       >
         <ErrorNotice error={controls.retarget.error} />
-        <table>
-          <thead>
-            <tr>
-              <th>Entity</th>
-              <th>Rate</th>
-              <th style={{ width: "30%" }}>Share of target</th>
-              <th className="numeric">Produced</th>
-              <th className="numeric">Next index</th>
-              <th>Retarget</th>
-            </tr>
-          </thead>
-          <tbody>
-            {view.entities.map((entity) => (
-              <RateRow
-                key={entity.entity}
-                entity={entity}
-                target={view.stats.target_records_per_second}
-                disabled={!running}
-                onRetarget={(rate) =>
-                  controls.retarget.mutate({ id: streamId, entity: entity.entity, rate })
-                }
-              />
-            ))}
-          </tbody>
-        </table>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Entity</th>
+                <th>Rate</th>
+                <th style={{ width: "30%" }}>Share of target</th>
+                <th className="numeric">Produced</th>
+                <th className="numeric">Next index</th>
+                <th>Retarget</th>
+              </tr>
+            </thead>
+            <tbody>
+              {view.entities.map((entity) => (
+                <RateRow
+                  key={entity.entity}
+                  entity={entity}
+                  target={view.stats.target_records_per_second}
+                  disabled={!running}
+                  onRetarget={(rate) =>
+                    controls.retarget.mutate({ id: streamId, entity: entity.entity, rate })
+                  }
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
       </Panel>
 
       <div className="grid grid-2">
@@ -425,41 +427,43 @@ function StreamDashboard({
           {view.sinks.length === 0 ? (
             <Empty title="Nowhere" />
           ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Sink</th>
-                  <th className="numeric">Delivered</th>
-                  <th className="numeric">Failed</th>
-                  <th className="numeric">Sent</th>
-                  <th>Last error</th>
-                </tr>
-              </thead>
-              <tbody>
-                {view.sinks.map((sink, index) => (
-                  <tr key={`${sink.sink}-${index}`}>
-                    <td>
-                      {sink.sink}
-                      {sink.sink === "memory" && (
-                        <span className="faint"> (this page)</span>
-                      )}
-                    </td>
-                    <td className="numeric">{formatNumber(sink.delivered)}</td>
-                    <td className="numeric">
-                      {sink.failed > 0 ? (
-                        <span style={{ color: "var(--magenta)" }}>
-                          {formatNumber(sink.failed)}
-                        </span>
-                      ) : (
-                        "0"
-                      )}
-                    </td>
-                    <td className="numeric">{formatBytes(sink.bytes_sent)}</td>
-                    <td className="faint">{sink.last_error ?? "—"}</td>
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Sink</th>
+                    <th className="numeric">Delivered</th>
+                    <th className="numeric">Failed</th>
+                    <th className="numeric">Sent</th>
+                    <th>Last error</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {view.sinks.map((sink, index) => (
+                    <tr key={`${sink.sink}-${index}`}>
+                      <td>
+                        {sink.sink}
+                        {sink.sink === "memory" && (
+                          <span className="faint"> (this page)</span>
+                        )}
+                      </td>
+                      <td className="numeric">{formatNumber(sink.delivered)}</td>
+                      <td className="numeric">
+                        {sink.failed > 0 ? (
+                          <span style={{ color: "var(--magenta)" }}>
+                            {formatNumber(sink.failed)}
+                          </span>
+                        ) : (
+                          "0"
+                        )}
+                      </td>
+                      <td className="numeric">{formatBytes(sink.bytes_sent)}</td>
+                      <td className="faint">{sink.last_error ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
           {view.destinations.length > 0 && (
             <div className="hint" style={{ marginTop: 8 }}>
@@ -664,45 +668,47 @@ function StreamList({
 
   return (
     <Panel title={`Streams (${streams.length})`}>
-      <table>
-        <thead>
-          <tr>
-            <th>Stream</th>
-            <th>State</th>
-            <th>Rates</th>
-            <th className="numeric">Generated</th>
-            <th className="numeric">Attainment</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {streams.map((stream) => (
-            <tr key={stream.id} className={stream.id === selected ? "selected" : undefined}>
-              <td className="mono">{stream.id.slice(0, 8)}</td>
-              <td>{stream.state}</td>
-              <td className="faint">
-                {Object.entries(stream.config.rates)
-                  .map(([entity, rate]) => `${entity} ${rate}`)
-                  .join(", ")}
-              </td>
-              <td className="numeric">{formatNumber(stream.stats.generated)}</td>
-              <td className="numeric">{(stream.stats.attainment * 100).toFixed(0)}%</td>
-              <td>
-                <div className="row" style={{ gap: 6 }}>
-                  <button type="button" onClick={() => onSelect(stream.id)}>
-                    Watch
-                  </button>
-                  {!RUNNING.has(stream.state) && (
-                    <button type="button" onClick={() => onForget(stream.id)}>
-                      Forget
-                    </button>
-                  )}
-                </div>
-              </td>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Stream</th>
+              <th>State</th>
+              <th>Rates</th>
+              <th className="numeric">Generated</th>
+              <th className="numeric">Attainment</th>
+              <th />
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {streams.map((stream) => (
+              <tr key={stream.id} className={stream.id === selected ? "selected" : undefined}>
+                <td className="mono">{stream.id.slice(0, 8)}</td>
+                <td>{stream.state}</td>
+                <td className="faint">
+                  {Object.entries(stream.config.rates)
+                    .map(([entity, rate]) => `${entity} ${rate}`)
+                    .join(", ")}
+                </td>
+                <td className="numeric">{formatNumber(stream.stats.generated)}</td>
+                <td className="numeric">{(stream.stats.attainment * 100).toFixed(0)}%</td>
+                <td>
+                  <div className="row" style={{ gap: 6 }}>
+                    <button type="button" onClick={() => onSelect(stream.id)}>
+                      Watch
+                    </button>
+                    {!RUNNING.has(stream.state) && (
+                      <button type="button" onClick={() => onForget(stream.id)}>
+                        Forget
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Panel>
   );
 }

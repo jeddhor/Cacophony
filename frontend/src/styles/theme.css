@@ -262,6 +262,9 @@ code,
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px 18px;
+  /* Panels sit in grids, and a grid item defaults to `min-width: auto`: wide
+     content inside one would otherwise widen the column rather than scroll. */
+  min-width: 0;
 }
 
 .panel-title {
@@ -276,11 +279,13 @@ code,
   display: grid;
   gap: 16px;
 }
+/* `min(...)` rather than a bare pixel minimum: below the stated width an
+   auto-fit column keeps that width and pushes the page sideways instead. */
 .grid-2 {
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
 }
 .grid-4 {
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
 }
 
 .stat-value {
@@ -467,6 +472,11 @@ label {
 .field-row {
   margin-bottom: 12px;
 }
+/* Controls laid out three-up wrap onto a second line rather than shrinking:
+   an input narrower than its own placeholder is not a control. */
+.row > .field-row {
+  min-width: 150px;
+}
 .field-row .hint {
   font-size: 0.72rem;
   color: var(--text-faint);
@@ -643,6 +653,97 @@ label {
 }
 
 /* --------------------------------------------------------------------- */
+/* Narrower windows                                                       */
+/*                                                                        */
+/* Cacophony is a desktop application and a browser tab beside a terminal, */
+/* not a phone application: the target is that a window someone actually   */
+/* uses stays usable, down to a half-screen split, rather than a layout    */
+/* redesigned for touch. Nothing here reflows below 320px, and nothing     */
+/* here hides a control - the navigation turns into a row that scrolls,    */
+/* and wide tables scroll inside their own panel instead of taking the     */
+/* page with them.                                                        */
+/* --------------------------------------------------------------------- */
+
+@media (max-width: 860px) {
+  .shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .sidebar {
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .brand {
+    padding: 8px 12px;
+    border-bottom: none;
+    border-right: 1px solid var(--border);
+    flex: none;
+  }
+  /* The tagline and the waveform are the identity, not the interface. */
+  .brand-tag,
+  .waveform {
+    display: none;
+  }
+
+  .nav {
+    flex-direction: row;
+    padding: 6px;
+    flex: 1;
+  }
+  .nav-link {
+    white-space: nowrap;
+    border-left: none;
+    border-bottom: 2px solid transparent;
+  }
+  .nav-link.active {
+    border-left-color: transparent;
+    border-bottom-color: var(--violet);
+  }
+
+  /* The store path and run count are worth a tooltip, not a row of their own
+     once the sidebar is a strip. */
+  .sidebar-foot {
+    margin-top: 0;
+    border-top: none;
+    padding: 8px 12px;
+    white-space: nowrap;
+  }
+
+  .main {
+    padding: 16px 14px 48px;
+  }
+
+  .page-head {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+}
+
+/* Below this the labels are the first thing to go, because nine of them do
+   not fit in any order. The text stays in the document - so the name is still
+   the accessible name - and each link carries it as a tooltip. */
+@media (max-width: 520px) {
+  .nav-link {
+    padding: 8px;
+    gap: 0;
+    font-size: 0;
+  }
+  .nav-link .glyph {
+    font-size: 1rem;
+  }
+  .sidebar-foot {
+    display: none;
+  }
+}
+
+/* --------------------------------------------------------------------- */
 /* Studio (section 48)                                                    */
 /* --------------------------------------------------------------------- */
 
@@ -651,6 +752,12 @@ label {
   grid-template-columns: 200px minmax(0, 1fr) 320px;
   gap: 16px;
   align-items: start;
+  /* A grid item's default `min-width: auto` lets a wide table push the whole
+     column - and therefore the page - past the viewport. */
+  min-width: 0;
+}
+.studio > * {
+  min-width: 0;
 }
 
 @media (max-width: 1180px) {

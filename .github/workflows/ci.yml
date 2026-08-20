@@ -100,6 +100,37 @@ jobs:
       - name: Build
         run: npm --prefix frontend run build
 
+  layout:
+    name: layout
+    # jsdom has no layout: it will report that a 216px sidebar and a 1,200px
+    # table fit inside a 700px window. This runs the Studio in a real browser at
+    # real widths, with the API intercepted rather than served.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm --prefix frontend ci
+
+      - name: Browser
+        run: npm --prefix frontend exec -- playwright install --with-deps chromium
+
+      - name: Layout tests
+        run: npm --prefix frontend run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
   shell:
     name: desktop shell
     runs-on: ubuntu-latest

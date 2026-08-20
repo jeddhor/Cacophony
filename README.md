@@ -158,7 +158,7 @@ plans and estimates, and `on_unavailable: placeholder` runs the whole pipeline
 with obviously-marked stand-ins.
 
 **The manual.** [docs/Cacophony-Manual.pdf](docs/Cacophony-Manual.pdf) is the
-complete reference: <!-- claim:pages -->182<!-- /claim --> pages, every command,
+complete reference: <!-- claim:pages -->184<!-- /claim --> pages, every command,
 every generator option, every schema key, and the reasoning behind the parts
 where the reasoning is the interesting bit. It is built from [docs/manual/](docs/manual/) with one command:
 
@@ -957,7 +957,10 @@ cd frontend
 npm test                # Studio tests
 npm run typecheck       # TypeScript
 npm run build           # build into the package
+npm run test:e2e        # layout, in a real browser at four widths
 ```
+
+The layout tests need a browser once: `npx playwright install chromium`.
 
 ## Design notes worth knowing
 

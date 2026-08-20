@@ -257,8 +257,17 @@ which Cacophony can decide for you:</p>
 <pre><code class="language-console">$ ruff check backend tests && ruff format --check backend tests
 $ mypy backend/cacophony
 $ pytest tests/                       # <!-- claim:tests -->1730<!-- /claim --> tests, about 90 seconds
-$ npm --prefix frontend run typecheck && npm --prefix frontend test</code></pre>
+$ npm --prefix frontend run typecheck && npm --prefix frontend test
+$ npm --prefix frontend run test:e2e  # the layout, in a real browser</code></pre>
 
 <p>The live provider contract tests are marked and skipped unless the
 <code>CACOPHONY_TEST_*</code> variables point at real servers, so the default
 suite needs no GPU and no network.</p>
+
+<p>The layout tests are separate because they need a browser
+(<code>npx playwright install chromium</code>, once). They run the Studio at
+four window widths with the API intercepted, and check the two things a
+component test in jsdom cannot see: that the page never scrolls sideways, and
+that every control stays somewhere a person can reach. jsdom has no layout at
+all &mdash; it will happily report that a 216-pixel sidebar and a
+1,200-pixel table both fit inside a 700-pixel window.</p>

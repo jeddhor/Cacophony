@@ -58,7 +58,7 @@ declined, with the reason recorded. Those are collected at the end.
 | 43 | Provider Registry | built |  |
 | 44 | Plugin Architecture | built | Eight categories, entry points only. |
 | 45 | User Interface Vision | built |  |
-| 46 | Primary Navigation | built |  |
+| 46 | Primary Navigation | built | Nine destinations, and the column becomes a strip in a narrow window rather than eating a third of it. Checked in a real browser at four widths. |
 | 47 | Project Dashboard | built |  |
 | 48 | Schema Studio | built | Fields are dragged to reorder, and moved from the keyboard with Alt and an arrow key; both send the same `move_field` edit as the API. |
 | 49 | Field Editor | built | Choices, bins and lists are edited in place - a weighted choice shows the share each weight is worth. |

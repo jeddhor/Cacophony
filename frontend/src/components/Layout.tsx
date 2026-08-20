@@ -99,6 +99,9 @@ export function Layout({ children }: { children: ReactNode }): ReactNode {
               <NavLink
                 key={destination.to}
                 to={destination.to}
+                // Narrow windows show the glyph alone; the name is still the
+                // link's text, and this makes it readable with a pointer too.
+                title={destination.label}
                 className={({ isActive }) =>
                   `nav-link ${isActive || location.pathname.startsWith(`${destination.to}/`) ? "active" : ""}`
                 }

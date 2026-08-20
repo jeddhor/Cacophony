@@ -88,7 +88,12 @@ sections:
   - {section: 43, state: implemented}
   - {section: 44, state: implemented, note: "Eight categories, entry points only."}
   - {section: 45, state: implemented}
-  - {section: 46, state: implemented}
+  - section: 46
+    state: implemented
+    note: >
+      Nine destinations, and the column becomes a strip in a narrow window
+      rather than eating a third of it. Checked in a real browser at four
+      widths.
   - {section: 47, state: implemented}
   - section: 48
     state: implemented

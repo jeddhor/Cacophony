@@ -29,6 +29,13 @@ frontend/dist/
 frontend/.vite/
 *.tsbuildinfo
 
+# Playwright's own output: traces, screenshots and the HTML report it writes
+# after a failing run. The tests are source; what they leave behind is not.
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/.playwright/
+
 # The Studio is built into the package so `cacophony serve` can serve it.
 # It is an artifact of `npm run build`, not source.
 backend/cacophony/api/static/

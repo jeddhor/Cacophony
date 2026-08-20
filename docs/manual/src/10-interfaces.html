@@ -194,6 +194,24 @@ does <em>not</em> do &mdash; it never rewrites your schema file.</p>
   </tbody>
 </table>
 
+<h2>In a smaller window</h2>
+
+<p>Cacophony is a desktop application and a browser tab beside a terminal, not
+a phone application, and the layout is built for that rather than redesigned
+for touch. Below about 860 pixels the navigation stops being a column and
+becomes a strip along the top, which is the difference between a third of a
+narrow window being chrome and none of it being chrome. Below about 520 the
+strip keeps the glyphs and drops the words, each link still carrying its name
+as a tooltip and as its accessible name. The Studio's three panes stack below
+1,180.</p>
+
+<p>Wide content scrolls inside its own panel rather than taking the page with
+it: a field table with eight columns gets a horizontal scrollbar, and the
+window does not. This is checked rather than asserted &mdash; the layout tests
+in chapter&nbsp;12 load every page at four widths in a real browser and fail if
+the document ever extends past the viewport, or if a control ends up somewhere
+nobody can click.</p>
+
 <h2>Why it never rewrites your file</h2>
 
 <p>A form that saved by re-serialising its own model would produce a correct
