@@ -115,11 +115,20 @@ class _RecordNamespace(dict):
         self._where = where
         self._source = source
 
+    #: What a schema author writes, because the document around the expression
+    #: is YAML or JSON rather than Python. Without these, a rule about a
+    #: nullable field has to say ``None`` - a Python-ism escaping into a file
+    #: that has no other Python in it. A field of the same name still wins,
+    #: since that is somebody's data and this is only a convenience.
+    _LITERALS = {"null": None, "true": True, "false": False}
+
     def __missing__(self, key: str) -> Any:
         if key in self._record:
             return self._record[key]
         if key in self._functions:
             return self._functions[key]
+        if key in self._LITERALS:
+            return self._LITERALS[key]
         # Provenance and asset blocks are prefixed; a rule reading one is
         # almost certainly a typo for a real field.
         available = ", ".join(

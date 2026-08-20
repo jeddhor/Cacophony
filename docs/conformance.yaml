@@ -103,12 +103,13 @@ sections:
   - {section: 55, state: implemented}
   - {section: 56, state: implemented}
   - section: 57
-    state: partial
+    state: implemented
     note: >
-      Structural, constraint, referential and statistical validation are built.
-      Logical (cross-field assertions) is not. Semantic is not, and needs a
-      decision rather than an implementation - it requires a judge model, which
-      is the objection recorded against 67.
+      All six categories. Logical is `assertions:` on an entity, evaluated with
+      the same restricted evaluator as everything else in a schema. Semantic is
+      opt-in and off by default - section 57 asks for that because of cost, and
+      there is a second reason recorded against 67 - and its verdicts are
+      reported as opinions with the judging model named.
   - {section: 58, state: implemented}
   - section: 59
     state: partial
@@ -120,11 +121,27 @@ sections:
           be a configuration option that never worked.
   - {section: 60, state: implemented, note: "Five provenance levels."}
   - section: 61
-    state: deferred
+    state: partial
     note: >
-      The schema accepts a `privacy` key on a field and nothing reads it. There
-      are no detectors for real-looking identifiers, payment data or unsafe
-      domains. Section 62's reserved ranges are the guardrail that does exist.
+      Optional detectors for card numbers that pass a Luhn check, issuable
+      government identifiers, domains outside the reserved ranges, routable
+      addresses and dialable telephone numbers, under a report/warn/block
+      policy. A field may be labelled, and labelled findings are reported under
+      that label. Turned on the shipped templates, they immediately found one:
+      Faker's safe mode rewrote domains and not phone numbers.
+    refuses:
+      - item: "detecting suspiciously realistic public identities"
+        why: >
+          Deciding whether a generated name belongs to a real person needs a list
+          of real people, which is a thing this project should not build and
+          should not ship. Section 61's other three detectors are decidable from
+          the value itself and are built; this one is not, and pretending
+          otherwise would be worse than declining it.
+      - item: "claiming the output is privacy-preserving"
+        why: >
+          Section 61 says not to claim it without an actual privacy technique,
+          and detection is not one. It catches leakage, which is a smaller and
+          different thing, and the documentation says so.
   - {section: 62, state: implemented}
   - {section: 63, state: implemented}
   - section: 64
@@ -137,7 +154,12 @@ sections:
   - {section: 66, state: implemented}
   - section: 67
     state: partial
-    note: "Validity, usability, clipping, speed, duplication and latency are measured."
+    note: >
+      Validity, usability, clipping, speed, duplication and latency are
+      measured. Section 57's optional semantic validation is the nearest thing
+      to what is refused here, and it is deliberately a different instrument:
+      it judges a sample of a run's output and names the judge, rather than
+      scoring models against each other.
     refuses:
       - item: "semantic quality scoring"
         why: >

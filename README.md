@@ -158,7 +158,7 @@ plans and estimates, and `on_unavailable: placeholder` runs the whole pipeline
 with obviously-marked stand-ins.
 
 **The manual.** [docs/Cacophony-Manual.pdf](docs/Cacophony-Manual.pdf) is the
-complete reference: <!-- claim:pages -->178<!-- /claim --> pages, every command,
+complete reference: <!-- claim:pages -->180<!-- /claim --> pages, every command,
 every generator option, every schema key, and the reasoning behind the parts
 where the reasoning is the interesting bit. It is built from [docs/manual/](docs/manual/) with one command:
 
@@ -168,10 +168,10 @@ python docs/manual/build.py
 ```
 
 **What is and is not built.** [docs/CONFORMANCE.md](docs/CONFORMANCE.md) is the
-design document section by section — <!-- claim:sections_implemented -->94<!-- /claim -->
+design document section by section — <!-- claim:sections_implemented -->95<!-- /claim -->
 built, <!-- claim:sections_partial -->16<!-- /claim --> partial,
-<!-- claim:sections_deferred -->2<!-- /claim --> deferred, and
-<!-- claim:refusals -->4<!-- /claim --> sub-items deliberately refused with the
+<!-- claim:sections_deferred -->1<!-- /claim --> deferred, and
+<!-- claim:refusals -->6<!-- /claim --> sub-items deliberately refused with the
 reasoning recorded. It is generated from data and checked by CI, because the
 numbers in this file used to be typed and went stale.
 

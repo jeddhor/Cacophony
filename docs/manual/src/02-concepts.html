@@ -266,6 +266,38 @@ geocoder test can have them without the whole project losing its guarantees.</p>
   intelligence about a real vulnerability.</p>
 </div>
 
+<h2>Detectors for what got through</h2>
+
+<p>Reserved ranges stop Cacophony's own generators producing anything real. They
+do not stop a language model reproducing something it saw, which is what
+section&nbsp;61 is about, so the detectors are the second line:</p>
+
+<pre><code class="language-yaml">privacy:
+  policy: warn      # report, warn, or block</code></pre>
+
+<p>Card numbers that pass a Luhn check, government identifiers in issuable
+ranges, domains outside the reserved names, routable addresses, dialable
+telephone numbers. Absent means not asked for; <code>block</code> makes a finding
+a validation failure, so <code>--on-failure</code> decides what happens next.</p>
+
+<div class="callout">
+  <span class="callout-title">What they found on their first run</span>
+  <p>Turned on the shipped templates, they immediately caught
+  <code>corporate-directory.yaml</code> emitting real-shaped, dialable telephone
+  numbers: Faker's safe mode rewrote domains and nothing else, so
+  <code>provider: phone_number</code> walked straight past it. Faker's phone and
+  identifier output is now replaced from the same reserved ranges the dedicated
+  generators use, and every template is checked by a test.</p>
+</div>
+
+<div class="callout warning">
+  <span class="callout-title">This is leak detection, not privacy</span>
+  <p>Section&nbsp;61 says not to claim synthetic output is privacy-preserving
+  unless an actual privacy technique is used, and detection is not one. It
+  catches things that look real. It says nothing about what could be inferred
+  from a dataset as a whole, and Cacophony does not claim otherwise.</p>
+</div>
+
 <h2>Credentials are never in the file</h2>
 
 <p>A provider names a <em>logical</em> secret. The value is resolved at run time

@@ -820,6 +820,12 @@ Design document sections 58, 59.
 
 ```yaml
 quality:
+  semantic:
+    enabled: true       # off by default; section 57 asks for that, because of cost
+    provider: local_llm
+    sample: 25          # at most this many records
+    every: 97           # take every nth, so the sample is spread
+    threshold: 0.9      # the fraction that must be judged plausible
   duplication:
     max_exact: 0.001        # fraction of compared *values*, not records
     max_near: 0.02
@@ -863,6 +869,78 @@ The defaults are calibrated rather than guessed. On a sixty-word biography with
 only the name changed — the canonical way a model repeats itself — word trigram
 Jaccard is 0.82; with a clause rewritten too it is 0.69; two biographies sharing
 an opening sentence and nothing else score 0.13.
+
+---
+
+## `assertions`
+
+Design document section 57's logical category: a rule about a whole record,
+declared on the entity and checked after the record is generated.
+
+```yaml
+entities:
+  employment:
+    count: 20000
+    assertions:
+      - expr: "ended_on == null or ended_on >= started_on"
+        message: employment ended before it started
+      - expr: "salary > 0 or status == 'unpaid'"
+    fields:
+      ...
+```
+
+`expr` is required; `message` is what a failure says, and defaults to the
+expression. Evaluated with the same restricted evaluator as the `expression`
+generator — no imports, no attribute access, nothing that runs code out of a
+shared project file — with `null`, `true` and `false` available as literals
+because the document around them is YAML rather than Python.
+
+A failed assertion is a validation failure of category `logical`, so it obeys
+`--on-failure` like any other: the default stops the run. Assertions that name a
+field entropy injection damaged are skipped, for the same reason every other
+check skips them.
+
+---
+
+## `privacy`
+
+Design document section 61. Optional detectors for values that look real,
+because a model may reproduce something it saw.
+
+```yaml
+privacy:
+  policy: warn          # report, warn, or block
+  checks: [card_numbers, government_ids, domains, addresses, phone_numbers]
+```
+
+Absent means not asked for; there is no cost unless you want the checks. `report`
+counts findings, `warn` counts and says so in the run summary, and `block` makes
+each one a validation failure — which means `--on-failure` decides what happens
+next.
+
+| Check | Finds |
+|---|---|
+| `card_numbers` | A 13–19 digit run that passes a Luhn check |
+| `government_ids` | An SSN-shaped value in an issuable range — the generator draws from 900-99-9999, which is never issued |
+| `domains` | An email or URL whose domain is outside RFC 2606's reserved names |
+| `addresses` | An IP address that is neither documentation space nor private |
+| `phone_numbers` | A US-shaped number outside the 555-01xx fiction block |
+
+Addresses and telephone numbers are matched against the **whole value** unless
+the field's type says it carries one (`ip_address`, `cidr`, `hostname`, `uri`,
+`phone`). Scanning free prose for dotted quads reports every version string ever
+written — `rv:1.9.6.20` is four octets in range — and a detector that cries wolf
+is a detector people switch off.
+
+A field may carry `privacy: <label>`, which is reported alongside its findings.
+The labels `allow`, `allow_real` and `real` mean the opposite: this field is
+meant to hold realistic values, so do not flag it. A field with `safe: false` is
+exempt already, because that schema has made the choice once and saying it twice
+would be a trap.
+
+**This is leak detection, not privacy.** Section 61 is explicit that a claim of
+privacy preservation needs an actual privacy technique, and detection is not
+one.
 
 ---
 

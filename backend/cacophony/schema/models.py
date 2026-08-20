@@ -36,7 +36,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from ..core.provenance import ProvenanceMode
 from ..core.types import DataType
@@ -361,6 +369,32 @@ class TimelineSpec(_Base):
         return bool(self.start or self.end)
 
 
+class AssertionSpec(_Base):
+    """One logical rule a record must satisfy (design document section 57).
+
+    Section 57's example is ``termination_date >= hire_date``: a statement about
+    a record rather than about a value, which is what makes it a category of its
+    own. Evaluated with the same restricted evaluator as ``expression`` - no
+    imports, no attribute access, nothing that runs code out of a shared project
+    file.
+    """
+
+    name: str = ""
+    #: The expression, which must be true of every record.
+    expr: str = Field(default="", validation_alias=AliasChoices("expr", "expression", "check"))
+    #: What to say when it is not. The expression itself, when nothing is given.
+    message: str = ""
+
+    @model_validator(mode="after")
+    def _needs_an_expression(self) -> AssertionSpec:
+        if not self.expr.strip():
+            raise ValueError("an assertion needs an 'expr'")
+        return self
+
+    def describe(self) -> str:
+        return self.message or self.name or self.expr
+
+
 class EntitySpec(_Base):
     """A logical record type (section 6)."""
 
@@ -377,6 +411,9 @@ class EntitySpec(_Base):
     primary_key: str | None = None
     seed: int | None = None
     tags: list[str] = Field(default_factory=list)
+    #: Section 57's logical category: rules about a whole record, checked after
+    #: it is generated and before it is written.
+    assertions: list[AssertionSpec] = Field(default_factory=list)
     simulation: SimulationSpec = Field(default_factory=SimulationSpec)
 
     @model_validator(mode="after")
@@ -562,10 +599,55 @@ class PatchSpec(_Base):
     keep: bool = False
 
 
+class PrivacySpec(_Base):
+    """The ``privacy:`` block (design document section 61).
+
+    Optional, and off unless a project asks for it - the same rule the
+    duplication thresholds follow. Detection costs something per value, and
+    nothing should be measured that nobody asked for.
+
+    ``policy`` decides what a finding means. ``report`` counts it, ``warn``
+    counts and says so, ``block`` makes it a validation failure and therefore
+    obeys ``--on-failure``.
+    """
+
+    enabled: bool = True
+    policy: Literal["report", "warn", "block"] = "warn"
+    #: Which detectors to run. Empty means all of them.
+    checks: list[str] = Field(default_factory=list)
+
+    def is_enabled(self) -> bool:
+        return self.enabled
+
+
+class SemanticSpec(_Base):
+    """Optional model-judged plausibility (design document section 57).
+
+    Off unless asked for, and section 57 says why: cost. There is a second
+    reason, recorded against section 67 - judging generated text with a language
+    model makes the measurement depend on the same kind of machinery that
+    produced it - which is why the result is reported as an opinion with the
+    model's name attached rather than as a score.
+    """
+
+    enabled: bool = False
+    provider: str | None = None
+    model: str | None = None
+    #: Which fields to judge. Empty means the model-written ones.
+    fields: list[str] = Field(default_factory=list)
+    #: At most this many records, so the cost is bounded and stated.
+    sample: int = Field(default=25, ge=1, le=1000)
+    #: Take every nth record, so the sample is spread rather than the first N.
+    every: int = Field(default=97, ge=1)
+    #: The fraction that must be judged plausible for the run to be content.
+    threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
 class QualitySpec(_Base):
     """The ``quality:`` block (design document sections 58, 59)."""
 
     duplication: DuplicationSpec = Field(default_factory=DuplicationSpec)
+    semantic: SemanticSpec = Field(default_factory=SemanticSpec)
 
 
 class OutputProfileSpec(_Base):
@@ -611,6 +693,9 @@ class ProjectSpec(_Base):
     timeline: TimelineSpec = Field(default_factory=TimelineSpec)
     chaos: ChaosSpec = Field(default_factory=ChaosSpec)
     quality: QualitySpec = Field(default_factory=QualitySpec)
+    #: Section 61's detectors. ``None`` - the default - is "not asked for",
+    #: which is different from a block that turns them off.
+    privacy: PrivacySpec | None = None
     #: Project-local recipe definitions (section 80). Consumed by expansion.
     recipes: dict[str, Any] = Field(default_factory=dict)
     #: Plugins this project needs installed (section 44).

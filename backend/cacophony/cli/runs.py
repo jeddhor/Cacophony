@@ -430,6 +430,56 @@ def _report_world(summary: dict[str, Any]) -> None:
         )
 
 
+def _report_privacy(summary: dict[str, Any]) -> None:
+    """What looked real (design document section 61).
+
+    Counted per check rather than per value: "eleven domains outside the
+    reserved ranges" is actionable, and eleven near-identical lines are not.
+    """
+    reports: dict[str, dict[str, Any]] = {
+        name: stats["privacy"]
+        for name, stats in (summary.get("validation") or {}).items()
+        if isinstance(stats, dict) and isinstance(stats.get("privacy"), dict)
+    }
+    if not reports:
+        return
+
+    for name, report in reports.items():
+        findings = report.get("findings") or {}
+        policy = report.get("policy", "warn")
+        if not findings:
+            console.print(f"  [cacophony.ok]privacy[/]         {name}: nothing looked real")
+            continue
+        detail = ", ".join(f"{count:,} {check}" for check, count in findings.items())
+        style = "cacophony.error" if policy == "block" else "cacophony.warn"
+        console.print(f"  [{style}]privacy[/]         {name}: {detail}")
+
+
+def _report_semantic(summary: dict[str, Any]) -> None:
+    """What a judge model thought (design document section 57).
+
+    With the model named, always. A plausibility rate is an opinion, and an
+    opinion with no attribution is worse than no opinion.
+    """
+    reports = summary.get("semantic") or {}
+    for name, report in reports.items():
+        if report.get("error"):
+            console.print(f"  [cacophony.warn]semantic[/]        {name}: {report['error']}")
+            continue
+        judged = report.get("judged", 0)
+        if not judged:
+            continue
+        rate = report.get("rate")
+        who = ", ".join(report.get("judged_by") or []) or "an unnamed model"
+        line = (
+            f"  [cacophony.muted]semantic[/]        {name}: {rate:.0%} of {judged:,} "
+            f"sampled values judged plausible by {who}"
+        )
+        if report.get("meets_threshold") is False:
+            line = line.replace("[cacophony.muted]", "[cacophony.warn]")
+        console.print(line)
+
+
 def _report_duplication(summary: dict[str, Any]) -> None:
     """What the model repeated (design document section 59).
 
@@ -574,6 +624,8 @@ def report_outcome(outcome: RunOutcome, *, on_provider_activity: Any = None) -> 
 
     _report_relations(summary)
     _report_duplication(summary)
+    _report_privacy(summary)
+    _report_semantic(summary)
     _report_assets(summary)
     _report_world(summary)
     _report_edge_cases(summary)

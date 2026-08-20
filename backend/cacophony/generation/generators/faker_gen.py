@@ -22,7 +22,7 @@ import re
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from ...core.interfaces import SyncGenerator
-from ...core.safe_identifiers import sanitise_domain
+from ...core.safe_identifiers import safe_phone_us, safe_ssn_shaped, sanitise_domain
 from ..registry import register_generator
 from .base import OptionsMixin
 
@@ -30,6 +30,14 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...core.context import GenerationContext
 
 __all__ = ["FakerGenerator"]
+
+#: Providers whose output is a telephone number. Faker's are well-formed and
+#: dialable, which is exactly what section 62 exists to prevent - and what the
+#: section 61 detectors caught in a shipped template on their first real run.
+_PHONE_PROVIDERS = frozenset({"phone_number", "cell_phone", "msisdn", "phone_number_object"})
+
+#: Providers whose output is a government identifier in an issuable range.
+_ID_PROVIDERS = frozenset({"ssn", "itin", "ein"})
 
 #: Providers whose output contains a domain that must be made safe.
 _DOMAIN_PROVIDERS = frozenset(
@@ -124,10 +132,27 @@ class FakerGenerator(OptionsMixin, SyncGenerator):
 
         if self.safe and self.provider in _DOMAIN_PROVIDERS:
             return _make_safe(self.provider, value)
+        if self.safe and self.provider in (_PHONE_PROVIDERS | _ID_PROVIDERS):
+            # Replaced rather than mangled, and drawn from the same reserved
+            # ranges the dedicated generators use, so a Faker phone number and a
+            # `generator: phone` phone number are equally unreachable.
+            return _reserved_instead(self.provider, context)
         return value
 
     def describe(self) -> str:
         return f"faker({self.provider})"
+
+
+def _reserved_instead(provider: str, context: GenerationContext) -> str:
+    """A value from section 62's reserved ranges, in place of a real-looking one.
+
+    Derived from the field's own seed, so it is as reproducible as everything
+    else here rather than being a second source of randomness.
+    """
+    rng = context.rng()
+    if provider in _ID_PROVIDERS:
+        return safe_ssn_shaped(rng)
+    return safe_phone_us(rng)
 
 
 def _make_safe(provider: str, value: Any) -> Any:

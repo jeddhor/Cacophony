@@ -193,6 +193,7 @@ class GenerationEngine:
         #: everything generated before it, so a per-batch detector would find
         #: almost nothing.
         self._detectors: dict[str, Any] = {}
+        self._judges: dict[str, Any] = {}
         self.detect_duplicates = detect_duplicates
         self._enricher: Any = None
         self._group_cache: dict[tuple[str, int, int], list[Any]] = {}
@@ -794,6 +795,7 @@ class GenerationEngine:
             prepared = await self._prepare(entity, indices, entity_seeds)
 
             detector = self._detector_for(entity)
+            judge = self._judge_for(entity)
             batch: list[GeneratedRecord] = []
             for index, record in prepared:
                 if validator is not None:
@@ -808,6 +810,8 @@ class GenerationEngine:
                 # were thrown away.
                 if detector is not None:
                     detector.observe(record)
+                if judge is not None:
+                    judge.observe(record)
                 batch.append(record)
                 stats.generated += 1
 
@@ -1071,6 +1075,37 @@ class GenerationEngine:
         self._detectors[entity.name] = detector
         return detector
 
+    def _judge_for(self, entity: CompiledEntity) -> Any:
+        """The semantic evaluator for an entity, or None (section 57).
+
+        Off unless the schema asks. It samples during the run and judges at the
+        end, so a model is called a bounded number of times rather than once per
+        record - which is the cost section 57 is careful about.
+        """
+        if entity.name in self._judges:
+            return self._judges[entity.name]
+
+        from ..validation.semantic import SemanticEvaluator
+
+        judge = None
+        if self.runtime is not None:
+            judge = SemanticEvaluator.for_entity(entity, self.compiled.spec.quality.semantic)
+        self._judges[entity.name] = judge
+        return judge
+
+    async def semantic_reports(self) -> dict[str, Any]:
+        """Ask the judge about what it collected. Called once, at the end."""
+        if self.runtime is None:
+            return {}
+        reports: dict[str, Any] = {}
+        for name, judge in self._judges.items():
+            if judge is None:
+                continue
+            verdict = await judge.evaluate(self.runtime)
+            if verdict is not None:
+                reports[name] = verdict
+        return reports
+
     def duplication_reports(self) -> dict[str, Any]:
         """Closed reports for every entity that was checked."""
         return {
@@ -1086,6 +1121,7 @@ class GenerationEngine:
                 entity,
                 resolver=self.resolver,
                 reference_sample_every=self.reference_sample_every,
+                privacy=self.compiled.spec.privacy,
             )
             self._validators[entity.name] = validator
         return validator

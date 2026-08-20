@@ -15,6 +15,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ..simulation.chaos import DUPLICATE_MARK
+from .logical import LogicalValidator
+from .privacy import PrivacyValidator
 from .referential import ReferentialValidator, StatisticalValidator
 from .results import Severity, ValidationResult, ValidationStats
 from .validators import ConstraintValidator, StructuralValidator
@@ -22,6 +24,7 @@ from .validators import ConstraintValidator, StructuralValidator
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..core.record import GeneratedRecord
     from ..generation.relations import EntityResolver
+    from ..schema.models import PrivacySpec
     from ..schema.plan import CompiledEntity
 
 __all__ = ["RecordValidator"]
@@ -45,6 +48,7 @@ class RecordValidator:
         track_unique: bool = True,
         resolver: EntityResolver | None = None,
         reference_sample_every: int = 1,
+        privacy: PrivacySpec | None = None,
     ) -> None:
         self.entity = entity
         self.stats = ValidationStats()
@@ -59,6 +63,14 @@ class RecordValidator:
             else None
         )
         self.statistical = StatisticalValidator(entity)
+
+        # Section 57's logical category: rules about a record rather than a
+        # value, so they need every field before they can be asked.
+        self.logical = LogicalValidator(entity)
+
+        # Section 61's detectors, which a project has to ask for.
+        privacy_spec = getattr(entity, "privacy", None) or privacy
+        self.privacy = PrivacyValidator(entity, privacy_spec) if privacy_spec else None
 
         self._structural: list[tuple[str, StructuralValidator]] = []
         self._constraint: list[tuple[str, ConstraintValidator]] = []
@@ -132,6 +144,12 @@ class RecordValidator:
         if self.referential is not None and not self.referential.is_noop:
             result.issues.extend(self.referential.validate(record, skip=damaged).issues)
 
+        if not self.logical.is_noop:
+            result.issues.extend(self.logical.validate(record, skip=set(damaged)).issues)
+
+        if self.privacy is not None and not self.privacy.is_noop:
+            result.issues.extend(self.privacy.validate(record, skip=set(damaged)).issues)
+
         if not self.statistical.is_noop:
             self.statistical.observe(record)
 
@@ -184,6 +202,8 @@ class RecordValidator:
         data: dict[str, Any] = self.stats.to_dict()
         if self.referential is not None and not self.referential.is_noop:
             data["referential"] = self.referential.to_dict()
+        if self.privacy is not None and not self.privacy.is_noop:
+            data["privacy"] = self.privacy.summary()
         if not self.statistical.is_noop:
             data["statistical"] = self.statistical.to_dict()
         return data

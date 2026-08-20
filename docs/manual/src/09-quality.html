@@ -13,17 +13,60 @@ validator that runs afterwards can be, and tells you.</p>
 
 <h2>What is checked</h2>
 
+<p>Section&nbsp;57 names six categories, and all six are here. Four run always;
+two run when a schema asks.</p>
+
 <table class="compact">
   <thead><tr><th>Category</th><th>Checks</th></tr></thead>
   <tbody>
-    <tr><td>Type</td><td>The value is of the declared type, or coercible to it without loss</td></tr>
-    <tr><td>Constraints</td><td><code>min</code>, <code>max</code>, lengths, <code>pattern</code>, <code>enum</code>, <code>forbidden</code>, <code>multiple_of</code>, <code>precision</code></td></tr>
-    <tr><td>Nullability</td><td>A null appears only where nulls are permitted</td></tr>
-    <tr><td>Uniqueness</td><td>Fields marked <code>unique</code> have no repeats</td></tr>
+    <tr><td>Structural</td><td>The value is of the declared type, or coercible to it without loss; nulls only where permitted</td></tr>
+    <tr><td>Constraint</td><td><code>min</code>, <code>max</code>, lengths, <code>pattern</code>, <code>enum</code>, <code>forbidden</code>, <code>multiple_of</code>, <code>precision</code>, and <code>unique</code></td></tr>
     <tr><td>Referential</td><td>Every foreign key resolves to a record that exists</td></tr>
-    <tr><td>Duplication</td><td>When <code>quality:</code> asks for it. Next chapter.</td></tr>
+    <tr><td>Statistical</td><td>Categorical fields land near their declared weights</td></tr>
+    <tr><td>Logical</td><td>An entity's <code>assertions:</code> &mdash; rules about a whole record</td></tr>
+    <tr><td>Semantic</td><td>A judge model's opinion of a sample. Off by default</td></tr>
   </tbody>
 </table>
+
+<h2>Logical: rules about a record</h2>
+
+<p>A constraint asks whether a <em>value</em> is acceptable. Section&nbsp;57's
+logical category asks whether a <em>record</em> makes sense, which takes more
+than one field to answer &mdash; the section's own example is
+<code>termination_date &gt;= hire_date</code>.</p>
+
+<pre><code class="language-yaml">entities:
+  employment:
+    assertions:
+      - expr: "ended_on == null or ended_on &gt;= started_on"
+        message: employment ended before it started</code></pre>
+
+<p>Evaluated with the same restricted evaluator as everything else in a schema,
+with <code>null</code>, <code>true</code> and <code>false</code> available as
+literals &mdash; the document around the expression is YAML, and a rule about a
+nullable field should not have to say <code>None</code>. A failure is a
+validation failure of category <code>logical</code>, so <code>--on-failure</code>
+decides what happens next.</p>
+
+<h2>Semantic: an opinion, attributed</h2>
+
+<p>Off unless asked for. Section&nbsp;57 says why &mdash; cost &mdash; and there
+is a second reason: judging generated text with a language model makes the
+measurement depend on the same kind of machinery that produced it, which is
+exactly the objection this manual records against scoring semantic quality in
+the benchmark (chapter&nbsp;35).</p>
+
+<pre><code class="language-yaml">quality:
+  semantic:
+    enabled: true
+    provider: local_llm
+    sample: 25          # bounded, and stated
+    threshold: 0.9</code></pre>
+
+<pre class="small"><code class="language-console">  semantic        note: 96% of 25 sampled values judged plausible by qwen3:8b</code></pre>
+
+<p>The model is always named. A plausibility rate with no attribution is worse
+than no rate at all, because it reads like a measurement.</p>
 
 <h2>Two different failures, one flag</h2>
 

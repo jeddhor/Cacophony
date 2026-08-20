@@ -202,6 +202,8 @@ class Conductor:
         #: Set when the run stopped on a record that failed validation, so the
         #: caller can offer the advice that helps rather than "try resuming".
         self._validation_failure = False
+        #: Section 57's semantic verdicts, when the schema asked for them.
+        self._semantic: dict[str, Any] = {}
         #: Set by :meth:`resume`; a resumed run reports differently and skips
         #: the planning step because its jobs come from the store.
         self._resumed = False
@@ -422,6 +424,11 @@ class Conductor:
         started = time.perf_counter()
         try:
             await self._run_jobs()
+            # Section 57's optional semantic pass, after the records exist and
+            # before the summary is assembled. Off unless the schema asked, and
+            # it never fails a run: an opinion that could not be obtained is
+            # reported as one that could not be obtained.
+            await self._judge_semantics()
         except RunAbortedError:
             self._finish(RunState.CANCELLED, "cancelled by request")
         except ValidationFailedError as exc:
@@ -449,6 +456,15 @@ class Conductor:
             error=self.error,
             validation_failure=self._validation_failure,
         )
+
+    async def _judge_semantics(self) -> None:
+        """Ask the judge, if there is one. Never raises into the run."""
+        if self._engine_instance is None:
+            return
+        try:
+            self._semantic = await self._engine_instance.semantic_reports()
+        except Exception as exc:  # pragma: no cover - a provider problem
+            self.log.warning("semantic evaluation failed", status="degraded", error=str(exc))
 
     async def _run_jobs(self) -> None:
         """Execute jobs, overlapping the ones that do not depend on each other."""
@@ -874,6 +890,12 @@ class Conductor:
             if duplication:
                 data["duplication"] = duplication
                 data["quality"].update(_quality_from_duplication(duplication))
+
+            # What a judge model thought of a sample (section 57), when one was
+            # asked. Reported beside the measurements rather than among them,
+            # because it is an opinion and carries the name of who held it.
+            if self._semantic:
+                data["semantic"] = self._semantic
 
             # What was made deliberately awkward (section 79).
             edges = engine.edge_case_reports()
