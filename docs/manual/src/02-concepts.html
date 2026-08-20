@@ -310,6 +310,15 @@ listing on the box.</p>
   emailed them.</li>
 </ul>
 
+<h2>What a served Cacophony can reach</h2>
+
+<p>The API registers projects by path, rewrites their schemas, and writes runs
+where the caller says. On loopback that is exactly as powerful as the shell that
+started it, which is the honest description of a local tool. On any other
+interface it is somebody else's shell, so a token and a set of permitted
+directories are required before it will start &mdash; and a path outside them is
+refused with a 403 rather than quietly resolved.</p>
+
 <h2>Provenance, and what it retains</h2>
 
 <p><code>--provenance</code> records how data came to exist. The highest level

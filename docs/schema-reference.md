@@ -1713,6 +1713,33 @@ pip install 'cacophony[api]'
 cacophony serve --port 8765
 ```
 
+### What serving exposes
+
+On loopback the API is as powerful as the shell that started it: it registers
+projects **by path**, rewrites their schemas on disk, and writes runs to a
+directory the caller names. For a local tool that is the honest description, and
+confining it there would be theatre — the same shell could do all of it.
+
+Bound anywhere else, "the shell that started it" is somebody else's shell, so
+two things become mandatory:
+
+```bash
+export CACOPHONY_TOKEN=$(python -c 'import secrets;print(secrets.token_urlsafe(32))')
+cacophony serve --host 0.0.0.0 --allow-root /srv/projects --allow-root /srv/data
+```
+
+| | |
+|---|---|
+| `CACOPHONY_TOKEN` | Required for any non-loopback bind. Guards `/api` over HTTP and WebSockets, the same gate the desktop shell uses. Read from the environment rather than a flag, because a flag lands in shell history and in every process listing (section 63) |
+| `--allow-root PATH` | Repeatable. Every path a request names — a project to register, a directory to write a run into — must resolve inside one of these. Defaults to the project's directory, or the working directory |
+| `--insecure` | Serve without a token anyway. For an interface you know is private |
+
+A refused path returns **403** with the directories that were permitted. Paths
+are resolved before they are checked, so `..` and symlinks land where they
+really point.
+
+`cacophony serve` on loopback is unchanged, and needs none of this.
+
 | Method | Route | Purpose |
 |---|---|---|
 | `GET` | `/api/projects` | List registered projects |

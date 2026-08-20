@@ -31,6 +31,7 @@ compiler's message rather than a 500 with a traceback.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,7 @@ from fastapi.responses import JSONResponse
 from .. import __version__
 from ..core.errors import (
     CacophonyError,
+    PathNotAllowedError,
     ProviderNotFoundError,
     ProviderUnavailableError,
     SchemaError,
@@ -199,12 +201,18 @@ def create_app(
     service: RunService | None = None,
     static_dir: str | Path | None = None,
     token: str | None = None,
+    allowed_roots: Sequence[str | Path] | None = None,
 ) -> FastAPI:
     """Build the FastAPI application.
 
     ``static_dir`` mounts a built Studio at the root, so one process serves
     both the API and the UI. In development the Vite server proxies to this
     instead, and nothing is mounted.
+
+    ``allowed_roots`` confines every path a request may name - a project to
+    register, a directory to write a run into. ``None`` leaves the API as
+    powerful as the shell that started it, which is the honest default on
+    loopback and refused by the CLI anywhere else.
 
     ``token`` requires every API call to present it, and is what the desktop
     shell uses (section 41). A local HTTP server is reachable by every process
@@ -214,7 +222,7 @@ def create_app(
     nobody asked for. ``cacophony serve`` passes nothing, so the served
     behaviour is unchanged.
     """
-    runs = service or RunService(store_path=store_path)
+    runs = service or RunService(store_path=store_path, allowed_roots=allowed_roots)
     streams = StreamService()
 
     @asynccontextmanager
@@ -240,6 +248,11 @@ def create_app(
         app.add_middleware(_TokenGate, token=token)
 
     # -- error translation -------------------------------------------------- #
+
+    @app.exception_handler(PathNotAllowedError)
+    async def _path_not_allowed(_request: Any, exc: PathNotAllowedError) -> JSONResponse:
+        # 403 rather than 400: the request was well formed and is refused.
+        return JSONResponse(status_code=403, content={"error": "path", "detail": str(exc)})
 
     @app.exception_handler(SchemaError)
     async def _schema_error(_request: Any, exc: SchemaError) -> JSONResponse:

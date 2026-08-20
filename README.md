@@ -205,7 +205,9 @@ interpreter and packages where they are, which produces an environment that
 claims one Python version and runs another.
 
 The extras are `api` (the server and the Studio), `parquet`, `keyring`,
-`kafka` and `dev`. None is needed to generate data to a file.
+`kafka` and `dev`. None is needed to generate data to a file. Every one of them
+is installed by CI on each push, which is how `cacophony[kafka]` stopped being
+documented without existing.
 
 ## Try it
 

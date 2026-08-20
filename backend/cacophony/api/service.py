@@ -14,10 +14,12 @@ loop between batches, so the API stays responsive while a run is going.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..core.errors import CacophonyError, SchemaError
+from ..core.errors import CacophonyError, PathNotAllowedError, SchemaError
+from ..core.files import atomic_write_text
 from ..runs.config import RunConfig
 from ..runs.coordinator import Conductor
 from ..runs.events import EventBus
@@ -38,12 +40,45 @@ __all__ = ["RunService"]
 class RunService:
     """Owns the store, the live runs, and the buses that report on them."""
 
-    def __init__(self, database: Database | None = None, *, store_path: str | Path | None = None):
+    def __init__(
+        self,
+        database: Database | None = None,
+        *,
+        store_path: str | Path | None = None,
+        allowed_roots: Sequence[str | Path] | None = None,
+    ):
         self.database = database or Database(store_path)
         self.repository = Repository(self.database)
+        #: Directories a request may name. ``None`` means anywhere, which is
+        #: the right answer on loopback: the API can do what the shell that
+        #: started it can do, and pretending otherwise would be theatre. The CLI
+        #: requires roots for any bind that is not loopback, where "the shell
+        #: that started it" is somebody else's shell.
+        self.allowed_roots: list[Path] | None = (
+            [Path(root).expanduser().resolve() for root in allowed_roots]
+            if allowed_roots is not None
+            else None
+        )
         self._conductors: dict[str, Conductor] = {}
         self._tasks: dict[str, asyncio.Task[Any]] = {}
         self._buses: dict[str, EventBus] = {}
+
+    def permitted(self, path: str | Path, *, what: str = "path") -> Path:
+        """Resolve a path a request named, refusing anything outside the roots.
+
+        Resolved first, so ``..`` and a symlink both land where they really
+        point rather than where they claim to.
+        """
+        resolved = Path(path).expanduser().resolve()
+        if self.allowed_roots is None:
+            return resolved
+        for root in self.allowed_roots:
+            if resolved == root or root in resolved.parents:
+                return resolved
+        roots = ", ".join(str(root) for root in self.allowed_roots)
+        raise PathNotAllowedError(
+            f"{what} {resolved} is outside the directories this server may use ({roots})."
+        )
 
     # -- projects ----------------------------------------------------------- #
 
@@ -59,7 +94,7 @@ class RunService:
             text = source
             resolved = path
         else:
-            resolved = str(Path(path).resolve())  # type: ignore[arg-type]
+            resolved = str(self.permitted(path, what="project"))  # type: ignore[arg-type]
             project = load_project(resolved)
             text = Path(resolved).read_text(encoding="utf-8")
 
@@ -172,7 +207,9 @@ class RunService:
             )
 
         project = self._parse_source(source)
-        Path(path).write_text(source, encoding="utf-8")
+        # Re-checked rather than trusted: a project registered before the server
+        # was confined would otherwise still be writable through it.
+        atomic_write_text(self.permitted(path, what="project"), source)
         _, revision_id = self.repository.upsert_project(project, path=path, source_text=source)
         return {"project_id": project_id, "revision_id": revision_id, "source": source}
 
@@ -180,6 +217,14 @@ class RunService:
 
     async def start_run(self, project_id: int, config: RunConfig) -> dict[str, Any]:
         """Plan a run, register it, and execute it in the background."""
+        # Where a run writes is chosen by the caller, so it is checked like any
+        # other path a caller names. Without this, a request could write
+        # generated files - whose names and contents a schema decides - into any
+        # directory the server can reach.
+        config.output_dir = self.permitted(config.output_dir, what="output directory")
+        if config.assets_dir is not None:
+            config.assets_dir = self.permitted(config.assets_dir, what="assets directory")
+
         compiled, revision_id, _name = self.load_for_run(project_id)
 
         bus = EventBus()

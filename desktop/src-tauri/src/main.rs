@@ -110,7 +110,7 @@ fn escape_somebody_elses_snap() {
         "GDK_PIXBUF_MODULE_FILE",
         "LOCPATH",
     ] {
-        if points_into_a_snap(&name) {
+        if points_into_a_snap(name) {
             std::env::remove_var(name);
         }
     }
@@ -135,7 +135,9 @@ fn escape_somebody_elses_snap() {
 /// Whether a variable's value names somewhere inside a snap.
 #[cfg(target_os = "linux")]
 fn points_into_a_snap(name: &str) -> bool {
-    std::env::var(name).map(|value| is_snap_path(&value)).unwrap_or(false)
+    std::env::var(name)
+        .map(|value| is_snap_path(&value))
+        .unwrap_or(false)
 }
 
 /// `/snap/code/257/...` and `/home/jason/snap/code/common/...` are both a snap's
@@ -282,7 +284,10 @@ fn parse_handshake(payload: &str) -> Result<Ready, String> {
     let value: serde_json::Value =
         serde_json::from_str(payload).map_err(|error| format!("Unreadable handshake: {error}"))?;
 
-    let version = value.get("version").and_then(|item| item.as_u64()).unwrap_or(0);
+    let version = value
+        .get("version")
+        .and_then(|item| item.as_u64())
+        .unwrap_or(0);
     if version > HANDSHAKE_VERSION {
         return Err(format!(
             "This backend speaks handshake version {version}; this application understands \

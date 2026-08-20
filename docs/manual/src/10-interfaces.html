@@ -14,6 +14,50 @@ interface, which is what keeps them from drifting apart.</p>
 $ cacophony serve --port 8765
 # interactive documentation at http://127.0.0.1:8765/docs</code></pre>
 
+<h2>What serving exposes</h2>
+
+<p>On loopback this API is as powerful as the shell that started it. It
+registers projects <em>by path</em>, rewrites their schemas on disk, and writes
+runs to a directory the caller names. For a local tool that is the honest
+description rather than a flaw &mdash; the same shell could do all three &mdash;
+and confining it there would be theatre.</p>
+
+<p>Bound to an interface other machines can reach, "the shell that started it"
+is somebody else's shell. So it refuses:</p>
+
+<pre class="small"><code class="language-console">$ cacophony serve --host 0.0.0.0
+error refusing to serve on 0.0.0.0 without a token.
+This API registers projects by path, rewrites their schemas, and writes
+runs wherever a request asks. Off loopback that is somebody else's shell.
+
+  export CACOPHONY_TOKEN=$(python -c 'import secrets;print(secrets.token_urlsafe(32))')
+  cacophony serve --host 0.0.0.0 --allow-root .
+
+Or pass --insecure if this interface is genuinely private.</code></pre>
+
+<table class="compact">
+  <caption>Serving beyond loopback</caption>
+  <thead><tr><th>Control</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">CACOPHONY_TOKEN</td><td>Required. Guards <code>/api</code> over HTTP and WebSockets &mdash; the same gate the desktop shell uses. From the environment rather than a flag, because a flag lands in shell history and in every process listing <span class="sec">section&nbsp;63</span></td></tr>
+    <tr><td class="mono">--allow-root PATH</td><td>Repeatable. Every path a request names must resolve inside one of these. Defaults to the project's directory, or the working directory</td></tr>
+    <tr><td class="mono">--insecure</td><td>Serve without a token anyway, for an interface you know is private</td></tr>
+  </tbody>
+</table>
+
+<p>A refused path returns <strong>403</strong>, naming the directories that were
+permitted. Paths are resolved before they are checked, so <code>..</code> and a
+symlink both land where they really point rather than where they claim to.</p>
+
+<div class="callout quiet">
+  <span class="callout-title">And the schema file is replaced atomically</span>
+  <p>Written beside the target, flushed, and renamed over it. A reader sees the
+  old file or the new one and never a half-written one, and a crash costs the
+  write rather than the project. <code>cacophony transform --in-place</code>
+  always did this; the schema editor did not, which is the sort of inconsistency
+  that only shows up on the day it matters.</p>
+</div>
+
 <h2>Projects and schemas</h2>
 
 <table class="compact">

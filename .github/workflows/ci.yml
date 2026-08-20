@@ -1,0 +1,144 @@
+# Everything that has to be true before a change is worth keeping.
+#
+# This exists because of a specific failure: an audit ran the suite in a fresh
+# environment, a resolver picked a Starlette and httpx pair whose TestClient
+# deadlocks, and a hundred and nine tests that pass on the author's machine did
+# not run at all. "Works here" is not a claim anybody can check. A matrix of
+# supported interpreters, resolving dependencies afresh each time, is.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every interpreter `requires-python` claims to support. The oldest and
+        # the newest are where version-sensitive breakage actually appears.
+        python: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          # Resolved fresh rather than from a lock file: the point is to find
+          # out what a new user's resolver picks, which is what the audit hit.
+          python -m pip install -e ".[dev,parquet,api,kafka]"
+
+      - name: What was resolved
+        run: python -m pip list
+
+      - name: Lint
+        run: |
+          ruff check backend tests
+          ruff format --check backend tests
+
+      - name: Types
+        run: mypy backend/cacophony
+
+      - name: Tests
+        run: pytest tests/ -q
+
+  frontend:
+    name: studio
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm --prefix frontend ci
+
+      - name: Types
+        run: npm --prefix frontend run typecheck
+
+      - name: Tests
+        run: npm --prefix frontend test
+
+      - name: Build
+        run: npm --prefix frontend run build
+
+  shell:
+    name: desktop shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System dependencies
+        # webkit2gtk is what the shell links against; without it cargo cannot
+        # even check the crate.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Check
+        run: cargo check --locked --manifest-path desktop/src-tauri/Cargo.toml
+
+      - name: Lint
+        run: |
+          cargo fmt --manifest-path desktop/src-tauri/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path desktop/src-tauri/Cargo.toml -- -D warnings
+
+  packaging:
+    name: packaging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Every extra installs
+        # The kafka extra was documented for months without existing. Installing
+        # each one is how that stops being possible.
+        run: |
+          python -m pip install --upgrade pip build
+          python -m pip install ".[api]"
+          python -m pip install ".[parquet]"
+          python -m pip install ".[keyring]"
+          python -m pip install ".[kafka]"
+
+      - name: The wheel carries what it claims
+        run: |
+          python -m build --wheel
+          python - <<'PY'
+          import pathlib, zipfile
+          wheel = sorted(pathlib.Path("dist").glob("*.whl"))[-1]
+          names = zipfile.ZipFile(wheel).namelist()
+          metadata = next(n for n in names if n.endswith("METADATA"))
+          text = zipfile.ZipFile(wheel).read(metadata).decode()
+          assert "License-Expression: AGPL-3.0-or-later" in text, "licence missing"
+          assert any(n.endswith("licenses/LICENSE") for n in names), "LICENSE missing"
+          for extra in ("api", "dev", "kafka", "keyring", "parquet"):
+              assert f"Provides-Extra: {extra}" in text, f"{extra} extra missing"
+          print(wheel.name, "carries its licence and all five extras")
+          PY

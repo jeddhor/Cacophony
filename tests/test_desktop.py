@@ -487,7 +487,15 @@ class TestTheShellIsConfigured:
 class TestServeIsUnchanged:
     """Section 41's constraint, checked on the command rather than the app."""
 
-    def test_serve_still_takes_a_fixed_port_and_no_token(self) -> None:
+    def test_serve_on_loopback_asks_for_nothing(self) -> None:
+        """Section 41's requirement, restated after the serving audit.
+
+        This used to assert that `serve --help` never says "token" at all. It
+        now does — a bind beyond loopback requires one, because there the API is
+        somebody else's shell rather than yours. What must not change is the
+        local case: a fixed port, no token, no ceremony. So the assertion is
+        that nothing is *required*, not that a word is absent.
+        """
         from typer.testing import CliRunner
 
         from cacophony.cli.main import app
@@ -495,7 +503,19 @@ class TestServeIsUnchanged:
         result = CliRunner().invoke(app, ["serve", "--help"])
         assert result.exit_code == 0
         assert "--port" in result.stdout
-        assert "token" not in result.stdout.lower()
+        # Typer marks required options with an asterisk; serve has none.
+        assert "*" not in result.stdout
+        # And the token is described as belonging to the non-local case.
+        assert "loopback" in result.stdout.lower()
+
+    def test_the_untokened_app_is_the_one_serve_builds(self, store: Path) -> None:
+        """The behavioural half: no token means no gate, exactly as before."""
+        from fastapi.testclient import TestClient
+
+        from cacophony.api.app import create_app
+
+        with TestClient(create_app(store_path=store, token=None)) as client:
+            assert client.get("/api/system").status_code == 200
 
     def test_desktop_is_a_separate_command(self) -> None:
         from typer.testing import CliRunner

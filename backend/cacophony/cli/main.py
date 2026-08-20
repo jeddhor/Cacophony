@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -907,6 +908,23 @@ def show_run(
         console.print("\n[cacophony.muted]Pass --events N to see the log.[/]")
 
 
+def _is_loopback(host: str) -> bool:
+    """Whether binding to ``host`` reaches only this machine.
+
+    ``0.0.0.0`` and ``::`` are every interface, which is the case this exists to
+    catch. A name that does not parse as an address is treated as reachable:
+    guessing that somebody's hostname is private is not a guess worth making.
+    """
+    import ipaddress
+
+    if host in ("localhost", "localhost.localdomain"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 @app.command()
 def serve(
     host: Annotated[str, typer.Option("--host", help="Interface to bind.")] = "127.0.0.1",
@@ -919,10 +937,33 @@ def serve(
         Path | None,
         typer.Option("--studio", help="Directory holding a built Studio to serve."),
     ] = None,
+    allow_root: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--allow-root",
+            help="A directory requests may name. Repeatable. Required off loopback.",
+        ),
+    ] = None,
+    insecure: Annotated[
+        bool,
+        typer.Option(
+            "--insecure",
+            help="Serve off loopback with no token. For a network you control entirely.",
+        ),
+    ] = False,
     reload: Annotated[bool, typer.Option("--reload", help="Reload on source changes.")] = False,
     log_level: LogLevelOpt = "info",
 ) -> None:
-    """Serve the API, the live feed and the Studio (sections 36, 45-56)."""
+    """Serve the API, the live feed and the Studio (sections 36, 45-56).
+
+    On loopback this is as powerful as the shell that started it, which is the
+    honest description of a local tool. Bound anywhere else it is a different
+    proposition - the API registers projects by path, rewrites their schemas and
+    writes runs to a directory the caller names - so a token and a set of
+    permitted directories are required. ``CACOPHONY_TOKEN`` carries the token,
+    for the reason section 63 gives: a flag lands in shell history and in every
+    process listing on the machine.
+    """
     try:
         import uvicorn
 
@@ -937,11 +978,44 @@ def serve(
     store_path = store or (default_store_path(project) if project else default_store_path())
     configure_logging(log_level)
 
-    app = create_app(store_path=store_path, static_dir=studio)
+    token = os.environ.get("CACOPHONY_TOKEN") or None
+    roots = [path.expanduser().resolve() for path in (allow_root or [])]
+    if not _is_loopback(host):
+        if token is None and not insecure:
+            error_console.print(
+                f"[cacophony.error]error[/] refusing to serve on {host} without a token.\n"
+                "This API registers projects by path, rewrites their schemas, and writes\n"
+                "runs wherever a request asks. Off loopback that is somebody else's shell.\n\n"
+                "  export CACOPHONY_TOKEN=$(python -c "
+                "'import secrets;print(secrets.token_urlsafe(32))')\n"
+                f"  cacophony serve --host {host} --allow-root .\n\n"
+                "Or pass --insecure if this interface is genuinely private."
+            )
+            raise typer.Exit(code=2)
+        if not roots:
+            # Somewhere rather than everywhere. The project's own directory is
+            # what a served project needs and nothing more.
+            roots = [(project.parent if project else Path.cwd()).expanduser().resolve()]
+
+    app = create_app(
+        store_path=store_path,
+        static_dir=studio,
+        token=token,
+        allowed_roots=roots or None,
+    )
     has_studio = getattr(app.state, "studio_root", None) is not None
 
     _banner("serve", f"http://{host}:{port}")
     console.print(f"[cacophony.muted]store [/] {store_path}")
+    if token is not None:
+        console.print("[cacophony.muted]token [/] required on /api (CACOPHONY_TOKEN)")
+    elif not _is_loopback(host):
+        console.print(
+            "[cacophony.warn]note  [/] --insecure: no token, so anyone who can reach "
+            f"{host}:{port} can use this API"
+        )
+    if roots:
+        console.print(f"[cacophony.muted]roots [/] {', '.join(str(root) for root in roots)}")
     console.print(f"[cacophony.muted]api   [/] http://{host}:{port}/docs")
     console.print(f"[cacophony.muted]live  [/] ws://{host}:{port}/api/runs/{{run_id}}/stream")
     if has_studio:

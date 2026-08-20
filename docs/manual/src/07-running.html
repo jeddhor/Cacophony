@@ -122,9 +122,12 @@ id takes the most recent resumable run.</p>
 
 <h3 id="cmd-serve"><code>serve</code></h3>
 <div class="signature">cacophony serve [--host H] [--port P] [--store FILE] [-p PROJECT]
-                [--studio DIR] [--reload] [--log-level LEVEL]</div>
+                [--studio DIR] [--allow-root DIR]... [--insecure]
+                [--reload] [--log-level LEVEL]</div>
 <p>The API, the live feed and the Studio, on <code>127.0.0.1:8765</code> by
-default. Interactive API documentation is at <code>/docs</code>.</p>
+default. Interactive API documentation is at <code>/docs</code>. A bind that is
+not loopback requires <code>CACOPHONY_TOKEN</code> and confines every path a
+request names to <code>--allow-root</code>; chapter&nbsp;37 explains why.</p>
 
 <h3 id="cmd-desktop"><code>desktop</code></h3>
 <div class="signature">cacophony desktop [--store FILE] [-p PROJECT] [--studio DIR] [--host H]

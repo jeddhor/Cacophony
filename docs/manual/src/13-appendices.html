@@ -265,7 +265,8 @@ cacophony run       RUN [-p PROJECT] [--store FILE] [--events N] [--json]
 cacophony regenerate PROJECT -r N|N-M [-e ENTITY] [-c a,b,c] [--json] [--seed N]
 
 cacophony serve     [--host H] [--port P] [--store FILE] [-p PROJECT]
-                            [--studio DIR] [--reload] [--log-level LEVEL]
+                            [--studio DIR] [--allow-root DIR]... [--insecure]
+                            [--reload] [--log-level LEVEL]
 cacophony desktop   [--store FILE] [-p PROJECT] [--studio DIR] [--host H]
                             [--port N] [--no-token] [--keep-running] [--log-level L]
 
@@ -327,6 +328,7 @@ cacophony bundle import  FILE -d DIR [--force]</code></pre>
   <thead><tr><th>Variable</th><th>Effect</th></tr></thead>
   <tbody>
     <tr><td class="mono">CACOPHONY_SECRET_&lt;ID&gt;</td><td>Resolves a provider's logical secret</td></tr>
+    <tr><td class="mono">CACOPHONY_TOKEN</td><td>Required to serve on any interface but loopback; guards <code>/api</code></td></tr>
     <tr><td class="mono">CACOPHONY_CONTROLLER_TOKEN</td><td>Shared token for distributed generation</td></tr>
     <tr><td class="mono">CACOPHONY_NO_PLUGINS</td><td><code>1</code> skips plugin loading</td></tr>
     <tr><td class="mono">CACOPHONY_BACKEND</td><td>Which backend the desktop shell spawns</td></tr>

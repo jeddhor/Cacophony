@@ -99,6 +99,15 @@ class ValidationFailedError(CacophonyError):
     """A generated record failed validation and the policy is to abort."""
 
 
+class PathNotAllowedError(CacophonyError):
+    """A request named a path outside the directories the server was given.
+
+    Only ever raised when the server was started with roots - which the CLI
+    requires for any bind beyond loopback. On loopback the API is as powerful as
+    the shell that started it, and confining it there would be theatre.
+    """
+
+
 class OutputError(CacophonyError):
     """An output writer could not open, write, or close its destination."""
 
