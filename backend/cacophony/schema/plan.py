@@ -125,6 +125,13 @@ class WorkloadEstimate:
     image_calls: int = 0
     speech_calls: int = 0
     estimated_bytes: int = 0
+    #: Completion tokens a language model is asked to produce, from each field's
+    #: declared length. Section 69 names this unit; it is the one that decides
+    #: whether a run takes minutes or a weekend.
+    llm_tokens: int = 0
+    #: What the run should hold at once: a write batch, not the dataset.
+    #: Section 31 is the reason this is a small number however large the run.
+    peak_memory_bytes: int = 0
 
     def merge(self, other: WorkloadEstimate) -> WorkloadEstimate:
         return WorkloadEstimate(
@@ -134,6 +141,11 @@ class WorkloadEstimate:
             image_calls=self.image_calls + other.image_calls,
             speech_calls=self.speech_calls + other.speech_calls,
             estimated_bytes=self.estimated_bytes + other.estimated_bytes,
+            llm_tokens=self.llm_tokens + other.llm_tokens,
+            # Entities are generated one batch at a time, and `--workers`
+            # overlaps a few of them, so peak memory is the largest entity's
+            # batch rather than the sum of every entity's.
+            peak_memory_bytes=max(self.peak_memory_bytes, other.peak_memory_bytes),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -144,6 +156,8 @@ class WorkloadEstimate:
             "image_calls": self.image_calls,
             "speech_calls": self.speech_calls,
             "estimated_bytes": self.estimated_bytes,
+            "llm_tokens": self.llm_tokens,
+            "peak_memory_bytes": self.peak_memory_bytes,
         }
 
 

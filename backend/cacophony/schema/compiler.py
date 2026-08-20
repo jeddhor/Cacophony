@@ -61,6 +61,19 @@ _DEFAULT_BYTES_PER_VALUE = 32
 #: Very rough per-call token cost, used for the pre-flight LLM estimate.
 _TOKENS_PER_LLM_FIELD = 180
 
+#: Characters to a token, near enough for an order-of-magnitude estimate of
+#: English prose. Section 69: do not pretend estimates are exact.
+_CHARS_PER_TOKEN = 4
+
+#: The batch size an estimate assumes, matching the engine's default. A run that
+#: passes --batch-size gets a different peak, proportionally.
+_ESTIMATE_BATCH_SIZE = 1_000
+
+#: What a batch costs beyond the bytes it will eventually write: Python objects,
+#: provenance, the writer's own buffer. Measured at roughly three times the
+#: serialised size on the shipped templates.
+_MEMORY_OVERHEAD = 3
+
 
 def compile_project(project: ProjectSpec) -> CompiledProject:
     """Compile a validated schema into an executable :class:`CompiledProject`."""
@@ -448,12 +461,14 @@ def _estimate_entity(entity: CompiledEntity) -> WorkloadEstimate:
     llm_fields = 0
     image_fields = 0
     speech_fields = 0
+    tokens_per_record = 0
 
     for compiled_field in entity.fields:
         bytes_per_record += _BYTES_PER_VALUE.get(compiled_field.spec.type, _DEFAULT_BYTES_PER_VALUE)
         provider_kind = type(compiled_field.generator).requires_provider
         if provider_kind == "language_model":
             llm_fields += 1
+            tokens_per_record += _tokens_for(compiled_field)
         elif provider_kind == "image":
             image_fields += 1
         elif provider_kind == "speech":
@@ -466,4 +481,29 @@ def _estimate_entity(entity: CompiledEntity) -> WorkloadEstimate:
         image_calls=count * image_fields,
         speech_calls=count * speech_fields,
         estimated_bytes=count * bytes_per_record + count * llm_fields * _TOKENS_PER_LLM_FIELD * 4,
+        llm_tokens=count * tokens_per_record,
+        # A write batch, not the dataset. Section 31's whole claim is that this
+        # number does not grow with `count`, and an estimate that suggested
+        # otherwise would be arguing with the architecture.
+        peak_memory_bytes=_ESTIMATE_BATCH_SIZE * bytes_per_record * _MEMORY_OVERHEAD,
     )
+
+
+def _tokens_for(compiled_field: Any) -> int:
+    """Completion tokens one model call is likely to be asked for.
+
+    From what the field declares, in this order: an explicit ``max_tokens``,
+    then ``max_length`` at four characters to the token, then a default. Section
+    69 asks for the estimate and section 69 also says not to pretend it is
+    exact - a token is not four characters in every language, and a model given
+    room does not always use it.
+    """
+    options = getattr(compiled_field.generator, "options", {}) or {}
+    declared = options.get("max_tokens")
+    if isinstance(declared, int) and declared > 0:
+        return declared
+
+    max_length = getattr(compiled_field.spec.constraints, "max_length", None)
+    if isinstance(max_length, int) and max_length > 0:
+        return max(1, max_length // _CHARS_PER_TOKEN)
+    return _TOKENS_PER_LLM_FIELD

@@ -1,0 +1,219 @@
+# Cacophony against its design document, section by section.
+#
+# Data rather than prose, because a claim nobody can check is how README came to
+# say "165 pages" of a 173-page manual. `tools/conformance.py` renders this to
+# CONFORMANCE.md, and a test asserts that every section of CACOPHONY.md appears
+# here exactly once with a state from the four below.
+#
+#   implemented  built, and it does what the section describes
+#   partial      built in part; the note says what is missing
+#   deferred     in the design, not built, not refused
+#   declined     deliberately not built; the note says why
+#
+# A section can be `implemented` and still carry a refusal: `refuses` lists the
+# sub-items that were deliberately not built, which is where most of the honest
+# disagreement with the document lives.
+
+sections:
+  - {section: 1, state: implemented, note: "Narrative. The product matches the summary."}
+  - {section: 2, state: implemented, note: "Narrative."}
+  - {section: 3, state: implemented, note: "Narrative."}
+  - {section: 4, state: implemented, note: "Narrative."}
+  - {section: 5, state: implemented, note: "All five use cases have a shipped template."}
+  - {section: 6, state: implemented}
+  - {section: 7, state: implemented, note: "28 types."}
+  - section: 8
+    state: partial
+    note: "29 of the 30 strategies are built."
+    refuses:
+      - item: "script"
+        why: >
+          A project file is shared, so a script field would make opening a schema
+          equivalent to running its author's code. A restricted interpreter is a
+          denylist, not a sandbox; the isolation that would work was measured and
+          exists on one of three target platforms. Chapter 41 of the manual has
+          the full reasoning, including what was tried.
+  - {section: 9, state: implemented}
+  - {section: 10, state: implemented}
+  - {section: 11, state: implemented, note: "per_field, per_record, batch, expansion."}
+  - {section: 12, state: implemented, note: "`cacophony prompt` prints what it assembled."}
+  - {section: 13, state: implemented, note: "JSON Schema for Ollama, GBNF for llama.cpp, negotiated for OpenAI-compatible."}
+  - {section: 14, state: implemented}
+  - {section: 15, state: implemented}
+  - {section: 16, state: implemented}
+  - {section: 17, state: implemented}
+  - {section: 18, state: implemented}
+  - {section: 19, state: implemented, note: "One manifest line per asset."}
+  - {section: 20, state: implemented}
+  - {section: 21, state: implemented, note: "templates/multimodal-support.yaml."}
+  - {section: 22, state: implemented, note: "procedural_speech needs no server."}
+  - {section: 23, state: implemented}
+  - {section: 24, state: implemented}
+  - {section: 25, state: implemented}
+  - {section: 26, state: implemented}
+  - {section: 27, state: implemented}
+  - {section: 28, state: implemented}
+  - {section: 29, state: implemented}
+  - {section: 30, state: implemented}
+  - {section: 31, state: implemented}
+  - {section: 32, state: implemented}
+  - section: 33
+    state: partial
+    note: >
+      The section's own "Initial support" list is complete, partitioned
+      directories included. Its "Later" list is not built.
+    defers: ["PostgreSQL", "MySQL/MariaDB", "SQL Server", "MongoDB"]
+  - {section: 34, state: implemented, note: "`--output-profile`, with partitioning."}
+  - {section: 35, state: implemented}
+  - {section: 36, state: implemented}
+  - {section: 37, state: implemented, note: "28 commands."}
+  - {section: 38, state: implemented}
+  - {section: 39, state: implemented}
+  - section: 40
+    state: partial
+    note: "Every screen exists; the schema editor is missing the interactions in 48 and 49."
+  - section: 41
+    state: partial
+    note: >
+      The shell, the handshake and the three-platform build all work. Signing is
+      not configured and is deliberately not faked: notarisation needs an Apple
+      identity and Windows a certificate, both of which are the repository
+      owner's secrets.
+  - {section: 42, state: implemented}
+  - {section: 43, state: implemented}
+  - {section: 44, state: implemented, note: "Eight categories, entry points only."}
+  - {section: 45, state: implemented}
+  - {section: 46, state: implemented}
+  - {section: 47, state: implemented}
+  - section: 48
+    state: partial
+    note: "Field reordering is an API operation with no drag-and-drop in the interface."
+  - section: 49
+    state: partial
+    note: "Choices, histogram bins and lists are shown but not editable in the Studio."
+  - {section: 50, state: implemented}
+  - {section: 51, state: implemented}
+  - {section: 52, state: implemented}
+  - {section: 53, state: implemented}
+  - section: 54
+    state: partial
+    note: >
+      The screen offers four of the six output formats, and its estimate omits
+      the units 69 names.
+  - {section: 55, state: implemented}
+  - {section: 56, state: implemented}
+  - section: 57
+    state: partial
+    note: >
+      Structural, constraint, referential and statistical validation are built.
+      Logical (cross-field assertions) is not. Semantic is not, and needs a
+      decision rather than an implementation - it requires a judge model, which
+      is the objection recorded against 67.
+  - {section: 58, state: implemented}
+  - section: 59
+    state: partial
+    note: "Exact, normalised, MinHash and fuzzy detection are built."
+    refuses:
+      - item: "embedding-based detection"
+        why: >
+          It needs an embedding provider and no adapter offers one, so it would
+          be a configuration option that never worked.
+  - {section: 60, state: implemented, note: "Five provenance levels."}
+  - section: 61
+    state: deferred
+    note: >
+      The schema accepts a `privacy` key on a field and nothing reads it. There
+      are no detectors for real-looking identifiers, payment data or unsafe
+      domains. Section 62's reserved ranges are the guardrail that does exist.
+  - {section: 62, state: implemented}
+  - {section: 63, state: implemented}
+  - section: 64
+    state: partial
+    note: >
+      Six of the seven settings exist - workers, provider concurrency, disk
+      threshold, memory ceiling, request timeout, retry count - but the memory
+      ceiling is recorded rather than enforced, and there is no CPU ceiling.
+  - {section: 65, state: implemented}
+  - {section: 66, state: implemented}
+  - section: 67
+    state: partial
+    note: "Validity, usability, clipping, speed, duplication and latency are measured."
+    refuses:
+      - item: "semantic quality scoring"
+        why: >
+          It requires a judge model, which would make the benchmark depend on the
+          kind of thing it is assessing. What is measurable is measured and named
+          honestly instead.
+  - section: 69
+    state: partial
+    note: "Tokens, storage and memory are estimated."
+    refuses:
+      - item: "GPU generation time"
+        why: >
+          It cannot be estimated without the provider saying how long a step
+          takes on its hardware, and no adapter reports that. A number invented
+          here would be a guess wearing a unit.
+  - {section: 68, state: implemented}
+  - {section: 70, state: implemented, note: "Eight templates, each asserted in the suite."}
+  - {section: 71, state: implemented}
+  - {section: 72, state: implemented}
+  - {section: 73, state: implemented}
+  - {section: 74, state: implemented, note: "Edits are applied to the document in place."}
+  - {section: 75, state: implemented}
+  - {section: 76, state: implemented}
+  - section: 77
+    state: partial
+    note: >
+      `maximum_chaos` sets the hostile_qa preset and 5% edge cases.
+      `quick_mock` and `high_realism` change only the language-model prompt;
+      neither changes which generators are chosen.
+  - {section: 78, state: implemented}
+  - {section: 79, state: implemented, note: "Nine categories."}
+  - {section: 80, state: implemented}
+  - {section: 81, state: implemented}
+  - {section: 82, state: implemented, note: "Expressed as field dependencies rather than a separate graph object; templates/multimodal-support.yaml is the worked example."}
+  - section: 83
+    state: deferred
+    note: "The document calls it future work and nothing here anticipates it."
+  - {section: 84, state: implemented}
+  - {section: 85, state: implemented}
+  - {section: 86, state: implemented, note: "Every log field and every metric the section lists."}
+  - {section: 87, state: implemented}
+  - section: 88
+    state: partial
+    note: >
+      Unit, integration, provider contract and property-based tests all exist.
+      The scale tier stops at 50,000 records; the section asks for 1,000,000+.
+  - section: 89
+    state: partial
+    note: >
+      Measured throughput sits inside the stated range - 74,000 records/sec
+      streaming, 45,000 fields/sec generating - but nothing asserts it, so it is
+      an observation rather than a guarantee.
+  - {section: 90, state: implemented}
+  - {section: 91, state: implemented}
+  - {section: 92, state: implemented}
+  - {section: 93, state: implemented}
+  - {section: 94, state: implemented}
+  - {section: 95, state: implemented}
+  - {section: 96, state: implemented}
+  - {section: 97, state: implemented}
+  - {section: 98, state: implemented}
+  - {section: 99, state: implemented}
+  - {section: 100, state: implemented}
+  - {section: 101, state: implemented}
+  - {section: 102, state: implemented, note: "19 rules at three severities."}
+  - {section: 103, state: implemented}
+  - {section: 104, state: implemented}
+  - {section: 105, state: implemented, note: "16 operations."}
+  - {section: 106, state: implemented, note: "31 recipes in five groups."}
+  - {section: 107, state: implemented, note: "A constraint rather than a feature, and it has held."}
+  - {section: 108, state: implemented}
+  - {section: 109, state: implemented}
+  - {section: 110, state: implemented, note: "`cacophony begin`."}
+  - {section: 111, state: implemented}
+  - section: 112
+    state: partial
+    note: >
+      Every criterion is met in ordinary use. "Efficiently generated" is the one
+      with no automated evidence behind it; see 88 and 89.

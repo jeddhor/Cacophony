@@ -158,14 +158,22 @@ plans and estimates, and `on_unavailable: placeholder` runs the whole pipeline
 with obviously-marked stand-ins.
 
 **The manual.** [docs/Cacophony-Manual.pdf](docs/Cacophony-Manual.pdf) is the
-complete reference: 165 pages, every command, every generator option, every
-schema key, and the reasoning behind the parts where the reasoning is the
-interesting bit. It is built from [docs/manual/](docs/manual/) with one command:
+complete reference: <!-- claim:pages -->178<!-- /claim --> pages, every command,
+every generator option, every schema key, and the reasoning behind the parts
+where the reasoning is the interesting bit. It is built from [docs/manual/](docs/manual/) with one command:
 
 ```bash
 pip install weasyprint pygments
 python docs/manual/build.py
 ```
+
+**What is and is not built.** [docs/CONFORMANCE.md](docs/CONFORMANCE.md) is the
+design document section by section — <!-- claim:sections_implemented -->94<!-- /claim -->
+built, <!-- claim:sections_partial -->16<!-- /claim --> partial,
+<!-- claim:sections_deferred -->2<!-- /claim --> deferred, and
+<!-- claim:refusals -->4<!-- /claim --> sub-items deliberately refused with the
+reasoning recorded. It is generated from data and checked by CI, because the
+numbers in this file used to be typed and went stale.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for what each phase delivered, what broke
 along the way, and the decisions taken where the design document left room.

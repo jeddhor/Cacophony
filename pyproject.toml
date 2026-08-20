@@ -60,6 +60,9 @@ dev = [
     "ruff>=0.5,<1",
     "mypy>=1.10,<3",
     "types-PyYAML>=6.0,<7",
+    # Reads the built manual to count its pages, so no claim about its length is
+    # typed by hand. See tools/conformance.py.
+    "pypdf>=5.0,<7",
 ]
 
 [project.scripts]

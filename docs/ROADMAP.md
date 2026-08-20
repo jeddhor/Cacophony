@@ -596,6 +596,13 @@ and then ignored to varying degrees: output profiles selected nothing,
 `partition_by` partitioned nothing, entity tags reached nothing, and
 `maximum_chaos` injected no chaos. Sections 34 and 77.
 
+**The claims are checked rather than asserted.** An audit found README claiming
+a 165-page manual that was 173 pages, and the manual claiming 1,560 tests when
+there were more than 1,600. Both were true when written. `docs/CONFORMANCE.md`
+is now generated from `docs/conformance.yaml` - all 112 sections, four states,
+four recorded refusals - and every counted claim is measured and written between
+markers by `tools/conformance.py`, which CI runs with `--check`.
+
 **Section 110's flow exists.** `cacophony begin "a description"` proposes a
 world, shows what it would produce, lets you edit it and builds it. Every part
 of that already existed; what was missing was the join. Its first real run found

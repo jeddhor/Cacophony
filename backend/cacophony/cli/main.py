@@ -268,10 +268,14 @@ def plan(
     console.rule(style="cacophony.rule")
     console.print(f"  records            {estimate.records:,}")
     console.print(f"  field values       {estimate.fields:,}")
-    console.print(f"  language-model     {estimate.llm_calls:,} calls")
+    console.print(
+        f"  language-model     {estimate.llm_calls:,} calls"
+        + (f", ~{estimate.llm_tokens:,} tokens" if estimate.llm_tokens else "")
+    )
     console.print(f"  images             {estimate.image_calls:,}")
     console.print(f"  audio              {estimate.speech_calls:,}")
     console.print(f"  storage (approx)   {_human_bytes(estimate.estimated_bytes)}")
+    console.print(f"  memory (approx)    {_human_bytes(estimate.peak_memory_bytes)} at a time")
     console.print(
         "\n[cacophony.muted]Estimates are order-of-magnitude only "
         "(design document section 69). '~' marks an inferred generator; "
