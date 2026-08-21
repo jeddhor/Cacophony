@@ -92,6 +92,13 @@ class FileWriter(OutputWriter):
             self._handle.close()
             self._handle = None
 
+    @property
+    def bytes_written(self) -> int:
+        try:
+            return self.path.stat().st_size
+        except OSError:
+            return 0
+
     def describe(self) -> str:
         return f"{self.format}:{self.path}"
 
@@ -340,6 +347,9 @@ class PartitionedWriter(OutputWriter):
         self.options = options
         self.records_written = 0
         self._children: dict[tuple[str, ...], OutputWriter] = {}
+        #: Partitions closed to stay under `max_partitions` are no longer in
+        #: `_children`, and their bytes are still on disk.
+        self._closed_bytes = 0
 
     async def open(self) -> None:
         try:
@@ -373,7 +383,12 @@ class PartitionedWriter(OutputWriter):
     async def close(self) -> None:
         for writer in self._children.values():
             await writer.close()
+            self._closed_bytes += writer.bytes_written
         self._children.clear()
+
+    @property
+    def bytes_written(self) -> int:
+        return self._closed_bytes + sum(child.bytes_written for child in self._children.values())
 
     def describe(self) -> str:
         return f"{self.fmt}:{self.path}/{'/'.join(f'{c}=*' for c in self.partition_by)}"

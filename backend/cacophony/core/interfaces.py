@@ -308,6 +308,17 @@ class OutputWriter(ABC):
     async def close(self) -> None:
         raise NotImplementedError
 
+    @property
+    def bytes_written(self) -> int:
+        """How much this writer has put on disk so far.
+
+        Read from the filesystem rather than counted, so it is right for a
+        format that compresses, buffers or writes a footer - and for a resumed
+        run that is continuing somebody else's file. Buffering means it lags
+        slightly during a run and is exact once closed.
+        """
+        return 0
+
     async def __aenter__(self) -> OutputWriter:
         await self.open()
         return self

@@ -284,6 +284,55 @@ class TestRuns:
         assert oldest["records_written"] == 6
         assert "live" not in oldest
 
+    def test_a_finished_run_stops_reporting_itself_as_live(
+        self, client, project_id, tmp_path
+    ) -> None:
+        """The clock does not stop, so the answer must not come from it.
+
+        A finished conductor is kept so its metrics stay readable, and the API
+        used to treat its presence as activity - so a run that took 42ms
+        reported a minute and counting, beside its own correct duration.
+        """
+        import time
+
+        run_id = self._start(client, project_id, tmp_path, records=5)
+        final = await_run(client, run_id)
+        assert final["state"] == "completed"
+        assert "live" not in final
+        assert client.get(f"/api/runs/{run_id}/quality").json()["live"] is False
+
+        elapsed = final["summary"]["elapsed_seconds"]
+        time.sleep(0.4)
+        later = client.get(f"/api/runs/{run_id}").json()
+        assert "live" not in later
+        assert later["summary"]["elapsed_seconds"] == elapsed
+
+    def test_a_running_run_still_reports_live_metrics(self, client, project_id, tmp_path) -> None:
+        """The check is 'executing', not 'finished' - a paused run is neither."""
+        run_id = self._start(client, project_id, tmp_path, records=20_000)
+        for _ in range(400):
+            row = client.get(f"/api/runs/{run_id}").json()
+            if "live" in row:
+                assert row["live"]["run_id"] == run_id
+                assert row["paused"] is False
+                break
+            if row["state"] in ("completed", "failed"):
+                pytest.skip("the run finished before it could be observed running")
+        else:  # pragma: no cover - timing
+            pytest.fail("no live metrics were ever reported")
+        await_run(client, run_id)
+
+    def test_the_output_size_is_the_size_of_the_output(self, client, project_id, tmp_path) -> None:
+        """It was always zero: nothing ever gave the counter a byte to count."""
+        run_id = self._start(client, project_id, tmp_path, records=30)
+        final = await_run(client, run_id)
+
+        written = sum(
+            path.stat().st_size for path in (tmp_path / "out").rglob("*") if path.is_file()
+        )
+        assert written > 0
+        assert final["summary"]["bytes_written"] == written
+
     def test_a_missing_run_is_a_404(self, client) -> None:
         assert client.get("/api/runs/nope").status_code == 404
 

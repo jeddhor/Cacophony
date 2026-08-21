@@ -555,7 +555,12 @@ def create_app(
     @app.get("/api/runs/{run_id}", tags=["runs"])
     async def get_run(run_id: str) -> dict[str, Any]:
         stored = _found(runs.repository.get_run(run_id), "run")
-        conductor = runs.conductor(run_id)
+        # *Executing*, not merely present: a finished conductor is kept so its
+        # metrics stay readable, and its snapshot measures elapsed time from
+        # the clock - so a run that took 42ms was still reporting a minute and
+        # counting an hour later. For a finished run the stored summary is the
+        # record, and it is final.
+        conductor = runs.conductor(run_id) if runs.is_active(run_id) else None
         if conductor is not None:
             # A live run's in-memory metrics are fresher than its last
             # checkpoint, which is what a progress bar wants.
@@ -572,7 +577,7 @@ def create_app(
         and waiting for the other six tells nobody anything new.
         """
         stored = _found(runs.repository.get_run(run_id, include_jobs=False), "run")
-        conductor = runs.conductor(run_id)
+        conductor = runs.conductor(run_id) if runs.is_active(run_id) else None
         summary = conductor.summary() if conductor is not None else (stored.get("summary") or {})
 
         return {

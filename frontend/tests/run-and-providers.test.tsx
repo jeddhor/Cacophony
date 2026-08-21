@@ -13,10 +13,13 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../src/api/client";
+import { liveOrStored } from "../src/api/hooks";
+import type { RunSnapshot, RunView } from "../src/api/types";
 import { GeneratePage } from "../src/pages/GeneratePage";
 import { ProvidersPage } from "../src/pages/ProvidersPage";
 import { useStudio } from "../src/state/store";
 import {
+  makeRun,
   outputsFixture,
   planFixture,
   providersFixture,
@@ -203,5 +206,63 @@ describe("configuring a provider (sections 43, 63)", () => {
     expect(await screen.findByText(/no file to write to/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+  });
+});
+
+describe("which numbers a run screen believes (sections 55, 56)", () => {
+  const snapshotOf = (elapsed: number, records: number): RunSnapshot =>
+    ({
+      run_id: "r",
+      progress: 1,
+      records_written: records,
+      records_requested: records,
+      records_per_second: 100,
+      mean_records_per_second: 100,
+      tokens_per_second: 0,
+      elapsed_seconds: elapsed,
+      eta_seconds: null,
+      bytes_written: 1_463,
+      provider_calls: 0,
+      provider_errors: 0,
+      provider_latency_ms: 0,
+      retries: 0,
+      validation_failures: 0,
+      cache_hits: 0,
+      cache_misses: 0,
+      queue_depth: 0,
+      entities: {},
+    }) as RunSnapshot;
+
+  const asLive = (snapshot: RunSnapshot | null) => ({
+    status: "closed" as const,
+    snapshot,
+    events: [],
+    finished: true,
+  });
+
+  it("takes a finished run's numbers from what it finished with", () => {
+    /** A stale socket snapshot must not outrank the run's own record. */
+    const run = makeRun({
+      state: "completed",
+      summary: snapshotOf(0.046, 11200) as unknown as RunView["summary"],
+    });
+    const chosen = liveOrStored(run, asLive(snapshotOf(139.865, 11200)));
+    expect(chosen?.elapsed_seconds).toBe(0.046);
+  });
+
+  it("still prefers the live feed while the run is running", () => {
+    const run = makeRun({
+      state: "running",
+      summary: snapshotOf(0.5, 100) as unknown as RunView["summary"],
+    });
+    const chosen = liveOrStored(run, asLive(snapshotOf(12.25, 9000)));
+    expect(chosen?.elapsed_seconds).toBe(12.25);
+    expect(chosen?.records_written).toBe(9000);
+  });
+
+  it("falls back to whatever it has when a finished run stored nothing", () => {
+    const run = makeRun({ state: "failed", summary: {} });
+    const chosen = liveOrStored(run, asLive(snapshotOf(3, 12)));
+    expect(chosen?.records_written).toBe(12);
   });
 });

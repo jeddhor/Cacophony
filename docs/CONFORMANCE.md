@@ -67,8 +67,8 @@ declined, with the reason recorded. Those are collected at the end.
 | 52 | Distribution Preview | built |  |
 | 53 | Relationship Graph | built |  |
 | 54 | Generate Screen | built | Every registered format, the project's declared output layouts, the provider requirements the run actually has, and an estimate in 69's own units - tokens and peak memory rather than a guess. |
-| 55 | Live Run Visualization | built |  |
-| 56 | Run Inspector | built |  |
+| 55 | Live Run Visualization | built | Progress, throughput and per-entity counters, live over a socket. Disk throughput counts real bytes: the counter existed for a long time with nothing feeding it. |
+| 56 | Run Inspector | built | A finished run reports what it stored, and reports it as final - elapsed time is how long it took rather than how long ago it was. |
 | 57 | Validation System | built | All six categories. Logical is `assertions:` on an entity, evaluated with the same restricted evaluator as everything else in a schema and compiled when the schema is, so a broken rule is a schema error rather than a per-record one. Semantic is opt-in and off by default - section 57 asks for that because of cost, and there is a second reason recorded against 67 - and its verdicts are reported as opinions with the judging model named. An answer that is not a verdict is counted as unreadable rather than as doubt. |
 | 58 | Quality Metrics | built |  |
 | 59 | Duplicate Detection | partial | Exact, normalised, MinHash and fuzzy detection are built. **Refused:** embedding-based detection. |

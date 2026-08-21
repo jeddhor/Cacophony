@@ -292,6 +292,22 @@ exact text of the schema that produced it.</p>
   </tbody>
 </table>
 
+<h2>What a finished run reports</h2>
+
+<p>While a run executes, the numbers come from the process running it: records
+a second, tokens a second, bytes on disk, an estimate of what is left. When it
+stops, they come from what it stored &mdash; and they stop moving. A finished
+run's elapsed time is how long it took, not how long ago it was: the two are
+easy to confuse in an interface, and for a while this one confused them,
+reporting a minute and counting beside a duration of forty-two
+milliseconds.</p>
+
+<p>Output size is measured from the files, not counted while writing them. A
+counter cannot know about a Parquet footer, a compressed page, a partition
+directory or a SQLite database that four entities shared, and the number people
+want from "output size" is the size of the output. It is the sum of the run's
+own files, each counted once, taken after the writers close.</p>
+
 <h2>Checkpoints</h2>
 
 <p>A job checkpoints after every batch. A checkpoint is one integer &mdash; how

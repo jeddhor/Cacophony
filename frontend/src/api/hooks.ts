@@ -322,9 +322,27 @@ export function useRunStream(runId: string | null, enabled = true): LiveRun {
   return { status, snapshot, events, finished };
 }
 
-/** Convenience for views that want the freshest numbers, whatever their source. */
+/** States in which a run's numbers are still moving. */
+const RUNNING = new Set(["queued", "running", "paused"]);
+
+/**
+ * Convenience for views that want the freshest numbers, whatever their source.
+ *
+ * For a run that has finished, the stored summary is the freshest thing there
+ * is: it is what the run ended up doing. A socket snapshot from just before
+ * the end and a server-side `live` block are both older news, and the server's
+ * measures elapsed time from a clock that does not stop - which is how a
+ * 42-millisecond run came to report a minute and counting.
+ */
 export function liveOrStored(run: RunView | undefined, live: LiveRun): RunSnapshot | null {
-  return live.snapshot ?? run?.live ?? (run?.summary as RunSnapshot | undefined) ?? null;
+  // An empty summary is a run that stored nothing, not a run that did nothing:
+  // it must not win over numbers that exist.
+  const summary =
+    run?.summary && Object.keys(run.summary).length > 0
+      ? (run.summary as RunSnapshot)
+      : undefined;
+  if (run && !RUNNING.has(run.state)) return summary ?? live.snapshot ?? run.live ?? null;
+  return live.snapshot ?? run?.live ?? summary ?? null;
 }
 
 export type { UseQueryResult };

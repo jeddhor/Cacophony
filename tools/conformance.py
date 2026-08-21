@@ -110,6 +110,10 @@ def measure() -> dict[str, Any]:
     numbers: dict[str, Any] = {
         "sections": len(matrix),
         "refusals": refusals,
+        # The refusals as a sentence, not only as a number. Two of them were
+        # added to the matrix and not to the prose that lists them, which is
+        # exactly the drift these markers exist to stop.
+        "refused_items": refused_items(matrix),
         **{f"sections_{state}": tally[state] for state in STATES},
     }
     pages = count_pages()
@@ -120,6 +124,18 @@ def measure() -> dict[str, Any]:
         numbers["tests"] = tests
     numbers.update({key: value for key, value in count_registry().items() if value is not None})
     return numbers
+
+
+def refused_items(matrix: list[dict[str, Any]]) -> str:
+    """Every refused sub-item, in the matrix's own words, as a readable list."""
+    items = [
+        f"{refusal['item']} (\u00a7{row['section']})"
+        for row in matrix
+        for refusal in row.get("refuses") or []
+    ]
+    if len(items) < 2:
+        return items[0] if items else "nothing"
+    return ", ".join(items[:-1]) + " and " + items[-1]
 
 
 # --------------------------------------------------------------------------- #
@@ -227,6 +243,10 @@ CLAIM_FILES = {
         "<!-- /claim -->",
     ),
     ROOT / "docs" / "manual" / "src" / "00-front.html": ("<!-- claim:{key} -->", "<!-- /claim -->"),
+    ROOT / "docs" / "manual" / "src" / "13-appendices.html": (
+        "<!-- claim:{key} -->",
+        "<!-- /claim -->",
+    ),
 }
 
 

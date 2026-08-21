@@ -406,10 +406,11 @@ its numbered sections to the chapters here, for anyone reading both.</p>
   <code>docs/CONFORMANCE.md</code>: every section with one of four states &mdash;
   built, partial, deferred, declined &mdash; generated from a data file and
   checked on every push, so it cannot drift the way a hand-written claim does.
-  Four things the document asks for were considered and refused, each with its
-  reasoning recorded: the <code>script</code> generator, embedding-based
-  duplicate detection, semantic quality scoring in the benchmark, and GPU-time
-  estimation.</p>
+  <!-- claim:refusals -->6<!-- /claim --> things the document asks for were
+  considered and refused, each with its reasoning recorded:
+  <!-- claim:refused_items -->script (§8), embedding-based detection (§59), detecting suspiciously realistic public identities (§61), claiming the output is privacy-preserving (§61), semantic quality scoring (§67) and GPU generation time (§69)<!-- /claim -->. Both of those sentences are generated
+  from the matrix now, because the last two refusals were added to it and not
+  to this paragraph.</p>
 </div>
 
 <table class="compact">

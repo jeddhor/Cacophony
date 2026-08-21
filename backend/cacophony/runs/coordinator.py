@@ -545,6 +545,9 @@ class Conductor:
         metrics = self.metrics.entity(job.entity, requested=job.requested)
         since_checkpoint = 0
         batch_started = time.perf_counter()
+        # Where this destination started. A resumed run continues somebody
+        # else's file, and only what this attempt adds is this attempt's.
+        written_bytes = writer.bytes_written
 
         await writer.open()
         try:
@@ -561,7 +564,14 @@ class Conductor:
                 job.completed += len(batch)
                 since_checkpoint += len(batch)
 
-                self.metrics.record_batch(job.entity, len(batch))
+                # What actually landed on disk, so the live view can report a
+                # byte rate at all: section 55 asks for disk throughput, and
+                # this counter was never given anything to count.
+                on_disk = writer.bytes_written
+                self.metrics.record_batch(
+                    job.entity, len(batch), bytes_written=max(0, on_disk - written_bytes)
+                )
+                written_bytes = on_disk
                 self.log.batch(
                     entity=job.entity,
                     first=first,
@@ -852,6 +862,11 @@ class Conductor:
         data = self.metrics.snapshot()
         data["quality"] = self.metrics.quality()
         data["files"] = list(dict.fromkeys(self.files))
+        # Measured from the files rather than carried in a counter. The counter
+        # follows buffered writes and knows nothing about a footer, a rotated
+        # partition or a database that several entities shared; the run
+        # inspector's "output size" should be the size of the output.
+        data["bytes_written"] = _size_on_disk(data["files"])
 
         # What the validators learned, which the metrics counter cannot know:
         # it counts failures, while these describe the dataset (section 58).
@@ -1028,6 +1043,28 @@ class Conductor:
         )
         self.log.info("run resumed", status="resumed", record_range=f"{completed}-")
         return await self._drive()
+
+
+def _size_on_disk(paths: list[str]) -> int:
+    """Total bytes at these paths, counting each file once.
+
+    A partitioned run names a directory, several entities can share one SQLite
+    database, and a resumed run lists the same file twice - so this walks
+    directories and de-duplicates before it adds anything up.
+    """
+    seen: dict[Path, int] = {}
+    for name in paths:
+        path = Path(name)
+        try:
+            if path.is_dir():
+                for child in path.rglob("*"):
+                    if child.is_file():
+                        seen[child.resolve()] = child.stat().st_size
+            elif path.is_file():
+                seen[path.resolve()] = path.stat().st_size
+        except OSError:  # pragma: no cover - a file removed underneath us
+            continue
+    return sum(seen.values())
 
 
 def _quality_from_validation(validation: dict[str, Any]) -> dict[str, float]:

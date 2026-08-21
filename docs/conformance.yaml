@@ -115,8 +115,17 @@ sections:
       Every registered format, the project's declared output layouts, the
       provider requirements the run actually has, and an estimate in 69's own
       units - tokens and peak memory rather than a guess.
-  - {section: 55, state: implemented}
-  - {section: 56, state: implemented}
+  - section: 55
+    state: implemented
+    note: >
+      Progress, throughput and per-entity counters, live over a socket. Disk
+      throughput counts real bytes: the counter existed for a long time with
+      nothing feeding it.
+  - section: 56
+    state: implemented
+    note: >
+      A finished run reports what it stored, and reports it as final - elapsed
+      time is how long it took rather than how long ago it was.
   - section: 57
     state: implemented
     note: >
