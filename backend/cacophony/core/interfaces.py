@@ -132,15 +132,22 @@ class Generator(ABC):
         project directory first and the working directory second, so a project
         keeps working when it is opened from somewhere else and a path that only
         ever worked from the working directory keeps working too.
+
+        Every schema-named file goes through here, which is why the path policy
+        does too: a lookup table is a file read that arrives as data, and a
+        confined server must not perform one outside its roots just because a
+        schema asked (see :mod:`cacophony.core.paths`).
         """
+        from .paths import readable
+
         candidate = Path(value)
         if candidate.is_absolute():
-            return candidate
+            return readable(candidate, what="the path this field names,")
         if self.base_dir is not None:
             beside = Path(self.base_dir) / candidate
             if beside.exists():
-                return beside
-        return candidate
+                return readable(beside, what="the path this field names,")
+        return readable(candidate, what="the path this field names,")
 
     def prepare(self) -> None:  # noqa: B027 - an optional hook, not an abstract method
         """Validate and normalise options once, at compile time.

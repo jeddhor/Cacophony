@@ -195,6 +195,29 @@ class _TokenGate:
         return bool(presented) and presented[0] == self.token
 
 
+class _ConfinedPaths:
+    """Apply the server's path policy to everything a request causes.
+
+    Also pure ASGI, and for a second reason beyond the one above: a schema is
+    not a parameter. `generator: lookup, path: /etc/passwd` is a file read that
+    arrives as data, reaches the filesystem through the compiler, and passes no
+    route on the way - so checking paths route by route left a confined server
+    reading any file a schema named. The policy is installed for the whole
+    request instead, and a run's background task inherits the context it was
+    created in, so it stays confined for as long as it runs.
+    """
+
+    def __init__(self, app: Any, roots: list[Path]) -> None:
+        self.app = app
+        self.roots = roots
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        from ..core.paths import confined_to
+
+        with confined_to(self.roots):
+            await self.app(scope, receive, send)
+
+
 def create_app(
     *,
     store_path: str | Path | None = None,
@@ -246,6 +269,12 @@ def create_app(
 
     if token:
         app.add_middleware(_TokenGate, token=token)
+
+    if runs.allowed_roots is not None:
+        # Outermost, so it wraps the token gate as well: a refused request has
+        # not opened anything either way, and one policy for the whole request
+        # is easier to reason about than one per route.
+        app.add_middleware(_ConfinedPaths, roots=runs.allowed_roots)
 
     # -- error translation -------------------------------------------------- #
 
@@ -612,7 +641,12 @@ def create_app(
         from ..assets.store import AssetStore
 
         stored = _found(runs.repository.get_run(run_id), "run")
+        # Re-checked against the roots in force now, not the ones in force when
+        # the run was recorded: a run made by an unconfined server must not
+        # become a way to read its output through a confined one.
         root = _asset_root(stored)
+        if root is not None:
+            root = runs.permitted(root, what="assets directory")
         if root is None or not root.exists():
             return {"run_id": run_id, "root": None, "total": 0, "assets": []}
 
@@ -646,16 +680,29 @@ def create_app(
         """
         from fastapi.responses import FileResponse
 
+        from ..assets.store import AssetStore
+
         stored = _found(runs.repository.get_run(run_id), "run")
         root = _asset_root(stored)
         if root is None:
             raise HTTPException(status_code=404, detail="this run produced no assets")
+        root = runs.permitted(root, what="assets directory")
 
         try:
             resolved = Path(path).resolve()
             resolved.relative_to(root.resolve())
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=403, detail="that path is outside the run") from exc
+
+        # And it has to be an asset this run recorded, not merely a file that
+        # ended up under its directory. The manifest is the list of what this
+        # route exists to serve; anything else there belongs to somebody else.
+        manifest = {
+            Path(str(row["path"])).resolve()
+            for row in (AssetStore(root).manifest() if root.exists() else [])
+        }
+        if resolved not in manifest:
+            raise HTTPException(status_code=404, detail="no such asset in this run")
 
         if not resolved.is_file():
             raise HTTPException(status_code=404, detail="no such asset")

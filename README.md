@@ -13,11 +13,17 @@ built and how to run it.
 
 ---
 
-## Status: complete
+## Status
 
-All fourteen delivery phases are done, and every section of
-[CACOPHONY.md](CACOPHONY.md) is either implemented or — in the single case of the
-`script` generator — decided against with the reasoning written down.
+All fourteen delivery phases are done. What that does *not* mean is that every
+line of the design document is built: of its 112 sections,
+<!-- claim:sections_implemented -->86<!-- /claim --> are built,
+<!-- claim:sections_partial -->25<!-- /claim --> are partly built and
+<!-- claim:sections_deferred -->1<!-- /claim --> is deferred, with
+<!-- claim:refusals -->6<!-- /claim --> sub-items considered and refused.
+[docs/CONFORMANCE.md](docs/CONFORMANCE.md) says which, section by section, and
+is generated from data rather than written by hand — because a status section
+written by hand is how a project comes to claim more than it has.
 
 Phases 1–7 built the engine, the providers, the run system, the Studio, the
 relational layer, multimodal generation and synthetic worlds. Phase 8 turned
@@ -39,8 +45,10 @@ put it in a window.
 - 30 registered generators: constant, sequence, uuid, random, boolean,
   distribution, weighted, lookup, pattern, template, expression, datetime, ip,
   mac, phone, government_id, faker, composite, transform, null, reference, llm,
-  image, tts, document, event_time, subject, state and scenario, plus the
-  pending script declaration
+  image, tts, document, event_time, subject, state and scenario. The design
+  document's thirtieth, `script`, is declared and deliberately refused rather
+  than pending — running a schema author's code is not a feature, it is
+  arbitrary code execution with a nicer name
 - Hierarchical deterministic seeds — record *n* is identical whether generated
   first, last, in parallel, or after a resume
 - Structural and constraint validation with repair
@@ -158,7 +166,7 @@ plans and estimates, and `on_unavailable: placeholder` runs the whole pipeline
 with obviously-marked stand-ins.
 
 **The manual.** [docs/Cacophony-Manual.pdf](docs/Cacophony-Manual.pdf) is the
-complete reference: <!-- claim:pages -->186<!-- /claim --> pages, every command,
+complete reference: <!-- claim:pages -->188<!-- /claim --> pages, every command,
 every generator option, every schema key, and the reasoning behind the parts
 where the reasoning is the interesting bit. It is built from [docs/manual/](docs/manual/) with one command:
 
@@ -168,8 +176,8 @@ python docs/manual/build.py
 ```
 
 **What is and is not built.** [docs/CONFORMANCE.md](docs/CONFORMANCE.md) is the
-design document section by section — <!-- claim:sections_implemented -->99<!-- /claim -->
-built, <!-- claim:sections_partial -->12<!-- /claim --> partial,
+design document section by section — <!-- claim:sections_implemented -->86<!-- /claim -->
+built, <!-- claim:sections_partial -->25<!-- /claim --> partial,
 <!-- claim:sections_deferred -->1<!-- /claim --> deferred, and
 <!-- claim:refusals -->6<!-- /claim --> sub-items deliberately refused with the
 reasoning recorded. It is generated from data and checked by CI, because the

@@ -445,9 +445,10 @@ class DocumentGenerator(MediaGenerator):
         if self.template is not None:
             return self.template
         if self._loaded is None:
-            from pathlib import Path
-
-            path = Path(self.template_path or "")
+            # Through `resolve_path` like every other schema-named file: it
+            # finds the template beside the project, and it is where the path
+            # policy a confined server installed gets consulted.
+            path = self.resolve_path(self.template_path or "")
             try:
                 self._loaded = path.read_text(encoding="utf-8")
             except OSError as exc:

@@ -6,7 +6,7 @@
 
 <h1>The command line</h1>
 
-<p class="lead">Twenty-seven commands. This chapter is the complete reference,
+<p class="lead"><!-- claim:commands -->28<!-- /claim --> commands. This chapter is the complete reference,
 grouped by what you are trying to do; appendix&nbsp;F has the same material as a
 one-page synopsis.</p>
 
@@ -25,7 +25,7 @@ one-page synopsis.</p>
 </table>
 
 <p>Errors go to standard error, so <code>cacophony preview --json | jq</code> is
-safe. Any command taking a project accepts <code>--seed</code> to override the
+safe. Most commands taking a project accept <code>--seed</code> to override the
 project seed for that invocation.</p>
 
 <h2>Understanding a schema</h2>
@@ -113,7 +113,7 @@ thousand and points at <code>generate</code>, which is the tool for that.</p>
 
 <h3 id="cmd-runs"><code>runs</code>, <code>run</code>, <code>resume</code></h3>
 <div class="signature">cacophony runs [-p PROJECT] [--store FILE] [--state STATE] [--limit N] [--json]
-cacophony run RUN_ID [-p PROJECT] [--events N] [--json]
+cacophony run RUN_ID [-p PROJECT] [--store FILE] [--events N] [--json]
 cacophony resume [RUN_ID] [-p PROJECT] [--store FILE] [--log-level LEVEL]</div>
 <p><code>run</code> accepts a unique prefix of an id. <code>resume</code> with no
 id takes the most recent resumable run.</p>

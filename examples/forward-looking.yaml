@@ -1,20 +1,23 @@
 # Forward-looking example
 #
-# This schema uses every generator Cacophony will eventually support, including
-# the ones whose backends are not built yet. It exists to prove the claim in
-# design document section 111: the architectural interfaces for image, speech,
-# scenario and plugin providers already exist, so future multimodal work
-# *extends* the platform rather than forcing a rewrite.
+# A wide schema: most of the registered generators in one project, including the
+# media ones. It exists to prove the claim in design document section 111 - that
+# the interfaces for image, speech, scenario and plugin providers hold together
+# - and it now does so with those adapters built rather than as a promise about
+# them. The procedural image and speech adapters need no server, so this runs
+# anywhere. `script` is not here and never will be: it is refused, with the
+# reasoning in docs/CONFORMANCE.md.
 #
 # Today this file:
 #
 #   cacophony validate examples/forward-looking.yaml     compiles cleanly
 #   cacophony plan     examples/forward-looking.yaml     orders every field correctly
 #   cacophony lint     examples/forward-looking.yaml     reports real design warnings
-#   cacophony generate examples/forward-looking.yaml     runs, with marked placeholders
+#   cacophony generate examples/forward-looking.yaml     runs end to end
 #
-# Nothing about it will need to change when the providers land - the
-# `on_unavailable: placeholder` lines simply stop having any effect.
+# The `on_unavailable: placeholder` lines are what let it run without a language
+# model configured: point `local_llm` at a real server and the same file
+# produces prose instead of marked stand-ins.
 
 project:
   name: Forward-Looking Example

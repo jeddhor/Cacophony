@@ -150,14 +150,15 @@ program by another door.</p>
   <caption>Optional dependency groups</caption>
   <thead><tr><th>Extra</th><th>Brings</th><th>Needed for</th></tr></thead>
   <tbody>
-    <tr><td class="mono">api</td><td>FastAPI, uvicorn</td><td><code>cacophony serve</code>, <code>cacophony desktop</code>, the Studio</td></tr>
+    <tr><td class="mono">api</td><td>FastAPI, uvicorn</td><td><code>cacophony serve</code> and <code>cacophony desktop</code> — the server that <em>hosts</em> the Studio; the Studio itself is built with Node, below</td></tr>
     <tr><td class="mono">parquet</td><td>pyarrow</td><td>the <code>parquet</code> output format</td></tr>
     <tr><td class="mono">kafka</td><td>a Kafka client</td><td><code>--to kafka://…</code> when streaming</td></tr>
-    <tr><td class="mono">dev</td><td>pytest, ruff, mypy</td><td>working on Cacophony itself</td></tr>
+    <tr><td class="mono">keyring</td><td>keyring</td><td>resolving a provider secret from the OS keychain <span class="sec">section&nbsp;63</span></td></tr>
+    <tr><td class="mono">dev</td><td>pytest, ruff, mypy, httpx2</td><td>working on Cacophony itself</td></tr>
   </tbody>
 </table>
 
-<pre><code class="language-console">$ pip install -e '.[api,parquet]'</code></pre>
+<pre><code class="language-console">$ .venv/bin/pip install -e '.[api,parquet]'</code></pre>
 
 <h2>The Studio</h2>
 

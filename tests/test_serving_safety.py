@@ -264,6 +264,202 @@ class TestTheHolesAnAuditFound:
         assert not target.exists()
 
 
+class TestASchemaIsNotAWayIn:
+    """What a *schema* can make a confined server read (sections 8, 23, 36).
+
+    Every check before this one was on a path a request named. A schema names
+    paths too - a lookup table, a document template - and those arrive as data,
+    reach the filesystem through the compiler, and pass no route on the way. A
+    confined server was reading any file they named.
+    """
+
+    def _project(self, path: Path) -> str:
+        return f"""
+project: {{name: Lookup, seed: 1}}
+entities:
+  thing:
+    count: 3
+    fields:
+      value: {{type: string, generator: lookup, path: "{path}"}}
+"""
+
+    def _client(self, inside: Path, tmp_path: Path):
+        pytest.importorskip("fastapi")
+        from fastapi.testclient import TestClient
+
+        from cacophony.api.app import create_app
+
+        service = service_for(inside.parent, tmp_path / "store.db")
+        return TestClient(create_app(service=service))
+
+    def test_a_lookup_table_outside_the_roots_is_refused(
+        self, inside: Path, tmp_path: Path
+    ) -> None:
+        secret = tmp_path / "elsewhere" / "secret.txt"
+        secret.parent.mkdir(exist_ok=True)
+        secret.write_text("sentinel\n", encoding="utf-8")
+
+        with self._client(inside, tmp_path) as client:
+            project_id = client.post(
+                "/api/projects", json={"source": self._project(secret)}
+            ).json()["id"]
+            response = client.post(
+                f"/api/projects/{project_id}/preview", json={"entity": "thing", "count": 3}
+            )
+
+        assert response.status_code == 403, response.text
+        assert "sentinel" not in response.text
+
+    def test_a_lookup_table_inside_them_still_works(self, inside: Path, tmp_path: Path) -> None:
+        table = inside.parent / "cities.txt"
+        table.write_text("Austin\nBerlin\n", encoding="utf-8")
+
+        with self._client(inside, tmp_path) as client:
+            project_id = client.post("/api/projects", json={"source": self._project(table)}).json()[
+                "id"
+            ]
+            response = client.post(
+                f"/api/projects/{project_id}/preview", json={"entity": "thing", "count": 3}
+            )
+
+        assert response.status_code == 200, response.text
+        assert "Austin" in response.text or "Berlin" in response.text
+
+    def test_a_symlink_inside_the_roots_does_not_help(self, inside: Path, tmp_path: Path) -> None:
+        secret = tmp_path / "elsewhere" / "secret.txt"
+        secret.parent.mkdir(exist_ok=True)
+        secret.write_text("sentinel\n", encoding="utf-8")
+        link = inside.parent / "innocent.txt"
+        link.symlink_to(secret)
+
+        with self._client(inside, tmp_path) as client:
+            project_id = client.post("/api/projects", json={"source": self._project(link)}).json()[
+                "id"
+            ]
+            response = client.post(
+                f"/api/projects/{project_id}/preview", json={"entity": "thing", "count": 3}
+            )
+
+        assert response.status_code == 403, response.text
+        assert "sentinel" not in response.text
+
+    def test_a_document_template_is_checked_the_same_way(
+        self, inside: Path, tmp_path: Path
+    ) -> None:
+        template = tmp_path / "elsewhere" / "letter.txt"
+        template.parent.mkdir(exist_ok=True)
+        template.write_text("Dear {value}, sentinel.", encoding="utf-8")
+        source = f"""
+project: {{name: Docs, seed: 1}}
+entities:
+  letter:
+    count: 2
+    fields:
+      value: {{type: string, generator: constant, value: Ada}}
+      body:
+        type: string
+        generator: document
+        format: txt
+        template_path: "{template}"
+"""
+        with self._client(inside, tmp_path) as client:
+            project_id = client.post("/api/projects", json={"source": source}).json()["id"]
+            response = client.post(
+                f"/api/projects/{project_id}/preview", json={"entity": "letter", "count": 1}
+            )
+
+        assert response.status_code == 403, response.text
+        assert "sentinel" not in response.text
+
+    def test_the_command_line_is_not_confined_by_any_of_this(self, tmp_path: Path) -> None:
+        """The shell can read what the shell can read; only a server is confined."""
+        import yaml
+
+        from cacophony.schema.compiler import compile_project
+        from cacophony.schema.loader import load_project_data
+
+        table = tmp_path / "cities.txt"
+        table.write_text("Austin\n", encoding="utf-8")
+        compiled = compile_project(load_project_data(yaml.safe_load(self._project(table))))
+        assert compiled.entities["thing"].fields[0].generator.describe().startswith("lookup")
+
+
+class TestStoredAssetsAreRecheckedNow:
+    """A run recorded before confinement is not a key to what it wrote."""
+
+    def _run_with_assets(self, tmp_path: Path) -> tuple[RunService, str]:
+        """A completed run, recorded by a server with no confinement at all."""
+        import asyncio
+
+        from cacophony.runs.config import RunConfig
+
+        project = tmp_path / "elsewhere" / "docs.yaml"
+        project.parent.mkdir(exist_ok=True)
+        project.write_text(
+            """
+project: {name: Docs, seed: 1}
+entities:
+  letter:
+    count: 2
+    fields:
+      name: {type: string, generator: constant, value: Ada}
+      body: {type: string, generator: document, format: txt, template: "Dear {name}."}
+""",
+            encoding="utf-8",
+        )
+        loose = RunService(store_path=tmp_path / "store.db")
+        project_id = loose.register_project(path=str(project))["id"]
+
+        async def go() -> str:
+            started = await loose.start_run(
+                project_id,
+                RunConfig(output_dir=tmp_path / "elsewhere" / "out", record_history=True),
+            )
+            run_id = str(started["id"])
+            await loose.wait(run_id, timeout=30)
+            return run_id
+
+        return loose, asyncio.run(go())
+
+    def test_a_confined_server_will_not_list_assets_outside_its_roots(
+        self, inside: Path, tmp_path: Path
+    ) -> None:
+        pytest.importorskip("fastapi")
+        from fastapi.testclient import TestClient
+
+        from cacophony.api.app import create_app
+
+        loose, run_id = self._run_with_assets(tmp_path)
+        confined = RunService(database=loose.database, allowed_roots=[inside.parent])
+
+        with TestClient(create_app(service=confined)) as client:
+            listing = client.get(f"/api/runs/{run_id}/assets")
+
+        assert listing.status_code == 403, listing.text
+
+
+class TestTheContextTravels:
+    """The policy has to survive the hop into a run's background task."""
+
+    def test_a_task_created_under_a_policy_keeps_it(self) -> None:
+        import asyncio
+
+        from cacophony.core.paths import active_policy, confined_to
+
+        async def scenario() -> object:
+            with confined_to(["/tmp"]):
+                task = asyncio.create_task(_seen())
+            # The block has exited by the time the task runs; the task copied
+            # the context when it was created, so it still sees the policy.
+            return await task
+
+        async def _seen() -> object:
+            await asyncio.sleep(0)
+            return active_policy()
+
+        assert asyncio.run(scenario()) is not None
+
+
 class TestAtomicWrites:
     def test_the_content_arrives(self, tmp_path: Path) -> None:
         target = tmp_path / "schema.yaml"

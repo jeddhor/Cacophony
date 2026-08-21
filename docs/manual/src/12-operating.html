@@ -93,13 +93,18 @@ on <code>PATH</code>. In a checkout, point it at the virtualenv:</p>
 <pre><code class="language-console">$ CACOPHONY_BACKEND=$PWD/.venv/bin/cacophony \
       ./desktop/src-tauri/target/debug/cacophony-desktop</code></pre>
 
-<h2>The server answers <code>{"detail":"Not Found"}</code></h2>
+<h2>The server says the Studio has not been built</h2>
 
-<p>That is FastAPI saying there is no route for <code>/</code>, which means no
-Studio is mounted. It is built by <code>npm --prefix frontend run build</code>
-and written into the package; a fresh clone has none, because generated output
-is not committed. The server now says so at <code>/</code> and on startup
-instead of returning a bare 404.</p>
+<p>A page at <code>/</code> explaining that, rather than the
+<code>{"detail":"Not Found"}</code> it used to answer, which said the same thing
+in a way nobody could act on. It means no Studio is mounted: it is built by
+<code>npm --prefix frontend run build</code> and written into the package, and a
+fresh clone has none, because generated output is not committed. Older builds
+returned a bare 404 here.</p>
+
+<p>If you installed Cacophony from a wheel rather than from a clone, there is no
+<code>frontend/</code> to build: the wheels deliberately carry no Studio assets
+(chapter&nbsp;1). Use the API, or work from a clone.</p>
 
 <p>If you <em>have</em> built it and still get this, check which package is
 being imported:</p>
@@ -256,7 +261,7 @@ which Cacophony can decide for you:</p>
 
 <pre><code class="language-console">$ ruff check backend tests && ruff format --check backend tests
 $ mypy backend/cacophony
-$ pytest tests/                       # <!-- claim:tests -->1764<!-- /claim --> tests, about 90 seconds
+$ pytest tests/                       # <!-- claim:tests -->1771<!-- /claim --> tests, about 90 seconds
 $ npm --prefix frontend run typecheck && npm --prefix frontend test
 $ npm --prefix frontend run test:e2e  # the layout, in a real browser</code></pre>
 

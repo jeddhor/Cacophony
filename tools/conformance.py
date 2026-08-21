@@ -98,6 +98,15 @@ def count_registry() -> dict[str, int | None]:
 
         counts["generators"] = len(REGISTRY.describe())
         counts["recipes"] = len(load_library().names())
+
+        # Counted the way the CLI presents them, which includes anything
+        # registered as a sub-command rather than by decorator: the field was
+        # declared here and never measured, and the manual drifted by one.
+        import typer
+
+        from cacophony.cli.main import app as cli
+
+        counts["commands"] = len(getattr(typer.main.get_command(cli), "commands", {}))
     except Exception:  # pragma: no cover - a partial install should not fail the docs
         pass
     return counts
@@ -244,6 +253,10 @@ CLAIM_FILES = {
     ),
     ROOT / "docs" / "manual" / "src" / "00-front.html": ("<!-- claim:{key} -->", "<!-- /claim -->"),
     ROOT / "docs" / "manual" / "src" / "13-appendices.html": (
+        "<!-- claim:{key} -->",
+        "<!-- /claim -->",
+    ),
+    ROOT / "docs" / "manual" / "src" / "07-running.html": (
         "<!-- claim:{key} -->",
         "<!-- /claim -->",
     ),
