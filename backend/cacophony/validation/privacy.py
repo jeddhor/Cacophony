@@ -49,8 +49,16 @@ CHECKS: tuple[str, ...] = (
 _DIGITS = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
 _SSN = re.compile(r"(?<!\d)(\d{3})-(\d{2})-(\d{4})(?!\d)")
 _DOMAIN = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})|https?://([A-Za-z0-9.-]+)")
+#: A value that is nothing but a hostname. Only trusted where the field says it
+#: holds one: `config.yaml` is this shape too, and reporting it as a leaked
+#: domain is how a detector earns its way into somebody's ignore list.
+_BARE_DOMAIN = re.compile(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\.?")
 _US_PHONE = re.compile(r"(?<!\d)(?:\+?1[ .-]?)?\(?(\d{3})\)?[ .-]?(\d{3})[ .-]?(\d{4})(?!\d)")
 _IPV4 = re.compile(r"(?<![\d.])((?:\d{1,3}\.){3}\d{1,3})(?![\d.])")
+#: Anything colon-separated that might be IPv6. Deliberately loose: every hit is
+#: handed to `ipaddress` before it counts, so the regex only has to find
+#: candidates, not to know the address format.
+_IPV6 = re.compile(r"(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![0-9A-Fa-f:])")
 
 
 def looks_like_a_real_card(digits: str) -> bool:
@@ -77,6 +85,19 @@ def _safe_domain(domain: str) -> bool:
     return lowered in SAFE_DOMAINS or any(lowered.endswith(tld) for tld in SAFE_TLDS)
 
 
+def _is_an_address(text: str) -> bool:
+    """Whether this candidate is an IP address at all.
+
+    The IPv6 pattern matches things that merely look like one - `12:34:56` is a
+    duration - so parsing decides, not the regex.
+    """
+    try:
+        ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return True
+
+
 def _safe_address(text: str) -> bool:
     """Documentation ranges, and the private ranges nobody can route to."""
     try:
@@ -97,6 +118,10 @@ def _safe_address(text: str) -> bool:
 #: Field types whose whole point is to carry an address or a number, where a
 #: match inside a longer string is still worth reporting.
 _NETWORK_TYPES = frozenset({"ip_address", "cidr", "hostname", "uri", "phone"})
+
+#: Field types that hold a name of a host, where the whole value being a domain
+#: is the ordinary case rather than a coincidence.
+_HOSTNAME_TYPES = frozenset({"hostname", "uri", "email", "domain"})
 
 
 def findings(
@@ -136,18 +161,27 @@ def findings(
                 break
 
     if "domains" in checks:
-        for mailbox_domain, url_domain in _DOMAIN.findall(value):
-            domain = mailbox_domain or url_domain
-            if domain and not _safe_domain(domain):
+        candidates = [mailbox or url for mailbox, url in _DOMAIN.findall(value) if mailbox or url]
+        # A field declared to hold a hostname, holding one: no address and no
+        # scheme to find it inside, and nowhere else it could be hiding.
+        if (field_type or "") in _HOSTNAME_TYPES and _BARE_DOMAIN.fullmatch(whole):
+            candidates.append(whole.rstrip("."))
+        for domain in candidates:
+            if not _safe_domain(domain):
                 found.append(("domains", f"a domain outside the reserved ranges ({domain})"))
                 break
 
     if "addresses" in checks:
-        candidates = _IPV4.findall(value) if scan_everywhere else _IPV4.findall(whole)[:1]
-        if not scan_everywhere:
-            candidates = [whole] if _IPV4.fullmatch(whole) else []
-        for candidate in candidates:
-            if not _safe_address(candidate):
+        if scan_everywhere:
+            addresses = [*_IPV4.findall(value), *_IPV6.findall(value)]
+        else:
+            # Version strings are dotted quads too, so outside a field that
+            # says it holds an address the whole value has to be one. An IPv6
+            # address has no innocent double of that kind, so it counts
+            # wherever it appears.
+            addresses = ([whole] if _IPV4.fullmatch(whole) else []) + _IPV6.findall(value)
+        for candidate in addresses:
+            if _is_an_address(candidate) and not _safe_address(candidate):
                 found.append(("addresses", f"a routable IP address ({candidate})"))
                 break
 

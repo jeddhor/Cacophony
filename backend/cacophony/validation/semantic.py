@@ -161,8 +161,12 @@ class SemanticEvaluator:
         )
 
     def summary(self) -> dict[str, Any]:
-        judged = len(self.verdicts)
-        plausible = sum(1 for verdict in self.verdicts if verdict.get("plausible"))
+        # An answer that could not be read is not a verdict, and scoring it as
+        # "implausible" would report a broken judge as bad data.
+        answered = [verdict for verdict in self.verdicts if verdict.get("plausible") is not None]
+        unreadable = len(self.verdicts) - len(answered)
+        judged = len(answered)
+        plausible = sum(1 for verdict in answered if verdict["plausible"])
         models = sorted({str(v.get("model") or "") for v in self.verdicts} - {""})
         data: dict[str, Any] = {
             "judged": judged,
@@ -175,15 +179,48 @@ class SemanticEvaluator:
             # without knowing which model said so.
             "judged_by": models,
         }
+        if unreadable:
+            # Said out loud rather than absorbed: a judge that answers in prose
+            # is a configuration problem, and a rate over three of ten samples
+            # is not the same claim as a rate over ten.
+            data["unreadable"] = unreadable
         if self.error:
             data["error"] = self.error
         if self.spec.threshold is not None and judged:
             data["threshold"] = self.spec.threshold
             data["meets_threshold"] = (plausible / judged) >= self.spec.threshold
-        doubted = [v for v in self.verdicts if not v.get("plausible")][:3]
+        doubted = [v for v in answered if not v["plausible"]][:3]
         if doubted:
             data["examples"] = doubted
         return data
+
+
+#: What a judge might write instead of a JSON boolean. Models asked for
+#: `{"plausible": false}` return `"false"`, `"no"` and `"No."` often enough
+#: that reading them is worth more than being strict about it - and `bool()`
+#: on any of those strings is `True`, which is the wrong answer.
+_YES = {"true", "yes", "y", "1", "plausible"}
+_NO = {"false", "no", "n", "0", "implausible"}
+
+
+def _verdict(value: Any) -> bool | None:
+    """A judge's answer as a boolean, or ``None`` for one that is not an answer.
+
+    ``None`` matters: a missing or unreadable field is not the same as "the
+    model said no", and counting it as one is how a broken judge quietly
+    lowers a plausibility score.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower().rstrip(".")
+        if lowered in _YES:
+            return True
+        if lowered in _NO:
+            return False
+    return None
 
 
 def _read(text: str) -> dict[str, Any]:
@@ -200,7 +237,18 @@ def _read(text: str) -> dict[str, Any]:
             payload = json.loads(text[start : end + 1])
         except ValueError:
             return {"plausible": None, "reason": "the judge did not answer in JSON"}
+
+    if not isinstance(payload, dict):
+        return {"plausible": None, "reason": "the judge did not answer with an object"}
+
+    plausible = _verdict(payload.get("plausible"))
+    if plausible is None:
+        given = payload.get("plausible", "<nothing>")
+        return {
+            "plausible": None,
+            "reason": f"the judge did not answer the question ('plausible': {given!r})",
+        }
     return {
-        "plausible": bool(payload.get("plausible")),
+        "plausible": plausible,
         "reason": str(payload.get("reason") or "")[:200],
     }

@@ -92,6 +92,9 @@ const ESTIMATE = {
   estimated_bytes: 4_200_000,
   llm_tokens: 1_100_000,
   peak_memory_bytes: 12_000_000,
+  batch_bytes: 12_000,
+  assumed_batch_size: 1_000,
+  assumed_llm_batch_size: 20,
 };
 
 const PLAN = {

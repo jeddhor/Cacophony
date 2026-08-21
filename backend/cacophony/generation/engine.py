@@ -1167,9 +1167,16 @@ class GenerationEngine:
         return summary
 
     async def aclose(self) -> None:
-        """Release provider connections held for this run."""
+        """Release what this run is holding: connections, and files on disk.
+
+        The validators are closed as well as the providers. Their summaries
+        survive - they are read from counters, not from the spill file - so a
+        finished run still reports everything it measured.
+        """
         if self.runtime is not None:
             await self.runtime.aclose()
+        for validator in self._validators.values():
+            validator.close()
 
     def entity_order(self) -> Sequence[str]:
         return self.compiled.entity_order

@@ -66,8 +66,13 @@ _TOKENS_PER_LLM_FIELD = 180
 _CHARS_PER_TOKEN = 4
 
 #: The batch size an estimate assumes, matching the engine's default. A run that
-#: passes --batch-size gets a different peak, proportionally.
+#: passes --batch-size gets a different peak, proportionally - which is why the
+#: estimate carries the assumption as well as the answer.
 _ESTIMATE_BATCH_SIZE = 1_000
+
+#: The batch a `mode: batch` field is assumed to travel in, matching
+#: ``ResourceLimits.llm_batch_size``. Also a run-time option, also stated.
+_ESTIMATE_LLM_BATCH = 20
 
 #: What a batch costs beyond the bytes it will eventually write: Python objects,
 #: provenance, the writer's own buffer. Measured at roughly three times the
@@ -242,6 +247,7 @@ def _compile_entity(
 
     _check_simulation(project, entity)
     _adopt_reference_types(project, entity)
+    _check_assertions(entity)
 
     field_graph = DependencyGraph(kind="field")
     for field_name in entity.fields:
@@ -319,6 +325,38 @@ def _compile_entity(
         field_layers=field_graph.layers(),
         reference_fields=reference_fields,
     )
+
+
+def _check_assertions(entity: EntitySpec) -> None:
+    """Compile every ``assertions:`` expression, here rather than at run time.
+
+    They were compiled by the validator that runs them, which is built when a
+    run starts - so `cacophony validate` called a schema with a nonsense
+    assertion valid, and the first record found out. An assertion is part of
+    the schema; a schema that cannot express it does not compile.
+    """
+    from ..transforms.expressions import RecordExpression
+
+    #: Names an expression may use that are not fields: the YAML spellings of
+    #: the three literals, and the prefixed blocks a record carries.
+    literals = {"null", "true", "false"}
+    declared = set(entity.fields)
+
+    for index, spec in enumerate(entity.assertions):
+        where = f"{entity.name}.assertions[{index}]"
+        expression = RecordExpression(spec.expr, where=where)
+        unknown = sorted(
+            name
+            for name in expression.names
+            if name not in declared and name not in literals and not name.startswith("_")
+        )
+        if unknown:
+            fields = ", ".join(sorted(declared)) or "<none>"
+            raise SchemaError(
+                f"{where}: {spec.expr!r} references {', '.join(unknown)}, which "
+                f"{'are' if len(unknown) > 1 else 'is'} not a field of '{entity.name}' "
+                f"and not a function an expression may call. Fields: {fields}"
+            )
 
 
 def _compile_field(
@@ -477,7 +515,7 @@ def _estimate_entity(entity: CompiledEntity) -> WorkloadEstimate:
     return WorkloadEstimate(
         records=count,
         fields=count * len(entity.fields),
-        llm_calls=count * llm_fields,
+        llm_calls=_llm_calls(entity, count),
         image_calls=count * image_fields,
         speech_calls=count * speech_fields,
         estimated_bytes=count * bytes_per_record + count * llm_fields * _TOKENS_PER_LLM_FIELD * 4,
@@ -486,7 +524,43 @@ def _estimate_entity(entity: CompiledEntity) -> WorkloadEstimate:
         # number does not grow with `count`, and an estimate that suggested
         # otherwise would be arguing with the architecture.
         peak_memory_bytes=_ESTIMATE_BATCH_SIZE * bytes_per_record * _MEMORY_OVERHEAD,
+        # What the two figures above assumed, so a caller who knows the run's
+        # actual options can redo the arithmetic instead of reading a number
+        # that quietly describes a different run.
+        batch_bytes=bytes_per_record * _MEMORY_OVERHEAD,
+        assumed_batch_size=_ESTIMATE_BATCH_SIZE,
+        assumed_llm_batch_size=_ESTIMATE_LLM_BATCH,
     )
+
+
+def _llm_calls(entity: CompiledEntity, count: int, batch_size: int = _ESTIMATE_LLM_BATCH) -> int:
+    """How many requests this entity's language-model fields actually make.
+
+    Counted the way :func:`~cacophony.generation.enrichment.plan_enrichment`
+    groups them, because "records times model fields" is only right for
+    ``mode: per_field``. The default is ``per_record``, where every model field
+    in a layer that shares a provider travels in *one* call - so an entity with
+    three of them was estimated at three times the calls it makes - and
+    ``mode: batch`` covers many records per call.
+    """
+    calls = 0
+    for layer in entity.layers():
+        buckets: dict[tuple[Any, str], int] = {}
+        for compiled_field in layer:
+            if type(compiled_field.generator).requires_provider != "language_model":
+                continue
+            generator = compiled_field.generator
+            key = (getattr(generator, "provider", None), getattr(generator, "mode", "per_record"))
+            buckets[key] = buckets.get(key, 0) + 1
+
+        for (_provider, mode), members in buckets.items():
+            if mode == "per_field":
+                calls += count * members
+            elif mode == "batch":
+                calls += -(-count // max(1, batch_size))
+            else:  # per_record, and expansion which is a synonym for it
+                calls += count
+    return calls
 
 
 def _tokens_for(compiled_field: Any) -> int:

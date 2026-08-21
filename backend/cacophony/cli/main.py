@@ -226,6 +226,11 @@ def plan(
     project: ProjectArg,
     seed: SeedOpt = None,
     as_json: Annotated[bool, typer.Option("--json", help="Emit the plan as JSON.")] = False,
+    batch_size: Annotated[
+        int,
+        typer.Option("--batch-size", help="Estimate memory for this write batch."),
+    ] = DEFAULT_BATCH_SIZE,
+    workers: Annotated[int, typer.Option("--workers", help="Entities generated concurrently.")] = 4,
 ) -> None:
     """Show the compiled generation plan (design document section 28)."""
     compiled = _load(project, seed)
@@ -275,7 +280,15 @@ def plan(
     console.print(f"  images             {estimate.image_calls:,}")
     console.print(f"  audio              {estimate.speech_calls:,}")
     console.print(f"  storage (approx)   {_human_bytes(estimate.estimated_bytes)}")
-    console.print(f"  memory (approx)    {_human_bytes(estimate.peak_memory_bytes)} at a time")
+    # Computed for the batch and worker count this command was given, rather
+    # than for the defaults the estimate assumed: memory is the one figure here
+    # that a run option changes directly.
+    memory = estimate.memory_for(batch_size, workers, len(generation_plan.steps))
+    console.print(
+        f"  memory (approx)    {_human_bytes(memory)} at a time"
+        f"  [cacophony.muted]{batch_size:,} records x {min(workers, len(generation_plan.steps))}"
+        " concurrent[/]"
+    )
     console.print(
         "\n[cacophony.muted]Estimates are order-of-magnitude only "
         "(design document section 69). '~' marks an inferred generator; "

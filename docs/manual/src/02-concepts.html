@@ -280,6 +280,21 @@ ranges, domains outside the reserved names, routable addresses, dialable
 telephone numbers. Absent means not asked for; <code>block</code> makes a finding
 a validation failure, so <code>--on-failure</code> decides what happens next.</p>
 
+<p>Where each one looks is deliberate, and worth knowing before you rely on it.
+Card numbers and government identifiers are found anywhere in a value. Domains
+are found inside an email address or a URL anywhere in a value, and a bare
+hostname is reported when the field is declared to hold one &mdash;
+<code>hostname</code>, <code>uri</code>, <code>email</code> or
+<code>domain</code>. IPv4 addresses and telephone numbers must be the whole
+value, unless the field's type says it carries one, in which case they are found
+anywhere inside it. IPv6 addresses count anywhere, since nothing else is shaped
+like one. Every candidate is parsed before it is reported.</p>
+
+<p>The reason for those boundaries is the failure mode of the alternative: a
+detector that scans free prose for dotted quads reports <code>rv:1.9.6.20</code>
+in every user agent it ever sees, and one that reports every dotted word reports
+<code>config.yaml</code>. A detector people switch off finds nothing at all.</p>
+
 <div class="callout">
   <span class="callout-title">What they found on their first run</span>
   <p>Turned on the shipped templates, they immediately caught

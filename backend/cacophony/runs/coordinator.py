@@ -924,8 +924,20 @@ class Conductor:
         return data
 
     async def aclose(self) -> None:
+        """Let go of everything this run held open.
+
+        A finished conductor stays readable, so nothing else will release
+        these: the engine's validators hold the uniqueness spill files, and
+        one per spilled field would otherwise survive every run the server
+        ever ran.
+        """
+        # Both closes are idempotent, and the engine shares this runtime: a
+        # run that failed before building an engine still has one to release.
         if self.runtime is not None:
             await self.runtime.aclose()
+        engine = getattr(self, "_engine_instance", None)
+        if engine is not None:
+            await engine.aclose()
         if self._asset_store is not None:
             self._asset_store.close()
 

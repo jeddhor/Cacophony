@@ -36,6 +36,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = ["RunService"]
 
+#: How many finished runs keep their in-memory metrics. Chosen to match the
+#: default `prune --keep`: the number of runs anybody looks back through.
+TERMINAL_CONDUCTORS_KEPT = 50
+
 
 class RunService:
     """Owns the store, the live runs, and the buses that report on them."""
@@ -89,12 +93,17 @@ class RunService:
         if not path and not source:
             raise SchemaError("Provide either 'path' or 'source'.")
 
+        # Checked whenever a path is given, not only when it is the source of
+        # the schema. Sending both used to store the path unchecked, and every
+        # later read of that project went to it: inline source that names a
+        # file is still a request to use that file.
+        resolved = str(self.permitted(path, what="project")) if path else None
+
         if source is not None:
             project = self._parse_source(source)
             text = source
-            resolved = path
         else:
-            resolved = str(self.permitted(path, what="project"))  # type: ignore[arg-type]
+            assert resolved is not None
             project = load_project(resolved)
             text = Path(resolved).read_text(encoding="utf-8")
 
@@ -122,6 +131,18 @@ class RunService:
             raise SchemaError("schema source must be a mapping at the top level")
         return load_project_data(data, source="<api>")
 
+    def _readable_path(self, record: dict[str, Any]) -> str | None:
+        """A stored project file this server may read, or nothing.
+
+        Re-checked rather than trusted, exactly as writing one is: a row
+        recorded before the server was confined - or through a hole in how it
+        was recorded - must not become a way to read outside the roots.
+        """
+        path = str(record.get("path") or "")
+        if not path or not Path(path).exists():
+            return None
+        return str(self.permitted(path, what="project"))
+
     def load_for_run(self, project_id: int) -> tuple[Any, int | None, str]:
         """Compile a project, preferring a changed file over its last revision.
 
@@ -133,8 +154,8 @@ class RunService:
         if record is None:
             raise SchemaError(f"No project with id {project_id}.")
 
-        path = record.get("path")
-        if path and Path(path).exists():
+        path = self._readable_path(record)
+        if path:
             project = load_project(path)
             text = Path(path).read_text(encoding="utf-8")
             _, revision_id = self.repository.upsert_project(project, path=path, source_text=text)
@@ -156,8 +177,8 @@ class RunService:
         if record is None:
             raise SchemaError(f"No project with id {project_id}.")
 
-        path = record.get("path")
-        if path and Path(path).exists():
+        path = self._readable_path(record)
+        if path:
             fmt = "json" if Path(path).suffix.lower() == ".json" else "yaml"
             return Path(path).read_text(encoding="utf-8"), fmt
 
@@ -175,8 +196,14 @@ class RunService:
         Studio shows it read-only rather than accepting edits it will lose.
         """
         record = self.repository.get_project(project_id)
-        path = str((record or {}).get("path") or "")
-        return bool(path) and Path(path).exists()
+        if record is None:
+            return False
+        try:
+            return self._readable_path(record) is not None
+        except PathNotAllowedError:
+            # Outside the roots: readable by this process, but not through this
+            # server, so it is not editable through it either.
+            return False
 
     def patch_schema(self, project_id: int, operations: list[dict[str, Any]]) -> dict[str, Any]:
         from ..schema.editor import apply_patch
@@ -224,6 +251,11 @@ class RunService:
         config.output_dir = self.permitted(config.output_dir, what="output directory")
         if config.assets_dir is not None:
             config.assets_dir = self.permitted(config.assets_dir, what="assets directory")
+        if config.cache_path is not None:
+            # The provider cache is a file the run creates, directories and
+            # all, at a path the caller named. Every other such path is checked
+            # and this one was not.
+            config.cache_path = self.permitted(config.cache_path, what="cache")
 
         compiled, revision_id, _name = self.load_for_run(project_id)
 
@@ -240,9 +272,13 @@ class RunService:
 
         self._conductors[conductor.run_id] = conductor
         self._buses[conductor.run_id] = bus
-        self._tasks[conductor.run_id] = asyncio.create_task(
+        task = asyncio.create_task(
             self._execute(conductor), name=f"cacophony-run-{conductor.run_id}"
         )
+        # Retired from the callback rather than from the run's own `finally`,
+        # where the task it is asking about is not done yet.
+        task.add_done_callback(lambda _: self._retire())
+        self._tasks[conductor.run_id] = task
 
         # Give the conductor a moment to persist its row, so the response
         # describes a run the caller can immediately fetch.
@@ -265,9 +301,11 @@ class RunService:
 
         self._conductors[run_id] = conductor
         self._buses[run_id] = bus
-        self._tasks[run_id] = asyncio.create_task(
+        task = asyncio.create_task(
             self._execute(conductor, resume=True), name=f"cacophony-resume-{run_id}"
         )
+        task.add_done_callback(lambda _: self._retire())
+        self._tasks[run_id] = task
         await asyncio.sleep(0)
         return self.repository.get_run(run_id) or stored
 
@@ -278,6 +316,20 @@ class RunService:
             return await conductor.execute()
         finally:
             await conductor.aclose()
+
+    def _retire(self) -> None:
+        """Forget the oldest finished runs, keeping the recent ones readable.
+
+        A finished conductor is kept so its metrics stay live-fresh, but kept
+        *forever* it is a server that grows by one compiled project and one
+        engine per run it has ever executed. Past the limit the store is the
+        record, which is where a finished run's numbers live anyway.
+        """
+        finished = [run_id for run_id in self._conductors if not self.is_active(run_id)]
+        for run_id in finished[: max(0, len(finished) - TERMINAL_CONDUCTORS_KEPT)]:
+            self._conductors.pop(run_id, None)
+            self._buses.pop(run_id, None)
+            self._tasks.pop(run_id, None)
 
     # -- control ------------------------------------------------------------ #
 

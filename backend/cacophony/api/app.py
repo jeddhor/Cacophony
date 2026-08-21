@@ -753,10 +753,35 @@ def create_app(
             project_id=project_id,
             project_name=name,
             rates=dict(body.rates),
-            destinations=body.destinations,
+            destinations=_confined_destinations(body.destinations),
             keep_records=body.keep_records,
             **body.to_options(),
         )
+
+    def _confined_destinations(destinations: list[Any]) -> list[Any]:
+        """Resolve every destination, refusing a file outside the allowed roots.
+
+        A stream destination names a path the same way a run's output directory
+        does, and it was the one caller-named path that never went through
+        :meth:`RunService.permitted` - so a confined server could still be asked
+        to append generated records anywhere it could write. Normalised here
+        rather than inside the sink: what `file://x` means is the sink module's
+        business, and whether this server may write there is not.
+        """
+        from ..live.sinks import destination_options
+
+        checked: list[Any] = []
+        for spec in destinations:
+            options = destination_options(spec)
+            if str(options.get("type", "")).lower() == "file":
+                options["path"] = str(
+                    runs.permitted(
+                        str(options.get("path") or "stream.jsonl"),
+                        what="stream destination",
+                    )
+                )
+            checked.append(options)
+        return checked
 
     @app.get("/api/streams", tags=["streams"])
     async def list_streams(project_id: int | None = Query(default=None)) -> list[dict[str, Any]]:

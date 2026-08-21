@@ -162,6 +162,12 @@ export interface WorkloadEstimate {
   llm_tokens: number;
   /** What the run holds at once: a write batch, not the dataset (section 31). */
   peak_memory_bytes: number;
+  /** What one record costs inside a batch, so the figure above can be redone
+   *  for the batch size this run will actually use. */
+  batch_bytes: number;
+  /** The batch sizes `peak_memory_bytes` and `llm_calls` assumed. */
+  assumed_batch_size: number;
+  assumed_llm_batch_size: number;
 }
 
 export interface PlanView {

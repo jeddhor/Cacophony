@@ -291,6 +291,29 @@ ceiling and pay neither.</p>
   </tbody>
 </table>
 
+<h2>What the estimate assumes</h2>
+
+<p><code>cacophony plan</code> ends with an estimate, and section&nbsp;69 is
+explicit that it must not pretend to be exact. Two of its figures depend on
+options rather than on the schema, so it takes them:</p>
+
+<pre><code class="language-console">$ cacophony plan project.yaml --batch-size 20000 --workers 8</code></pre>
+
+<p><strong>Memory</strong> is a write batch, not a dataset: batch size times
+what a record costs in memory, times the number of entities in flight at once,
+which is <code>--workers</code> bounded by how many entities there are. The
+number moves with those flags because the run does. The Studio's generate
+screen does the same arithmetic against its own controls, so the figure on
+screen is about the run that button will start.</p>
+
+<p><strong>Model calls</strong> are counted the way they are made, not as
+records times model fields. In the default <code>per_record</code> mode, every
+model field in a layer that shares a provider travels in one call, so three of
+them cost one call per record and not three. <code>per_field</code> costs one
+each. <code>mode: batch</code> covers <code>--llm-batch-size</code> records per
+call &mdash; the estimate assumes the default of twenty and says so, in the
+plan's JSON as <code>assumed_llm_batch_size</code>.</p>
+
 <h2>Where the time actually goes</h2>
 
 <p>For a deterministic schema, in the writer and in the validator. For a schema

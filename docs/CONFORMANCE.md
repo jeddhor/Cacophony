@@ -69,11 +69,11 @@ declined, with the reason recorded. Those are collected at the end.
 | 54 | Generate Screen | built | Every registered format, the project's declared output layouts, the provider requirements the run actually has, and an estimate in 69's own units - tokens and peak memory rather than a guess. |
 | 55 | Live Run Visualization | built |  |
 | 56 | Run Inspector | built |  |
-| 57 | Validation System | built | All six categories. Logical is `assertions:` on an entity, evaluated with the same restricted evaluator as everything else in a schema. Semantic is opt-in and off by default - section 57 asks for that because of cost, and there is a second reason recorded against 67 - and its verdicts are reported as opinions with the judging model named. |
+| 57 | Validation System | built | All six categories. Logical is `assertions:` on an entity, evaluated with the same restricted evaluator as everything else in a schema and compiled when the schema is, so a broken rule is a schema error rather than a per-record one. Semantic is opt-in and off by default - section 57 asks for that because of cost, and there is a second reason recorded against 67 - and its verdicts are reported as opinions with the judging model named. An answer that is not a verdict is counted as unreadable rather than as doubt. |
 | 58 | Quality Metrics | built |  |
 | 59 | Duplicate Detection | partial | Exact, normalised, MinHash and fuzzy detection are built. **Refused:** embedding-based detection. |
 | 60 | Generated Data Provenance | built | Five provenance levels. |
-| 61 | Privacy Guardrails | partial | Optional detectors for card numbers that pass a Luhn check, issuable government identifiers, domains outside the reserved ranges, routable addresses and dialable telephone numbers, under a report/warn/block policy. A field may be labelled, and labelled findings are reported under that label. Turned on the shipped templates, they immediately found one: Faker's safe mode rewrote domains and not phone numbers. **Refused:** detecting suspiciously realistic public identities. **Refused:** claiming the output is privacy-preserving. |
+| 61 | Privacy Guardrails | partial | Optional detectors for card numbers that pass a Luhn check, issuable government identifiers, domains outside the reserved ranges, routable IPv4 and IPv6 addresses and dialable telephone numbers, under a report/warn/block policy. Where each one looks is deliberate and the manual states it: scanning free prose for dotted quads reports every version string ever written. A field may be labelled, and labelled findings are reported under that label. Turned on the shipped templates, they immediately found one: Faker's safe mode rewrote domains and not phone numbers. **Refused:** detecting suspiciously realistic public identities. **Refused:** claiming the output is privacy-preserving. |
 | 62 | Safe Identifier Generation | built |  |
 | 63 | Secret Handling | built |  |
 | 64 | Resource Controls | partial | Six of the seven settings exist - workers, provider concurrency, disk threshold, memory ceiling, request timeout, retry count - but the memory ceiling is recorded rather than enforced, and there is no CPU ceiling. |
@@ -81,7 +81,7 @@ declined, with the reason recorded. Those are collected at the end.
 | 66 | LLM Failure Handling | built |  |
 | 67 | Model Benchmark Tool | partial | Validity, usability, clipping, speed, duplication and latency are measured. Section 57's optional semantic validation is the nearest thing to what is refused here, and it is deliberately a different instrument: it judges a sample of a run's output and names the judge, rather than scoring models against each other. **Refused:** semantic quality scoring. |
 | 68 | Generator Recommendation Engine | built |  |
-| 69 | Cost/Resource Estimation | partial | Tokens, storage and memory are estimated. **Refused:** GPU generation time. |
+| 69 | Cost/Resource Estimation | partial | Tokens, storage and memory are estimated, and model calls are counted the way they are made rather than as records times model fields. Memory follows the batch size and worker count a run will actually use; what an estimate assumed is part of the estimate. **Refused:** GPU generation time. |
 | 70 | Template Library | built | Eight templates, each asserted in the suite. |
 | 71 | Security Operations Template | built |  |
 | 72 | Project Portability | built |  |

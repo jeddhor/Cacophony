@@ -119,6 +119,151 @@ class TestPathConfinement:
         assert "Rewritten" not in outside.read_text(encoding="utf-8")
 
 
+class TestTheHolesAnAuditFound:
+    """Four caller-named paths that never reached :meth:`permitted`.
+
+    Each of these was reachable through a confined server, and each is the same
+    mistake: a path arrives in a request, something is opened at it, and the
+    check that every other path goes through was not on that route.
+    """
+
+    def test_inline_source_cannot_smuggle_a_path_past_the_check(
+        self, inside: Path, outside: Path, tmp_path: Path
+    ) -> None:
+        """`path` alone was refused; `path` *and* `source` stored it unchecked.
+
+        The stored path is what every later read uses, so this was a way to
+        read any file that parses as a project through a confined server.
+        """
+        service = service_for(inside.parent, tmp_path / "store.db")
+        with pytest.raises(PathNotAllowedError, match="project"):
+            service.register_project(path=str(outside), source=PROJECT)
+
+    def test_a_project_stored_with_an_outside_path_cannot_be_read_back(
+        self, inside: Path, outside: Path, tmp_path: Path
+    ) -> None:
+        """Reads are re-checked, exactly as writes already were."""
+        loose = RunService(store_path=tmp_path / "store.db")
+        project_id = loose.register_project(path=str(outside))["id"]
+
+        confined = RunService(database=loose.database, allowed_roots=[inside.parent])
+        with pytest.raises(PathNotAllowedError):
+            confined.schema_source(project_id)
+        with pytest.raises(PathNotAllowedError):
+            confined.load_for_run(project_id)
+        # And it is not offered as editable either.
+        assert confined.schema_is_editable(project_id) is False
+
+    def test_the_provider_cache_cannot_be_written_outside_the_roots(
+        self, inside: Path, tmp_path: Path
+    ) -> None:
+        import asyncio
+
+        from cacophony.providers.cache import CacheMode
+        from cacophony.runs.config import RunConfig
+
+        service = service_for(inside.parent, tmp_path / "store.db")
+        project_id = service.register_project(path=str(inside))["id"]
+        config = RunConfig(
+            output_dir=inside.parent / "out",
+            cache_mode=CacheMode.READ_WRITE,
+            cache_path=tmp_path / "elsewhere" / "cache.db",
+            record_history=False,
+        )
+
+        with pytest.raises(PathNotAllowedError, match="cache"):
+            asyncio.run(service.start_run(project_id, config))
+
+    def test_a_stream_cannot_append_records_outside_the_roots(
+        self, inside: Path, tmp_path: Path
+    ) -> None:
+        """The one caller-named path with a writer on the end of it."""
+        fastapi = pytest.importorskip("fastapi")
+        assert fastapi
+        from fastapi.testclient import TestClient
+
+        from cacophony.api.app import create_app
+
+        service = service_for(inside.parent, tmp_path / "store.db")
+        project_id = service.register_project(path=str(inside))["id"]
+        target = tmp_path / "elsewhere" / "stream.jsonl"
+
+        with TestClient(create_app(service=service)) as client:
+            response = client.post(
+                f"/api/projects/{project_id}/streams",
+                json={
+                    "rates": {"thing": "20/s"},
+                    "destinations": [f"file://{target}"],
+                    "duration_seconds": 0.2,
+                },
+            )
+
+        assert response.status_code == 403, response.text
+        assert "stream destination" in response.text
+        assert not target.exists()
+
+    def test_a_stream_inside_the_roots_still_writes(self, inside: Path, tmp_path: Path) -> None:
+        """The check must refuse the destination, not the feature."""
+        import time
+
+        pytest.importorskip("fastapi")
+        from fastapi.testclient import TestClient
+
+        from cacophony.api.app import create_app
+
+        service = service_for(inside.parent, tmp_path / "store.db")
+        project_id = service.register_project(path=str(inside))["id"]
+        target = inside.parent / "stream.jsonl"
+
+        with TestClient(create_app(service=service)) as client:
+            response = client.post(
+                f"/api/projects/{project_id}/streams",
+                json={
+                    "rates": {"thing": "20/s"},
+                    "destinations": [f"file://{target}"],
+                    "duration_seconds": 0.3,
+                },
+            )
+            assert response.status_code == 201, response.text
+            stream_id = response.json()["id"]
+            for _ in range(100):
+                if client.get(f"/api/streams/{stream_id}").json()["state"] in (
+                    "completed",
+                    "stopped",
+                    "failed",
+                ):
+                    break
+                time.sleep(0.05)
+
+        assert target.exists() and target.stat().st_size > 0
+
+    def test_a_destination_given_as_a_mapping_is_checked_too(
+        self, inside: Path, tmp_path: Path
+    ) -> None:
+        """`file://x` and `{"type": "file", "path": "x"}` are the same request."""
+        pytest.importorskip("fastapi")
+        from fastapi.testclient import TestClient
+
+        from cacophony.api.app import create_app
+
+        service = service_for(inside.parent, tmp_path / "store.db")
+        project_id = service.register_project(path=str(inside))["id"]
+        target = tmp_path / "elsewhere" / "mapped.jsonl"
+
+        with TestClient(create_app(service=service)) as client:
+            response = client.post(
+                f"/api/projects/{project_id}/streams",
+                json={
+                    "rates": {"thing": "20/s"},
+                    "destinations": [{"type": "file", "path": str(target)}],
+                    "duration_seconds": 0.2,
+                },
+            )
+
+        assert response.status_code == 403, response.text
+        assert not target.exists()
+
+
 class TestAtomicWrites:
     def test_the_content_arrives(self, tmp_path: Path) -> None:
         target = tmp_path / "schema.yaml"

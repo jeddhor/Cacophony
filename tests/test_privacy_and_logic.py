@@ -19,10 +19,11 @@ from typing import Any
 
 import pytest
 
+from cacophony.core.errors import SchemaError
 from cacophony.generation.engine import GenerationEngine
 from cacophony.schema.compiler import compile_project
 from cacophony.schema.loader import load_project_data
-from cacophony.validation.privacy import findings, looks_like_a_real_card
+from cacophony.validation.privacy import CHECKS, findings, looks_like_a_real_card
 
 
 def build(spec: dict[str, Any], **engine_options: Any) -> GenerationEngine:
@@ -96,14 +97,19 @@ class TestLogicalAssertions:
         with pytest.raises(ValidationFailedError, match="ended first"):
             engine.preview("job", 3)
 
-    def test_a_rule_that_cannot_be_evaluated_says_so(self) -> None:
+    def test_a_rule_naming_a_field_that_does_not_exist_is_refused_at_compile(self) -> None:
+        """It used to be a per-record error, which is the wrong moment.
+
+        The assertion is part of the schema, so a schema that names a field it
+        does not have should not compile - and `cacophony validate` should be
+        what says so, rather than the first record produced.
+        """
         import copy
 
         schema = copy.deepcopy(DATES)
         schema["entities"]["job"]["assertions"] = [{"expr": "no_such_field > 1"}]
-        engine = build(schema)
-        engine.preview("job", 1)
-        assert any("could not be evaluated" in error for error in engine.stats["job"].errors)
+        with pytest.raises(SchemaError, match="no_such_field"):
+            build(schema)
 
     def test_an_empty_assertion_is_refused_when_the_schema_is_read(self) -> None:
         with pytest.raises(Exception, match="expr"):
@@ -135,6 +141,55 @@ class TestLogicalAssertions:
 # --------------------------------------------------------------------------- #
 # Privacy (section 61)
 # --------------------------------------------------------------------------- #
+
+
+class TestABrokenAssertionIsASchemaError:
+    """`cacophony validate` used to call these schemas valid.
+
+    The assertion was compiled by the validator that runs them, which is built
+    when a run starts - so the first record found out, as a validation failure
+    rather than as the schema mistake it is.
+    """
+
+    def _compile(self, expr: str) -> Any:
+        return compile_project(
+            load_project_data(
+                {
+                    "project": {"name": "asserted", "seed": 1},
+                    "entities": {
+                        "thing": {
+                            "count": 3,
+                            "fields": {
+                                "id": {"type": "string", "generator": "sequence"},
+                                "size": {"type": "integer", "generator": "sequence"},
+                            },
+                            "assertions": [{"expr": expr, "message": "no"}],
+                        }
+                    },
+                }
+            )
+        )
+
+    def test_a_workable_assertion_compiles(self) -> None:
+        assert self._compile("size > 0")
+
+    def test_a_call_to_something_that_is_not_a_field_is_refused(self) -> None:
+        with pytest.raises(SchemaError, match="open"):
+            self._compile("open('/etc/passwd').read()")
+
+    def test_a_misspelled_field_is_refused_and_named(self) -> None:
+        with pytest.raises(SchemaError, match="siez"):
+            self._compile("siez > 0")
+
+    def test_nonsense_is_refused_before_any_record_exists(self) -> None:
+        with pytest.raises(SchemaError):
+            self._compile("size >")
+
+    def test_the_functions_an_expression_may_call_still_work(self) -> None:
+        assert self._compile("len(id) > 0")
+
+    def test_the_yaml_spellings_of_the_literals_are_not_fields(self) -> None:
+        assert self._compile("id != null and size > 0")
 
 
 class TestTheDetectors:
@@ -217,12 +272,45 @@ class TestTheDetectors:
         root = Path(__file__).resolve().parents[1]
         compiled = compile_project(load_project(root / "templates" / "corporate-directory.yaml"))
         engine = GenerationEngine(compiled, validation_policy="report")
-        from cacophony.validation.privacy import CHECKS
 
         every = frozenset(CHECKS)
         for record in engine.preview(compiled.entity_order[0], 25):
             for value in record.values.values():
                 assert findings(value, every) == [], value
+
+
+class TestWhatTheDetectorsReachAndWhatTheyDoNot:
+    """The boundary, stated as tests because the manual states it as a sentence.
+
+    Widening this is not free: matching a bare dotted name anywhere in prose
+    reports `config.yaml` and every version string ever written, and a detector
+    people turn off finds nothing at all.
+    """
+
+    def test_a_bare_domain_in_a_hostname_field_is_found(self) -> None:
+        """The gap: a real hostname, in the field whose job is hostnames."""
+        assert findings("openai.com", frozenset(CHECKS), field_type="hostname")
+
+    def test_a_bare_domain_in_free_text_is_not_hunted_for(self) -> None:
+        assert not findings("openai.com", frozenset(CHECKS))
+        assert not findings("we deploy from config.yaml nightly", frozenset(CHECKS))
+
+    def test_a_reserved_name_is_still_fine_in_a_hostname_field(self) -> None:
+        assert not findings("example.com", frozenset(CHECKS), field_type="hostname")
+        assert not findings("host.example", frozenset(CHECKS), field_type="hostname")
+
+    def test_a_routable_ipv6_address_is_found(self) -> None:
+        assert findings("2606:4700:4700::1111", frozenset(CHECKS))
+        assert findings("connect to 2606:4700:4700::1111", frozenset(CHECKS))
+
+    def test_reserved_ipv6_ranges_are_not(self) -> None:
+        for value in ("2001:db8::5", "fd00::1", "::1", "fe80::1"):
+            assert not findings(value, frozenset(CHECKS)), value
+
+    def test_a_time_is_not_an_address(self) -> None:
+        """Colons are not evidence; `ipaddress` decides, not the pattern."""
+        for value in ("12:34:56", "14:30:00", "sha256:abcdef"):
+            assert not findings(value, frozenset(CHECKS)), value
 
 
 class TestPrivacyInARun:
@@ -395,6 +483,63 @@ class TestSemanticIsOptional:
         engine.preview("note", 4)
         report = asyncio.run(engine.semantic_reports())["note"]
         assert report["judged"] == 0 or report.get("error")
+
+
+class TestAJudgeIsReadCarefully:
+    """What the judge said, not what `bool()` makes of what the judge said.
+
+    The verdict used to be `bool(payload.get("plausible"))`, which reads the
+    string `"false"` as plausible and a missing field as implausible. Both
+    directions matter: one inflates the score, the other blames the data for a
+    judge that did not answer.
+    """
+
+    def _report(self, response: str) -> dict[str, Any]:
+        import copy
+
+        schema = copy.deepcopy(JUDGED)
+        schema["providers"]["judge"]["options"]["responses"] = [response]
+        engine = judged_engine(schema)
+        engine.preview("note", 4)
+        return asyncio.run(engine.semantic_reports())["note"]
+
+    def test_the_string_false_is_not_plausible(self) -> None:
+        report = self._report('{"plausible": "false", "reason": "invented"}')
+        assert report["judged"] == 2
+        assert report["rate"] == 0.0
+
+    def test_a_word_answer_is_read_as_the_word_means(self) -> None:
+        assert self._report('{"plausible": "No.", "reason": "nope"}')["rate"] == 0.0
+        assert self._report('{"plausible": "yes", "reason": "fine"}')["rate"] == 1.0
+
+    def test_a_missing_verdict_is_not_counted_as_doubt(self) -> None:
+        """The failure that silently lowered a score."""
+        report = self._report('{"reason": "I could not say"}')
+        assert report["judged"] == 0
+        assert report["rate"] is None
+        assert report["unreadable"] == 2
+        assert "examples" not in report
+
+    def test_prose_instead_of_json_is_reported_the_same_way(self) -> None:
+        report = self._report("Well, it depends on what you mean by plausible.")
+        assert report["judged"] == 0
+        assert report["unreadable"] == 2
+
+    def test_an_unreadable_answer_does_not_dilute_a_real_one(self) -> None:
+        """Two questions, one answered: the rate is over the one that was."""
+        import copy
+
+        schema = copy.deepcopy(JUDGED)
+        schema["providers"]["judge"]["options"]["responses"] = [
+            '{"plausible": true, "reason": "fits"}',
+            "sorry, I am a language model",
+        ]
+        engine = judged_engine(schema)
+        engine.preview("note", 4)
+        report = asyncio.run(engine.semantic_reports())["note"]
+        assert report["judged"] == 1
+        assert report["rate"] == 1.0
+        assert report["unreadable"] == 1
 
 
 def _asset_store():

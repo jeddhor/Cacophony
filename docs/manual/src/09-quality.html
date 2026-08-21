@@ -48,6 +48,12 @@ nullable field should not have to say <code>None</code>. A failure is a
 validation failure of category <code>logical</code>, so <code>--on-failure</code>
 decides what happens next.</p>
 
+<p>An assertion is part of the schema, so it is compiled when the schema is:
+<code>cacophony validate</code> refuses one that does not parse, uses a
+construct the evaluator does not allow, or names a field the entity does not
+have &mdash; and names the field it could not find. This used to wait for the
+first record, which reported a schema mistake as a data problem.</p>
+
 <h2>Semantic: an opinion, attributed</h2>
 
 <p>Off unless asked for. Section&nbsp;57 says why &mdash; cost &mdash; and there
@@ -67,6 +73,15 @@ the benchmark (chapter&nbsp;35).</p>
 
 <p>The model is always named. A plausibility rate with no attribution is worse
 than no rate at all, because it reads like a measurement.</p>
+
+<p>An answer that is not a verdict is not counted as one. A judge that replies
+in prose, omits the field, or says something other than yes or no is recorded
+as <code>unreadable</code> and left out of the rate &mdash; because
+<em>n</em> unreadable answers scored as "implausible" is a broken judge
+reported as bad data. Words are read as words where they are unambiguous:
+<code>"false"</code>, <code>"no"</code> and <code>"No."</code> all mean no,
+which matters because a JSON string is true to any language that asks it a
+question carelessly.</p>
 
 <h2>Two different failures, one flag</h2>
 

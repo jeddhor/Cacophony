@@ -160,3 +160,52 @@ class TestUniquenessInARun:
         engine = self._engine(10_000)
         engine.preview("person", 400)
         assert "uniqueness_spilled" not in engine.validation_stats()["person"]
+
+    def test_closing_the_run_releases_the_spill_file_and_its_directory(self) -> None:
+        """What a finished run must not still be holding.
+
+        The API keeps a finished run's engine so its metrics stay readable, so
+        nothing was ever collecting these: a long-lived server accumulated one
+        open database and one temporary directory per spilled field.
+        """
+        import asyncio
+
+        engine = self._engine(50)
+        engine.preview("person", 400)
+
+        tracker = engine._validators["person"]._seen["badge"]
+        spilled_to = tracker._path
+        assert spilled_to is not None and spilled_to.exists()
+        directory = spilled_to.parent
+
+        asyncio.run(engine.aclose())
+
+        assert not spilled_to.exists()
+        assert not directory.exists()
+
+    def test_the_summary_still_says_it_spilled_afterwards(self) -> None:
+        """Closing releases the file, not the fact that there was one."""
+        import asyncio
+
+        engine = self._engine(50)
+        engine.preview("person", 400)
+        asyncio.run(engine.aclose())
+
+        spilled = engine.validation_stats()["person"]["uniqueness_spilled"]
+        assert spilled[0]["field"] == "badge"
+        assert spilled[0]["spilled_after"] == 51
+
+    def test_a_directory_the_caller_named_is_left_alone(self, tmp_path: Any) -> None:
+        """It is the caller's directory; only the file in it is ours."""
+        from cacophony.validation.uniqueness import UniqueTracker
+
+        scratch = tmp_path / "theirs"
+        scratch.mkdir()
+        tracker = UniqueTracker("badge", memory_ceiling=2, directory=scratch)
+        for value in range(10):
+            tracker.add(value)
+
+        assert tracker._path is not None and tracker._path.exists()
+        tracker.close()
+        assert scratch.exists()
+        assert list(scratch.iterdir()) == []

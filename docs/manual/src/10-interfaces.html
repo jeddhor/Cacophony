@@ -49,6 +49,23 @@ Or pass --insecure if this interface is genuinely private.</code></pre>
 permitted. Paths are resolved before they are checked, so <code>..</code> and a
 symlink both land where they really point rather than where they claim to.</p>
 
+<p>Every path a request can name goes through that check, which is a list worth
+writing down: a run's output directory and assets directory, its provider cache
+file, a stream's <code>file://</code> destination, and a project's path &mdash;
+whether the project is registered from that file or supplies its schema inline
+and merely mentions it. Reads are checked as well as writes, so a project
+recorded before the server was confined cannot be read through it either.</p>
+
+<div class="callout warning">
+  <span class="callout-title">Three of those were added after an audit</span>
+  <p>The stream destination, the cache path, and the project path that arrives
+  beside inline source. Each was the same mistake: a path reaches a component
+  that opens it by a route where nothing checked it first. A confined server
+  could be asked to append generated records to any file it could write, and
+  to read back any file that parses as a project. They are checked now, and
+  each has a test that performs the original request and expects a 403.</p>
+</div>
+
 <div class="callout quiet">
   <span class="callout-title">And the schema file is replaced atomically</span>
   <p>Written beside the target, flushed, and renamed over it. A reader sees the

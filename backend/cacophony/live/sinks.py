@@ -58,6 +58,7 @@ __all__ = [
     "StreamSink",
     "SyslogSink",
     "create_sink",
+    "destination_options",
 ]
 
 #: Syslog severities and facilities, for the PRI calculation of RFC 5424.
@@ -584,7 +585,7 @@ SINK_TYPES: dict[str, type[StreamSink]] = {
 
 def create_sink(spec: str | dict[str, Any]) -> StreamSink:
     """Build a sink from ``"syslog"``, ``"syslog://host:514"`` or a mapping."""
-    options = _options_for(spec)
+    options = destination_options(spec)
     kind = str(options.pop("type", "stdout")).lower()
 
     sink_class = SINK_TYPES.get(kind)
@@ -594,8 +595,13 @@ def create_sink(spec: str | dict[str, Any]) -> StreamSink:
     return sink_class(**options)
 
 
-def _options_for(spec: str | dict[str, Any]) -> dict[str, Any]:
-    """Normalise the three ways a destination can be written."""
+def destination_options(spec: str | dict[str, Any]) -> dict[str, Any]:
+    """Normalise the three ways a destination can be written.
+
+    Public because a caller that has to *check* a destination - the API, which
+    may only write inside its allowed roots - needs to see what it resolves to
+    before a sink is built from it.
+    """
     if isinstance(spec, dict):
         return dict(spec)
 

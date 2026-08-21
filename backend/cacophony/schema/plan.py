@@ -132,6 +132,15 @@ class WorkloadEstimate:
     #: What the run should hold at once: a write batch, not the dataset.
     #: Section 31 is the reason this is a small number however large the run.
     peak_memory_bytes: int = 0
+    #: What one record costs inside a batch, so a caller who knows the run's
+    #: real batch size can recompute the figure above rather than read one
+    #: computed for a batch it is not using.
+    batch_bytes: int = 0
+    #: The batch sizes the two estimates above assumed. Stated, because both
+    #: are run options and an estimate that hides its assumptions is worse
+    #: than an inexact one (section 69).
+    assumed_batch_size: int = 0
+    assumed_llm_batch_size: int = 0
 
     def merge(self, other: WorkloadEstimate) -> WorkloadEstimate:
         return WorkloadEstimate(
@@ -146,7 +155,23 @@ class WorkloadEstimate:
             # overlaps a few of them, so peak memory is the largest entity's
             # batch rather than the sum of every entity's.
             peak_memory_bytes=max(self.peak_memory_bytes, other.peak_memory_bytes),
+            batch_bytes=max(self.batch_bytes, other.batch_bytes),
+            assumed_batch_size=max(self.assumed_batch_size, other.assumed_batch_size),
+            assumed_llm_batch_size=max(self.assumed_llm_batch_size, other.assumed_llm_batch_size),
         )
+
+    def memory_for(self, batch_size: int, workers: int = 1, entities: int = 1) -> int:
+        """Peak memory for a run that uses this batch size and this many workers.
+
+        The estimate is computed for a default batch; a run that sets its own
+        holds proportionally more or less, and `--workers` overlaps that many
+        entities at once. Recomputed rather than re-estimated, so the two
+        figures can never disagree about what a record costs.
+        """
+        if not self.batch_bytes:
+            return self.peak_memory_bytes
+        overlap = max(1, min(workers, max(1, entities)))
+        return max(1, batch_size) * self.batch_bytes * overlap
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -158,6 +183,9 @@ class WorkloadEstimate:
             "estimated_bytes": self.estimated_bytes,
             "llm_tokens": self.llm_tokens,
             "peak_memory_bytes": self.peak_memory_bytes,
+            "batch_bytes": self.batch_bytes,
+            "assumed_batch_size": self.assumed_batch_size,
+            "assumed_llm_batch_size": self.assumed_llm_batch_size,
         }
 
 

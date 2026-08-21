@@ -170,6 +170,51 @@ class TestTheEstimateNamesTheUnitsTheDesignAsks:
         }
         assert self._estimate(schema).llm_tokens == 0
 
+    def test_calls_are_counted_the_way_they_are_made(self) -> None:
+        """Not records x model fields: that is only true of `mode: per_field`.
+
+        The default is `per_record`, where every model field in a layer that
+        shares a provider travels in one call, so an entity with three of them
+        was estimated at three times the requests it makes.
+        """
+        import copy
+
+        schema = copy.deepcopy(self.SCHEMA)
+        fields = schema["ticket"]["fields"]
+        fields["resolution"] = copy.deepcopy(fields["summary"])
+        fields["diagnosis"] = copy.deepcopy(fields["summary"])
+
+        assert self._estimate(schema).llm_calls == 1_000
+
+        for name in ("summary", "resolution", "diagnosis"):
+            fields[name]["mode"] = "per_field"
+        assert self._estimate(schema).llm_calls == 3_000
+
+    def test_a_batch_mode_field_makes_one_call_for_many_records(self) -> None:
+        import copy
+
+        schema = copy.deepcopy(self.SCHEMA)
+        schema["ticket"]["fields"]["summary"]["mode"] = "batch"
+        # A thousand records, twenty to a call.
+        assert self._estimate(schema).llm_calls == 50
+
+    def test_the_estimate_states_what_it_assumed(self) -> None:
+        """Section 69: an estimate that hides its assumptions is the worse kind."""
+        estimate = self._estimate()
+        assert estimate.assumed_batch_size == 1_000
+        assert estimate.assumed_llm_batch_size == 20
+        assert estimate.batch_bytes > 0
+        assert estimate.peak_memory_bytes == estimate.assumed_batch_size * estimate.batch_bytes
+
+    def test_memory_follows_the_batch_the_run_will_use(self) -> None:
+        """The figure a form showing a batch-size control has to be able to redo."""
+        estimate = self._estimate()
+        assert estimate.memory_for(1_000) == estimate.peak_memory_bytes
+        assert estimate.memory_for(10_000) == 10 * estimate.peak_memory_bytes
+        # `--workers` overlaps entities, bounded by how many there are.
+        assert estimate.memory_for(1_000, workers=4, entities=2) == 2 * estimate.peak_memory_bytes
+        assert estimate.memory_for(1_000, workers=4, entities=1) == estimate.peak_memory_bytes
+
     def test_memory_does_not_grow_with_the_dataset(self) -> None:
         """Section 31's claim, stated as an estimate rather than a hope."""
         import copy

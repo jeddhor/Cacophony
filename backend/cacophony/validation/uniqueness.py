@@ -72,6 +72,9 @@ class UniqueTracker:
         self._memory: set[str] = set()
         self._connection: sqlite3.Connection | None = None
         self._path: Path | None = None
+        #: A temporary directory this tracker made for itself, to be removed
+        #: with it. ``None`` when the caller named one.
+        self._scratch: Path | None = None
         self.spilled_at: int | None = None
 
     # -- the check ---------------------------------------------------------- #
@@ -109,7 +112,9 @@ class UniqueTracker:
     def summary(self) -> dict[str, Any]:
         return {
             "field": self.field,
-            "spilled": self._connection is not None,
+            # Whether it spilled during the run, not whether the file is still
+            # open: the run report is written after the run has let go of it.
+            "spilled": self.spilled_at is not None,
             "spilled_after": self.spilled_at,
             "held_in_memory": len(self._memory),
         }
@@ -120,6 +125,13 @@ class UniqueTracker:
         self.spilled_at = None
 
     def close(self) -> None:
+        """Release the spill file, the connection and the directory holding them.
+
+        Called when a run ends rather than left to the garbage collector: the
+        API keeps finished runs around to read their metrics from, so nothing
+        was collecting these, and a long-lived server accumulated one open
+        database and one temporary directory per spilled field.
+        """
         if self._connection is not None:
             self._connection.close()
             self._connection = None
@@ -127,13 +139,21 @@ class UniqueTracker:
             # A scratch file, and nothing else refers to it.
             self._path.unlink(missing_ok=True)
             self._path = None
+        if self._scratch is not None:
+            with contextlib.suppress(OSError):
+                self._scratch.rmdir()
+            self._scratch = None
 
     # -- internals ---------------------------------------------------------- #
 
     def _spill(self) -> None:
         """Move everything to disk and keep going from there."""
+        borrowed = self._directory is not None
         directory = Path(self._directory) if self._directory else Path(tempfile.mkdtemp())
         directory.mkdir(parents=True, exist_ok=True)
+        #: Removed on close, but only if this tracker is what created it: a
+        #: directory the caller named belongs to the caller.
+        self._scratch = None if borrowed else directory
         self._path = directory / f"unique-{self.field}-{id(self):x}.db"
 
         connection = sqlite3.connect(str(self._path))

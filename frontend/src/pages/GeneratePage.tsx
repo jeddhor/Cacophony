@@ -106,6 +106,10 @@ export function GeneratePage(): ReactNode {
   const format = formats.find((entry) => entry.name === form.outputFormat);
   const profile = profiles.find((entry) => entry.name === form.outputProfile);
   const needed = requiredProviders(schema.data, selected, configured);
+  // The plan's memory figure is computed for a default batch. This screen has
+  // the batch size and the worker count in front of it, so it does the
+  // arithmetic again rather than showing a number about a different run.
+  const memory = memoryFor(estimate, form.batchSize, form.workers, selected.length);
   const unmet = needed.filter((requirement) => requirement.serving.length === 0);
 
   /**
@@ -180,8 +184,11 @@ export function GeneratePage(): ReactNode {
             decides whether a run of this size is possible on this machine. */}
         <Stat
           label="Peak memory"
-          value={formatBytes(estimate.peak_memory_bytes)}
-          note="one batch at a time"
+          value={formatBytes(memory)}
+          note={`${formatNumber(form.batchSize)} records × ${Math.max(
+            1,
+            Math.min(form.workers, Math.max(1, selected.length)),
+          )} at a time`}
         />
       </div>
 
@@ -571,6 +578,24 @@ function requiredProviders(
   }));
 }
 
+/**
+ * Peak memory for the batch size and worker count this form is set to.
+ *
+ * Mirrors `WorkloadEstimate.memory_for`: a batch slot costs `batch_bytes` per
+ * record, `--workers` overlaps that many entities, and neither figure grows
+ * with the record count (section 31).
+ */
+function memoryFor(
+  estimate: typeof EMPTY_ESTIMATE,
+  batchSize: number,
+  workers: number,
+  entities: number,
+): number {
+  if (!estimate.batch_bytes) return estimate.peak_memory_bytes;
+  const overlap = Math.max(1, Math.min(workers, Math.max(1, entities)));
+  return Math.max(1, batchSize) * estimate.batch_bytes * overlap;
+}
+
 const EMPTY_ESTIMATE = {
   records: 0,
   fields: 0,
@@ -580,6 +605,9 @@ const EMPTY_ESTIMATE = {
   estimated_bytes: 0,
   llm_tokens: 0,
   peak_memory_bytes: 0,
+  batch_bytes: 0,
+  assumed_batch_size: 0,
+  assumed_llm_batch_size: 0,
 };
 
 function entityCount(plan: PlanView, entity: string): number {
@@ -617,6 +645,12 @@ function scaleEstimate(
         // the largest entity's batch rather than the sum of all of them - the
         // same arithmetic `WorkloadEstimate.merge` does (section 31).
         peak_memory_bytes: Math.max(total.peak_memory_bytes, scaled.peak_memory_bytes),
+        batch_bytes: Math.max(total.batch_bytes, scaled.batch_bytes),
+        assumed_batch_size: Math.max(total.assumed_batch_size, scaled.assumed_batch_size),
+        assumed_llm_batch_size: Math.max(
+          total.assumed_llm_batch_size,
+          scaled.assumed_llm_batch_size,
+        ),
       };
     }, EMPTY_ESTIMATE);
 }
@@ -632,6 +666,9 @@ function scale(estimate: typeof EMPTY_ESTIMATE, factor: number): typeof EMPTY_ES
     llm_tokens: Math.round(estimate.llm_tokens * factor),
     // Memory is a batch, and a batch does not grow with the record count.
     peak_memory_bytes: estimate.peak_memory_bytes,
+    batch_bytes: estimate.batch_bytes,
+    assumed_batch_size: estimate.assumed_batch_size,
+    assumed_llm_batch_size: estimate.assumed_llm_batch_size,
   };
 }
 

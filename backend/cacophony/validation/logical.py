@@ -39,8 +39,9 @@ class LogicalValidator:
 
         for index, spec in enumerate(entity.spec.assertions):
             where = f"{entity.name}.assertions[{index}]"
-            # Compiled here, so a broken assertion is reported by `cacophony
-            # validate` rather than by the first record that meets it.
+            # Compiled again here, cheaply: the schema compiler has already
+            # refused anything unparseable or naming a field that does not
+            # exist, so by this point this is only building what it will run.
             expression = RecordExpression(spec.expr, where=where)
             mentions = frozenset(_names_in(spec.expr, entity))
             self._rules.append((expression, spec.describe(), mentions))

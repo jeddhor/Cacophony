@@ -84,9 +84,25 @@ describe("the generate screen (sections 54, 69)", () => {
     renderWithProviders(<GeneratePage />);
     // 1,100,000 tokens from the plan, not 5,000 calls × a made-up 180.
     expect(await screen.findByText("1,100,000")).toBeInTheDocument();
+    // 12,000 bytes a record x the form's 1,000-record batch x two entities in
+    // flight, not the plan's figure for whatever batch it assumed.
     const memory = screen.getByText("Peak memory").parentElement!;
-    expect(within(memory).getByText("11.4 MB")).toBeInTheDocument();
-    expect(within(memory).getByText("one batch at a time")).toBeInTheDocument();
+    expect(within(memory).getByText("22.9 MB")).toBeInTheDocument();
+    expect(within(memory).getByText("1,000 records × 2 at a time")).toBeInTheDocument();
+  });
+
+  it("recomputes memory when the batch size changes, instead of repeating a default", async () => {
+    renderWithProviders(<GeneratePage />);
+    await screen.findByText("Peak memory");
+    const memory = () => screen.getByText("Peak memory").parentElement!;
+    expect(within(memory()).getByText("22.9 MB")).toBeInTheDocument();
+
+    const batch = screen.getByLabelText("Batch size");
+    await userEvent.clear(batch);
+    await userEvent.type(batch, "10000");
+
+    expect(within(memory()).getByText("229 MB")).toBeInTheDocument();
+    expect(within(memory()).getByText("10,000 records × 2 at a time")).toBeInTheDocument();
   });
 
   it("reports provider requirements, and which of them nothing serves", async () => {

@@ -121,10 +121,13 @@ sections:
     state: implemented
     note: >
       All six categories. Logical is `assertions:` on an entity, evaluated with
-      the same restricted evaluator as everything else in a schema. Semantic is
-      opt-in and off by default - section 57 asks for that because of cost, and
-      there is a second reason recorded against 67 - and its verdicts are
-      reported as opinions with the judging model named.
+      the same restricted evaluator as everything else in a schema and compiled
+      when the schema is, so a broken rule is a schema error rather than a
+      per-record one. Semantic is opt-in and off by default - section 57 asks
+      for that because of cost, and there is a second reason recorded against
+      67 - and its verdicts are reported as opinions with the judging model
+      named. An answer that is not a verdict is counted as unreadable rather
+      than as doubt.
   - {section: 58, state: implemented}
   - section: 59
     state: partial
@@ -140,10 +143,13 @@ sections:
     note: >
       Optional detectors for card numbers that pass a Luhn check, issuable
       government identifiers, domains outside the reserved ranges, routable
-      addresses and dialable telephone numbers, under a report/warn/block
-      policy. A field may be labelled, and labelled findings are reported under
-      that label. Turned on the shipped templates, they immediately found one:
-      Faker's safe mode rewrote domains and not phone numbers.
+      IPv4 and IPv6 addresses and dialable telephone numbers, under a
+      report/warn/block policy. Where each one looks is deliberate and the
+      manual states it: scanning free prose for dotted quads reports every
+      version string ever written. A field may be labelled, and labelled
+      findings are reported under that label. Turned on the shipped templates,
+      they immediately found one: Faker's safe mode rewrote domains and not
+      phone numbers.
     refuses:
       - item: "detecting suspiciously realistic public identities"
         why: >
@@ -183,7 +189,11 @@ sections:
           honestly instead.
   - section: 69
     state: partial
-    note: "Tokens, storage and memory are estimated."
+    note: >
+      Tokens, storage and memory are estimated, and model calls are counted the
+      way they are made rather than as records times model fields. Memory
+      follows the batch size and worker count a run will actually use; what an
+      estimate assumed is part of the estimate.
     refuses:
       - item: "GPU generation time"
         why: >

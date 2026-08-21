@@ -202,6 +202,16 @@ class RecordValidator:
         self._last_added = []
         self.statistical = StatisticalValidator(self.entity)
 
+    def close(self) -> None:
+        """Release what uniqueness tracking is holding on disk.
+
+        Nothing collected these before: the API keeps a finished run's
+        validator around so its metrics stay readable, so a spilled tracker's
+        database and temporary directory outlived every run that made one.
+        """
+        for tracker in self._seen.values():
+            tracker.close()
+
     def summary(self) -> dict[str, Any]:
         """Everything this validator learned, for the run report (section 58)."""
         data: dict[str, Any] = self.stats.to_dict()

@@ -255,6 +255,35 @@ class TestRuns:
         assert response.status_code == 422
         assert "developer_db" in response.text
 
+    def test_finished_runs_stop_accumulating_in_memory(
+        self, client, service, project_id, tmp_path, monkeypatch
+    ) -> None:
+        """A server that never forgets a run grows by one engine per run.
+
+        Finished conductors are kept so their metrics stay live-fresh; past a
+        limit the store is the record, which is where a finished run's numbers
+        live anyway.
+        """
+        from cacophony.api import service as service_module
+
+        monkeypatch.setattr(service_module, "TERMINAL_CONDUCTORS_KEPT", 2)
+
+        ids = []
+        for index in range(4):
+            run_id = self._start(client, project_id, tmp_path / f"r{index}", records=2)
+            await_run(client, run_id)
+            ids.append(run_id)
+
+        assert len(service._conductors) == 2
+        assert ids[0] not in service._conductors
+        assert ids[-1] in service._conductors
+
+        # Forgotten in memory, still completely readable from the store.
+        oldest = client.get(f"/api/runs/{ids[0]}").json()
+        assert oldest["state"] == "completed"
+        assert oldest["records_written"] == 6
+        assert "live" not in oldest
+
     def test_a_missing_run_is_a_404(self, client) -> None:
         assert client.get("/api/runs/nope").status_code == 404
 
