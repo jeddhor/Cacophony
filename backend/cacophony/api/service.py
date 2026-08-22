@@ -22,7 +22,7 @@ from ..core.errors import CacophonyError, PathNotAllowedError, SchemaError
 from ..core.files import atomic_write_text
 from ..runs.config import RunConfig
 from ..runs.coordinator import Conductor
-from ..runs.events import EventBus
+from ..runs.events import EventBus, EventKind
 from ..runs.state import RunState
 from ..schema.compiler import compile_project
 from ..schema.loader import load_project, load_project_data
@@ -295,8 +295,15 @@ class RunService:
         if run_id in self._tasks and not self._tasks[run_id].done():
             raise CacophonyError(f"Run {run_id} is already executing.")
 
-        compiled, _revision_id, _name = self.load_for_run(stored["project_id"])
+        # The revision this run recorded, not the project's head: resuming
+        # against an edited schema produces one dataset generated two ways,
+        # which is the thing section 73 keeps revisions for.
+        from ..runs.recovery import compile_stored_revision
+
+        compiled, complaint = compile_stored_revision(self.repository, stored)
         bus = EventBus()
+        if complaint:
+            bus.emit(EventKind.WARNING, run_id, message=complaint, level="warning")
         conductor = Conductor.resume(compiled, stored, repository=self.repository, bus=bus)
 
         self._conductors[run_id] = conductor
@@ -374,8 +381,19 @@ class RunService:
         return True
 
     def is_active(self, run_id: str) -> bool:
+        """Whether this run is still executing *and* has not reached an end.
+
+        Both halves matter. A task that has not finished can still belong to a
+        run whose state is already `completed` - the conductor is closing its
+        writers - and during that window the run's own record is the truth. The
+        live metrics measure elapsed time from a clock, so attaching them there
+        makes a finished run tick.
+        """
         task = self._tasks.get(run_id)
-        return task is not None and not task.done()
+        if task is None or task.done():
+            return False
+        conductor = self._conductors.get(run_id)
+        return conductor is None or not conductor.state.is_terminal
 
     async def wait(self, run_id: str, timeout: float | None = None) -> Any:
         """Await a run's completion. Chiefly for tests and for ``serve --once``."""

@@ -202,6 +202,30 @@ class RecordValidator:
         self._last_added = []
         self.statistical = StatisticalValidator(self.entity)
 
+    @property
+    def unique_fields(self) -> list[str]:
+        """Fields this validator is enforcing `unique: true` on."""
+        return list(self._unique_fields)
+
+    def remember_written(self, values: dict[str, list[Any]]) -> int:
+        """Take values a previous attempt wrote into the uniqueness trackers.
+
+        A resumed run builds a new engine, and a new engine builds empty
+        trackers - so the second half of a run could not see the first half's
+        values, and a `unique: true` field came out of a resumed run with
+        duplicates in it and nothing reported.
+        """
+        remembered = 0
+        for name, seen in values.items():
+            tracker = self._seen.get(name)
+            if tracker is None:
+                continue
+            for value in seen:
+                if value is not None:
+                    tracker.add(value)
+                    remembered += 1
+        return remembered
+
     def close(self) -> None:
         """Release what uniqueness tracking is holding on disk.
 

@@ -81,6 +81,9 @@ class CreateRunRequest(BaseModel):
     cache_path: str | None = None
 
     checkpoint_every: int = Field(default=10_000, ge=1)
+    #: Replace an earlier run's output at this destination. A run refuses to
+    #: share one by default, because two datasets in a directory look like one.
+    overwrite: bool = False
     limits: LimitsRequest = Field(default_factory=LimitsRequest)
 
     model_config = {"populate_by_name": True}
@@ -125,6 +128,7 @@ class CreateRunRequest(BaseModel):
             cache_mode=self.cache_mode,
             cache_path=Path(self.cache_path) if self.cache_path else None,
             checkpoint_every=self.checkpoint_every,
+            overwrite=self.overwrite,
             limits=self.limits.to_limits(),
         )
 

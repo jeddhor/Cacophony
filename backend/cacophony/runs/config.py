@@ -146,6 +146,24 @@ class RunConfig:
     record_history: bool = True
     #: Keep at most this many runs per store; older ones are pruned.
     history_limit: int = 100
+    #: Replace an earlier run's output at this destination instead of refusing
+    #: to share it. Off by default: mixing two datasets in one directory is
+    #: silent, and the mixture looks exactly like a dataset.
+    overwrite: bool = False
+
+    def anchor_paths(self) -> None:
+        """Resolve every path this run owns, once, before it is recorded.
+
+        A relative path means "here", and a resumed run is often started
+        somewhere else - so `out/` in a stored configuration is an instruction
+        whose meaning depends on who reads it. Resolved at the start of the
+        run, it means the same directory to everyone afterwards.
+        """
+        self.output_dir = Path(self.output_dir).expanduser().resolve()
+        if self.assets_dir is not None:
+            self.assets_dir = Path(self.assets_dir).expanduser().resolve()
+        if self.cache_path is not None:
+            self.cache_path = Path(self.cache_path).expanduser().resolve()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -170,6 +188,7 @@ class RunConfig:
             "assets_dir": str(self.assets_dir) if self.assets_dir else None,
             "deduplicate_assets": self.deduplicate_assets,
             "overwrite_assets": self.overwrite_assets,
+            "overwrite": self.overwrite,
             "limits": self.limits.to_dict(),
         }
 
@@ -200,6 +219,7 @@ class RunConfig:
             assets_dir=Path(data["assets_dir"]) if data.get("assets_dir") else None,
             deduplicate_assets=bool(data.get("deduplicate_assets", True)),
             overwrite_assets=bool(data.get("overwrite_assets", False)),
+            overwrite=bool(data.get("overwrite", False)),
             checkpoint_every=int(data.get("checkpoint_every", 10_000)),
             limits=ResourceLimits(**limits_data) if limits_data else ResourceLimits(),
         )

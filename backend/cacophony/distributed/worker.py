@@ -325,14 +325,15 @@ class Worker:
         written = 0
         await writer.open()
         try:
-            async for batch in self.engine.stream(
+            async for chunk in self.engine.stream(
                 shard.entity,
                 count=shard.count,
                 offset=shard.offset,
                 batch_size=self.batch_size,
             ):
-                await writer.write_batch(batch)
-                written += len(batch)
+                if chunk.records:
+                    await writer.write_batch(chunk.records)
+                written += len(chunk.records)
 
                 if time.monotonic() >= deadline:
                     if not await self.transport.renew(self.id, shard.id, generation):

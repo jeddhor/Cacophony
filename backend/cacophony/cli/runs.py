@@ -8,7 +8,6 @@ display - as opposed to argument parsing.
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -22,8 +21,6 @@ from ..runs.config import ResourceLimits, RunConfig
 from ..runs.coordinator import Conductor, RunOutcome
 from ..runs.events import EventKind
 from ..runs.state import RunState
-from ..schema.compiler import compile_project
-from ..schema.loader import load_project, load_project_data
 from ..store.database import Database, default_store_path
 from ..store.repository import Repository
 from .theme import console, error_console
@@ -80,6 +77,7 @@ def build_run_config(
     llm_batch_size: int,
     checkpoint_every: int,
     record_history: bool,
+    overwrite: bool = False,
     assets_dir: Path | None = None,
     overwrite_assets: bool = False,
     edge_cases: float = 0.0,
@@ -132,6 +130,7 @@ def build_run_config(
         cache_path=cache_path,
         checkpoint_every=checkpoint_every,
         record_history=record_history,
+        overwrite=overwrite,
         limits=ResourceLimits(
             max_workers=max(1, workers),
             batch_size=max(1, batch_size),
@@ -229,31 +228,20 @@ def compile_stored_revision(repository: Repository, stored: dict[str, Any]) -> C
 
     Resuming against whatever the file says *now* would silently produce a
     dataset generated from two different schemas. The revision is stored
-    precisely so that cannot happen.
+    precisely so that cannot happen. The work is shared with the API, which was
+    doing it differently and getting it wrong.
     """
-    revision_id = stored.get("revision_id")
-    if revision_id is not None:
-        revision = repository.get_revision(revision_id, include_source=True)
-        if revision is not None:
-            import yaml
+    from ..runs.recovery import SchemaUnavailableError
+    from ..runs.recovery import compile_stored_revision as recover
 
-            data = (
-                json.loads(revision["source_text"])
-                if revision["source_format"] == "json"
-                else yaml.safe_load(revision["source_text"])
-            )
-            return compile_project(load_project_data(data, source=f"revision {revision_id}"))
-
-    record = repository.get_project(stored["project_id"])
-    if record and record.get("path") and Path(record["path"]).exists():
-        error_console.print(
-            "[cacophony.warn]warning[/] this run recorded no schema revision; "
-            "using the project file as it stands now"
-        )
-        return compile_project(load_project(record["path"]))
-
-    error_console.print("[cacophony.error]error[/] the schema this run used is no longer available")
-    raise typer.Exit(code=2)
+    try:
+        compiled, complaint = recover(repository, stored)
+    except SchemaUnavailableError as exc:
+        error_console.print(f"[cacophony.error]error[/] {exc}")
+        raise typer.Exit(code=2) from exc
+    if complaint:
+        error_console.print(f"[cacophony.warn]warning[/] {complaint}")
+    return compiled
 
 
 def drive(conductor: Conductor, *, resume: bool = False) -> RunOutcome:

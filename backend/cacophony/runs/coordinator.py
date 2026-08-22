@@ -33,6 +33,7 @@ what is already on disk or producing a corrupt file. Both are worse.
 from __future__ import annotations
 
 import asyncio
+import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -78,12 +79,45 @@ class PlannedJob:
     #: Assigned once the store has a row for this job.
     id: int | None = None
     state: JobState = JobState.QUEUED
+    #: Rows written. Not a position: validation can drop a record and entropy
+    #: injection can duplicate one, so this is *output*, not *progress through
+    #: the source*.
     completed: int = 0
     attempts: int = 0
 
+    #: The next source index to generate. ``-1`` means "not started", which is
+    #: `offset`. Persisted in the checkpoint, because resuming at
+    #: ``offset + completed`` is only right for a run that dropped and
+    #: duplicated nothing (design document section 32).
+    cursor: int = -1
+    #: Where the last committed batch, and the current attempt, began - so a
+    #: checkpoint that turns out to disagree with the file can be rewound to a
+    #: boundary rather than guessed at.
+    batch_start_cursor: int = -1
+    batch_start_completed: int = 0
+    attempt_start_cursor: int = -1
+    attempt_start_completed: int = 0
+
+    @property
+    def position(self) -> int:
+        """The next source index, resolving "not started" to the offset."""
+        return self.offset if self.cursor < 0 else self.cursor
+
+    @property
+    def consumed(self) -> int:
+        """Source records this job has processed, dropped ones included."""
+        return max(0, self.position - self.offset)
+
+    @property
+    def outstanding(self) -> int:
+        """Source records still to process."""
+        return max(0, self.requested - self.consumed)
+
     @property
     def progress(self) -> float:
-        return min(1.0, self.completed / self.requested) if self.requested else 1.0
+        # Measured in source records, so a run that legitimately writes fewer
+        # rows than it read still reaches 100%.
+        return min(1.0, self.consumed / self.requested) if self.requested else 1.0
 
     def to_row(self) -> dict[str, Any]:
         return {
@@ -186,6 +220,11 @@ class Conductor:
     ) -> None:
         self.compiled = compiled
         self.config = config
+        # Anchored before anything is recorded. A run's paths are stored and
+        # read back by a resume that may be started from a different working
+        # directory - where `out/` is a different directory, and "resuming"
+        # would quietly begin a second dataset somewhere else.
+        self.config.anchor_paths()
         self.repository = repository if config.record_history else None
         self.project_id = project_id
         self.revision_id = revision_id
@@ -204,6 +243,8 @@ class Conductor:
         self._validation_failure = False
         #: Section 57's semantic verdicts, when the schema asked for them.
         self._semantic: dict[str, Any] = {}
+        #: Entities whose uniqueness could not be rechecked across a resume.
+        self._unique_gaps: list[str] = []
         #: Set by :meth:`resume`; a resumed run reports differently and skips
         #: the planning step because its jobs come from the store.
         self._resumed = False
@@ -295,7 +336,61 @@ class Conductor:
             )
             self.metrics.entity(name, requested=count)
         self.jobs = jobs
+        self._claim_destination(jobs)
         return jobs
+
+    def _claim_destination(self, jobs: list[PlannedJob]) -> None:
+        """Refuse to write into a destination that already holds a dataset.
+
+        A writer truncates the file it opens, and stops there: a previous run's
+        part files and partition directories are not opened, so they survive
+        and are read back as part of *this* run's output. One record can arrive
+        in a directory that then reports two, and a ten-row run can sit beside a
+        stale sixty-row part.
+
+        So a fresh run owns an empty destination, or is told to replace what is
+        there. `--overwrite` removes exactly what this run would have written -
+        never the whole directory, which may be somebody's home.
+        """
+        existing = [path for job in jobs for path in self._destinations_of(job.entity)]
+        if not existing:
+            return
+
+        if not self.config.overwrite:
+            listed = ", ".join(sorted(str(path) for path in existing)[:4])
+            more = f" and {len(existing) - 4} more" if len(existing) > 4 else ""
+            raise GenerationError(
+                f"{self.config.output_dir} already holds output from an earlier run "
+                f"({listed}{more}). Generating into it would mix two datasets: the writers "
+                "replace the files they open and leave every other one in place. Choose an "
+                "empty directory, or pass --overwrite to replace what is there."
+            )
+
+        for path in existing:
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+            except OSError as exc:  # pragma: no cover - filesystem specific
+                raise GenerationError(f"could not replace {path}: {exc}") from exc
+        self.log.info(
+            "replaced an earlier run's output",
+            status="overwrite",
+            data_paths=len(existing),
+        )
+
+    def _destinations_of(self, entity: str) -> list[Path]:
+        """Everything on disk this entity's job would own, parts included."""
+        path = self._output_path(entity)
+        found: list[Path] = []
+        if path.exists():
+            found.append(path)
+        # `employee.part0001.jsonl` and friends: written by a resume, owned by
+        # the dataset, and invisible to a writer that only opens `employee.jsonl`.
+        if not self.config.partition_by and path.suffix:
+            found.extend(sorted(path.parent.glob(f"{path.stem}.part[0-9]*{path.suffix}")))
+        return found
 
     def preflight(self) -> list[str]:
         """Checks worth making before the first record (section 64)."""
@@ -484,9 +579,39 @@ class Conductor:
                     "but is depended upon. Include it, or generate the whole project."
                 )
 
-            await asyncio.gather(*(self._guarded(job, limit) for job in ready))
+            await self._run_group(ready, limit)
             done.update(job.entity for job in ready)
             remaining = [job for job in remaining if job not in ready]
+
+    async def _run_group(self, ready: list[PlannedJob], limit: asyncio.Semaphore) -> None:
+        """Run a layer of jobs, and stop the whole layer if one of them fails.
+
+        `asyncio.gather` propagates the first exception and leaves its siblings
+        running: the run was marked failed while another entity carried on
+        writing, and finished afterwards - into a dataset that had already been
+        declared dead. Every task is cancelled and awaited before the failure
+        is re-raised, so a terminal state means nothing is still writing.
+        """
+        tasks = [
+            asyncio.create_task(self._guarded(job, limit), name=f"cacophony-job-{job.entity}")
+            for job in ready
+        ]
+        completed, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+
+        # Every exception is retrieved, not just the first: a short-circuiting
+        # search leaves the others unretrieved, and asyncio complains about
+        # them at garbage-collection time in somebody else's log.
+        failures = [task.exception() for task in completed if task.exception() is not None]
+        failure: BaseException | None = failures[0] if failures else None
+        if failure is None and not pending:
+            return
+
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        if failure is not None:
+            raise failure
 
     async def _guarded(self, job: PlannedJob, limit: asyncio.Semaphore) -> None:
         async with limit:
@@ -499,22 +624,27 @@ class Conductor:
         engine = self._engine()
         job.attempts += 1
 
-        # A resumed job continues where it stopped; a fresh one starts at zero.
-        start_index = job.offset + job.completed
-        remaining = job.requested - job.completed
+        # A resumed job continues from where the *source* got to; a fresh one
+        # starts at its offset.
+        resuming = job.completed > 0 or job.consumed > 0
+        if resuming:
+            self._reconcile(job)
+            self._restore_uniqueness(job, engine)
+        start_index, remaining = job.position, job.outstanding
         if remaining <= 0:
             self._set_job_state(job, JobState.COMPLETED, finished_at=utcnow())
             return
 
-        if job.completed > 0:
-            start_index, remaining = self._reconcile(job)
-            if remaining <= 0:
-                self._set_job_state(job, JobState.COMPLETED, finished_at=utcnow())
-                return
-
-        writer, path = self._writer_for(job, entity, resuming=job.completed > 0)
-        self.files.append(str(path))
-        job.outputs = [str(path)]
+        writer, path = self._writer_for(job, entity, resuming=resuming)
+        # Appended, not replaced: a resumed job's earlier parts are still part
+        # of the dataset, and the run's file list is what its summary and its
+        # byte total are derived from.
+        if str(path) not in job.outputs:
+            job.outputs.append(str(path))
+        if str(path) not in self.files:
+            self.files.append(str(path))
+        job.attempt_start_cursor = start_index
+        job.attempt_start_completed = job.completed
 
         self._set_job_state(
             job,
@@ -551,31 +681,38 @@ class Conductor:
 
         await writer.open()
         try:
-            async for batch in engine.stream(
+            async for chunk in engine.stream(
                 job.entity,
                 count=remaining,
                 offset=start_index,
                 batch_size=self.config.limits.batch_size,
             ):
+                # Before the write, and on every chunk including an empty one:
+                # a batch whose records were all dropped is still a place a run
+                # can be paused or cancelled.
                 await self.handle.checkpoint_gate()
 
-                await writer.write_batch(batch)
-                first = job.offset + job.completed
-                job.completed += len(batch)
-                since_checkpoint += len(batch)
+                job.batch_start_cursor = chunk.first_index
+                job.batch_start_completed = job.completed
+                if chunk.records:
+                    await writer.write_batch(chunk.records)
+                first = chunk.first_index
+                job.completed += len(chunk.records)
+                job.cursor = chunk.next_index
+                since_checkpoint += len(chunk.records)
 
                 # What actually landed on disk, so the live view can report a
                 # byte rate at all: section 55 asks for disk throughput, and
                 # this counter was never given anything to count.
                 on_disk = writer.bytes_written
                 self.metrics.record_batch(
-                    job.entity, len(batch), bytes_written=max(0, on_disk - written_bytes)
+                    job.entity, len(chunk.records), bytes_written=max(0, on_disk - written_bytes)
                 )
                 written_bytes = on_disk
                 self.log.batch(
                     entity=job.entity,
                     first=first,
-                    last=job.offset + job.completed - 1,
+                    last=max(first, chunk.next_index - 1),
                     duration_ms=(time.perf_counter() - batch_started) * 1000,
                     job_id=job.id,
                 )
@@ -666,7 +803,13 @@ class Conductor:
         writer_class = OUTPUT_FORMATS[self.config.output_format.lower()]
         part: int | None = None
 
-        if resuming and not writer_class.appendable:
+        # What will actually be built, not what the format alone implies: a
+        # partitioned run wraps that writer in one that is never appendable, so
+        # asking the format was how a resumed partitioned run came to append
+        # into a child file whose last batch may be torn.
+        appendable = writer_class.appendable and not self.config.partition_by
+
+        if resuming and not appendable:
             # A JSON array or a Parquet file has a footer; continuing means a
             # new part rather than reopening. Readers for both accept a set of
             # parts, so the dataset stays whole.
@@ -721,22 +864,82 @@ class Conductor:
             database_name=_slug(self.compiled.name) or "cacophony",
         )
 
-    def _reconcile(self, job: PlannedJob) -> tuple[int, int]:
-        """Make the checkpoint agree with what is actually on disk.
+    def _restore_uniqueness(self, job: PlannedJob, engine: GenerationEngine) -> None:
+        """Show the resumed run what the earlier attempts already wrote.
 
-        An unclean stop can leave the two out of step in either direction, so
-        the file is counted and the checkpoint corrected to match. Doing this
-        before appending is what keeps a resumed dataset free of duplicated and
-        skipped records.
+        Uniqueness is checked against a set held in memory, and memory does not
+        survive the process that stopped. Without this a resumed run enforces
+        `unique: true` only against its own half - and reports nothing, which
+        is the worst of the three possible behaviours.
+
+        Parquet and partitioned trees cannot be read back cheaply, and reading
+        the whole dataset is the one thing this project will not do; there the
+        run says so, loudly, rather than implying a check it did not make.
         """
-        path = Path(job.outputs[0]) if job.outputs else None
+        from ..outputs import read_written_values
+
+        fields = engine.unique_fields(job.entity)
+        if not fields:
+            return
+
+        remembered = 0
+        for output in job.outputs:
+            values = read_written_values(
+                output, self.config.output_format, fields, table=job.entity
+            )
+            if values is None:
+                message = (
+                    f"{job.entity}: uniqueness cannot be rechecked across this resume - "
+                    f"{self.config.output_format} output written by the earlier attempt "
+                    "cannot be read back, so duplicates spanning the two halves will not "
+                    "be reported"
+                )
+                self.log.warning(message, entity=job.entity, job_id=job.id, status="degraded")
+                self.bus.emit(EventKind.WARNING, self.run_id, message=message, level="warning")
+                self._unique_gaps.append(job.entity)
+                return
+            remembered += engine.remember_written(job.entity, values)
+
+        if remembered:
+            self.log.info(
+                "uniqueness restored from the earlier attempt",
+                entity=job.entity,
+                job_id=job.id,
+                status="resumed",
+                data_values=remembered,
+            )
+
+    def _reconcile(self, job: PlannedJob) -> None:
+        """Make the checkpoint and the file on disk agree, exactly.
+
+        An unclean stop leaves them out of step in one of three ways, and each
+        has a different right answer. The file may hold *more* rows than the
+        checkpoint claims, because a write landed and the checkpoint did not:
+        an appendable file is trimmed back to the checkpoint, which is a
+        position we know the source index for. It may hold exactly what the
+        checkpoint claims, which is the ordinary case. Or it may hold *fewer*,
+        because the checkpoint landed and the write did not - so the run rewinds
+        to the start of that batch, whose position the checkpoint also records.
+
+        Counting the file and trusting the count, which is what this used to do,
+        answers "how many rows are there" and then uses it as "where was the
+        source", which are the same number only for a schema that drops and
+        duplicates nothing.
+        """
+        path = Path(job.outputs[-1]) if job.outputs else None
         if path is None:
-            return job.offset + job.completed, job.requested - job.completed
+            return
 
         actual = align_to_records(path, job.completed, self.config.output_format, table=job.entity)
-        if actual != job.completed:
+        if actual == job.completed:
+            return
+
+        if actual > job.completed:
+            # Untrimmable format (a footer, or a torn part): the rows are there
+            # and cannot be removed, so the source position they came from is
+            # the only thing that keeps the dataset whole.
             self.log.warning(
-                "checkpoint disagreed with the file on disk; trusting the file",
+                "the file holds more rows than the checkpoint; keeping the file",
                 entity=job.entity,
                 job_id=job.id,
                 status="reconciled",
@@ -744,12 +947,40 @@ class Conductor:
                 data_actual=actual,
             )
             job.completed = actual
-            metrics = self.metrics.entity(job.entity)
-            metrics.written = actual
-            metrics.generated = actual
-            if self.repository is not None and job.id is not None:
-                self.repository.checkpoint_job(job.id, completed=actual)
-        return job.offset + job.completed, job.requested - job.completed
+        elif job.batch_start_cursor >= 0 and actual <= job.batch_start_completed:
+            # The last batch never reached the disk. Its position is recorded,
+            # so this rewinds to a boundary rather than to a guess.
+            self.log.warning(
+                "the last batch did not reach the disk; regenerating it",
+                entity=job.entity,
+                job_id=job.id,
+                status="reconciled",
+                data_checkpoint=job.completed,
+                data_actual=actual,
+            )
+            align_to_records(
+                path, job.batch_start_completed, self.config.output_format, table=job.entity
+            )
+            job.completed = job.batch_start_completed
+            job.cursor = job.batch_start_cursor
+        else:
+            # Neither boundary matches: the file is short by part of a batch
+            # that cannot be trimmed. Say so rather than quietly continuing
+            # from a position that does not correspond to it.
+            self.log.warning(
+                "the file and the checkpoint cannot be reconciled exactly",
+                entity=job.entity,
+                job_id=job.id,
+                status="reconciled",
+                data_checkpoint=job.completed,
+                data_actual=actual,
+            )
+            job.completed = actual
+
+        metrics = self.metrics.entity(job.entity)
+        metrics.written = job.completed
+        metrics.generated = job.completed
+        self._checkpoint(job, announce=False)
 
     def _checkpoint(self, job: PlannedJob, *, announce: bool = True) -> None:
         """Persist progress (design document section 32)."""
@@ -761,6 +992,13 @@ class Conductor:
             "completed": job.completed,
             "requested": job.requested,
             "offset": job.offset,
+            # Where the source got to, which is what a resume needs, and the
+            # boundaries a disagreement with the file can be rewound to.
+            "cursor": job.position,
+            "batch_start_cursor": job.batch_start_cursor,
+            "batch_start_completed": job.batch_start_completed,
+            "attempt_start_cursor": job.attempt_start_cursor,
+            "attempt_start_completed": job.attempt_start_completed,
             "part": job.part,
             "seed": self.compiled.seed,
             "last_checkpoint": time.time(),
@@ -878,6 +1116,11 @@ class Conductor:
                 data["quality"].update(_quality_from_validation(validation))
             if engine.resolver.stats.key_lookups:
                 data["relations"] = engine.resolver.describe()
+
+        if self._unique_gaps:
+            # In the summary as well as in the events: a report that quietly
+            # omits a check somebody asked for is worse than one that failed it.
+            data["uniqueness_unverified"] = sorted(set(self._unique_gaps))
 
         if self._asset_store is not None and self._asset_store.stats.total:
             data["assets"] = self._asset_store.describe()
@@ -1003,6 +1246,21 @@ class Conductor:
                 part=row["part"],
             )
             planned.id = row["id"]
+            # The source position, from the checkpoint that recorded it -
+            # but only if that checkpoint is describing this many rows. The two
+            # are written together, so a disagreement means something else
+            # moved the row count, and the honest fallback is the assumption
+            # that predates the cursor: rows written *are* the position.
+            checkpoint = row.get("checkpoint") or {}
+            consistent = int(checkpoint.get("completed", -1)) == row["completed"]
+            if consistent and "cursor" in checkpoint:
+                planned.cursor = int(checkpoint["cursor"])
+                planned.batch_start_cursor = int(checkpoint.get("batch_start_cursor", -1))
+                planned.batch_start_completed = int(checkpoint.get("batch_start_completed", 0))
+                planned.attempt_start_cursor = int(checkpoint.get("attempt_start_cursor", -1))
+                planned.attempt_start_completed = int(checkpoint.get("attempt_start_completed", 0))
+            else:
+                planned.cursor = row["offset"] + row["completed"]
             planned.completed = row["completed"]
             planned.attempts = row["attempts"]
             planned.state = JobState(row["state"])
@@ -1017,6 +1275,9 @@ class Conductor:
             metrics.generated = planned.completed
 
         conductor.jobs = jobs
+        # Every file the earlier attempts wrote, so the resumed run's summary
+        # describes the whole dataset rather than the part it happened to add.
+        conductor.files = list(dict.fromkeys(output for job in jobs for output in job.outputs))
         conductor._resumed = True
         return conductor
 

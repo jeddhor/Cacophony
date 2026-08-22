@@ -310,27 +310,74 @@ own files, each counted once, taken after the writers close.</p>
 
 <h2>Checkpoints</h2>
 
-<p>A job checkpoints after every batch. A checkpoint is one integer &mdash; how
-many records that job finished &mdash; because a record's seed is derived from
-its index and there is no RNG state to serialise.</p>
+<p>A job checkpoints after every batch, and the checkpoint holds two numbers
+rather than one: how many rows have been written, and how far through the
+<em>source</em> the job has read. Those are the same number only for a schema
+that neither drops nor duplicates anything. Validation dropping a record and
+entropy injection duplicating one both make rows-written a poor place to resume
+from, and a run that resumed there skipped or repeated whatever fell in the
+gap. There is still no RNG state to serialise: a record's seed comes from its
+index, so a position is all a resume needs.</p>
 
-<p>On resume the file on disk is <em>counted</em> and the checkpoint corrected to
-match it. A stale checkpoint would otherwise silently duplicate or skip records
-after an unclean stop, which is the classic way a resumable generator quietly
-corrupts a dataset.</p>
+<p>On resume the file on disk and the checkpoint are made to agree, exactly.
+Three things can be true after an unclean stop, and each has its own answer. If
+the file holds more rows than the checkpoint claims, an appendable file is
+trimmed back to it &mdash; a position whose source index is known. If it holds
+fewer, the last batch never reached the disk, and the run rewinds to where that
+batch began, which the checkpoint also records. If they agree, nothing happens.
+Counting the file and trusting the count, which is what this used to do, answers
+"how many rows are there" and then uses the answer as "where was the source".</p>
 
 <h2>Formats that cannot be appended to</h2>
 
 <p>A JSON array and a Parquet file cannot be extended in place, so a resumed run
 writes a new part: <code>employee.part0001.parquet</code>. Readers for both
-formats accept a directory of parts.</p>
+formats accept a directory of parts. A <em>partitioned</em> output is in the
+same position whatever its format &mdash; a partitioned writer is never
+appendable, and one that appended into a child file whose last batch was torn
+would produce exactly the duplicates parts exist to avoid.</p>
+
+<h2>A run owns its destination</h2>
+
+<p>A writer truncates the file it opens and stops there, so an earlier run's
+part files and partition directories survive a later run into the same
+directory and are read back as part of it. One record can arrive in a directory
+that then reports two. So a fresh run refuses a destination that already holds
+output it would own, and says what is in the way:</p>
+
+<pre class="small"><code class="language-console">$ cacophony generate project.yaml -d out/
+error  out/ already holds output from an earlier run (out/employee.jsonl).
+       Generating into it would mix two datasets: the writers replace the files
+       they open and leave every other one in place. Choose an empty directory,
+       or pass --overwrite to replace what is there.</code></pre>
+
+<p><code>--overwrite</code> removes exactly what this run would have written
+&mdash; those entities' files, their parts and their partition directories
+&mdash; and never the directory itself, which may be somebody's home. Resuming
+is unaffected: a resumed run is continuing that output, not competing with
+it.</p>
+
+<h2>Uniqueness across a resume</h2>
+
+<p>A <code>unique: true</code> field is checked against the values a run has
+already produced, and those live in memory, which does not survive the stop. A
+resumed run therefore reads back what the earlier attempt wrote &mdash; from
+JSON Lines, CSV, JSON or SQLite &mdash; before it continues. Parquet and
+partitioned trees cannot be read back without pulling in the whole dataset, and
+that is the one thing this program will not do; there the run says so in its
+events and in its summary, as <code>uniqueness_unverified</code>, rather than
+implying a check it did not make.</p>
 
 <h2>Resuming reuses the original configuration</h2>
 
 <p>The same seed, the same format, the same provenance mode, and the schema
-revision the run started with. Editing a schema and resuming would produce a
-dataset generated two different ways; start a new run instead. Cacophony will
-tell you if you try.</p>
+revision the run started with &mdash; recompiled from the revision the store
+kept, with the project's own directory, so a lookup table beside the schema
+resolves the way it did the first time. Editing a schema between a stop and a
+resume changes nothing about the resumed run: it continues the dataset it
+started. The paths are the run's own, resolved when it began, so resuming from
+a different working directory continues that dataset rather than starting a
+second one beside you.</p>
 
 <h2>Events</h2>
 

@@ -24,7 +24,7 @@ at 6,830,000 (section 32).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -48,7 +48,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..schema.plan import CompiledEntity, CompiledField, CompiledProject
     from .runtime import GenerationRuntime
 
-__all__ = ["EntityStats", "FailurePolicy", "GenerationEngine"]
+__all__ = ["EntityStats", "FailurePolicy", "GenerationEngine", "StreamChunk"]
 
 DEFAULT_BATCH_SIZE = 1_000
 
@@ -119,6 +119,37 @@ class EntityStats:
             "retries": self.retries,
             "errors": self.errors[:20],
         }
+
+
+@dataclass(slots=True)
+class StreamChunk:
+    """One batch, and where in the source it came from (sections 31, 32).
+
+    The records and the position are *different numbers*, and conflating them
+    was a real defect: validation can drop a record and entropy injection can
+    duplicate one, so "rows written" is not "source records consumed". A
+    checkpoint that stores the first and resumes from the second skips or
+    repeats work - measurably, once a schema drops anything.
+
+    ``next_index`` is where a resumed run must start. It is reported even for a
+    chunk that produced no records at all, so an all-dropped batch is still a
+    checkpoint and still a place a run can be cancelled.
+    """
+
+    records: list[GeneratedRecord]
+    #: First source index this chunk covered.
+    first_index: int
+    #: Source index a continuation should start from.
+    next_index: int
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __bool__(self) -> bool:
+        return bool(self.records)
+
+    def __iter__(self) -> Iterator[GeneratedRecord]:
+        return iter(self.records)
 
 
 class GenerationEngine:
@@ -774,11 +805,13 @@ class GenerationEngine:
         count: int | None = None,
         offset: int = 0,
         batch_size: int = DEFAULT_BATCH_SIZE,
-    ) -> AsyncIterator[list[GeneratedRecord]]:
-        """Yield records in bounded batches.
+    ) -> AsyncIterator[StreamChunk]:
+        """Yield records in bounded batches, each carrying its source position.
 
-        ``offset`` is what makes a run resumable: a checkpoint records how many
-        records were completed, and resuming means starting the stream there.
+        ``offset`` is what makes a run resumable, and the position is what makes
+        it *correct*: a checkpoint stores where the source got to rather than
+        how many rows came out, because those two numbers differ the moment a
+        record is dropped or duplicated (see :class:`StreamChunk`).
         """
         entity = self.compiled.entity(entity_name)
         total = entity.count if count is None else count
@@ -818,8 +851,14 @@ class GenerationEngine:
                 batch.append(record)
                 stats.generated += 1
 
-            if batch:
-                yield batch
+            # Yielded even when empty: an all-dropped batch has still consumed
+            # source records, and the caller needs to be told so - both to
+            # checkpoint the position and to notice a cancellation.
+            yield StreamChunk(
+                records=batch,
+                first_index=indices[0] if indices else chunk_start,
+                next_index=(indices[-1] + 1) if indices else chunk_start,
+            )
             # Give the event loop a turn so a long CPU-bound run stays
             # cancellable and, later, so writers can drain concurrently.
             await asyncio.sleep(0)
@@ -1030,10 +1069,10 @@ class GenerationEngine:
     ) -> list[GeneratedRecord]:
         """Materialise ``count`` records. Intended for previews, not for runs."""
         records: list[GeneratedRecord] = []
-        async for batch in self.stream(
+        async for chunk in self.stream(
             entity_name, count=count, offset=offset, batch_size=max(count, 1)
         ):
-            records.extend(batch)
+            records.extend(chunk.records)
         return records
 
     def preview(
@@ -1165,6 +1204,20 @@ class GenerationEngine:
         if self.runtime is not None:
             summary.update(self.runtime.summary())
         return summary
+
+    def unique_fields(self, entity_name: str) -> list[str]:
+        """Which of an entity's fields are being checked for uniqueness."""
+        if not self.validate_records:
+            return []
+        entity = self.compiled.entity(entity_name)
+        return self._validator_for(entity).unique_fields
+
+    def remember_written(self, entity_name: str, values: dict[str, list[Any]]) -> int:
+        """Seed the uniqueness trackers with what an earlier attempt wrote."""
+        if not self.validate_records:
+            return 0
+        entity = self.compiled.entity(entity_name)
+        return self._validator_for(entity).remember_written(values)
 
     async def aclose(self) -> None:
         """Release what this run is holding: connections, and files on disk.

@@ -387,8 +387,8 @@ async def _score_one(
     started = time.perf_counter()
     try:
         produced = 0
-        async for batch in engine.stream(entity, count=records, batch_size=min(records, 20)):
-            for record in batch:
+        async for chunk in engine.stream(entity, count=records, batch_size=min(records, 20)):
+            for record in chunk.records:
                 produced += 1
                 detector.observe(record)
                 _score_values(score, compiled_copy, entity, record, fields)

@@ -87,7 +87,15 @@ sections:
       Everything streams, and the last structure whose size was the dataset -
       the set of values behind `unique: true` - is now bounded, spilling to a
       disk-backed index above a stated ceiling without giving up exactness.
-  - {section: 32, state: implemented}
+  - section: 32
+    state: implemented
+    note: >
+      A checkpoint holds the source position as well as the row count, because
+      a schema that drops or duplicates records makes those different numbers.
+      A resumed run recompiles the revision it recorded, keeps the paths it
+      resolved when it started, opens a new part rather than appending to a
+      torn one, and reads back the values a `unique:` field already used where
+      the format allows it - and says so where it does not.
   - section: 33
     state: partial
     note: >
@@ -163,7 +171,9 @@ sections:
     state: partial
     note: >
       A finished run reports what it stored, and reports it as final - elapsed
-      time is how long it took rather than how long ago it was. Rejected
+      time is how long it took rather than how long ago it was, and a resumed
+      run's summary describes the whole dataset rather than its last attempt.
+      Rejected
       records cannot be browsed: they are counted by category and named in a
       run's events, but nothing keeps the records themselves.
   - section: 57

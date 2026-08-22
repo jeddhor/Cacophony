@@ -54,7 +54,7 @@ def build(tmp_path: Path, **overrides: Any) -> tuple[Conductor, Repository]:
         source_text="project:\n  name: Runs Test\n",
     )
     config = RunConfig(
-        output_dir=tmp_path / "out",
+        output_dir=overrides.pop("output_dir", tmp_path / "out"),
         output_format=overrides.pop("output_format", "jsonl"),
         limits=ResourceLimits(batch_size=overrides.pop("batch_size", 50), max_workers=2),
         checkpoint_every=overrides.pop("checkpoint_every", 100),
@@ -343,6 +343,265 @@ class TestCheckpointAndResume:
 
         ids = [row["employee_id"] for row in lines(tmp_path / "out" / "employee.jsonl")]
         assert len(ids) == len(set(ids)) == 200
+
+    #: Half the records fail validation, so rows written and source records
+    #: consumed are different numbers from the first batch onwards.
+    FILTERED = {
+        "employee": {
+            "count": 500,
+            "primary_key": "employee_id",
+            "fields": {
+                "employee_id": {
+                    "type": "string",
+                    "generator": "sequence",
+                    "format": "EMP-{000000}",
+                },
+                "parity": {
+                    "type": "integer",
+                    "generator": "expression",
+                    "expression": "index % 2",
+                    "constraints": {"max": 0},
+                },
+                "index": {"type": "integer", "generator": "sequence", "start": 0},
+            },
+        }
+    }
+
+    def _filtered(self, tmp_path: Path, **overrides: Any) -> tuple[Conductor, Repository]:
+        compiled = compile_from(self.FILTERED, name="Filtered", seed=7)
+        repo = Repository(Database(tmp_path / "store.db"))
+        project_id, revision_id = repo.upsert_project(
+            make_project(self.FILTERED, name="Filtered", seed=7),
+            path=str(tmp_path / "p.yaml"),
+            source_text="project:\n  name: Filtered\n",
+        )
+        config = RunConfig(
+            output_dir=tmp_path / "out",
+            records=overrides.pop("records", 100),
+            drop_invalid=True,
+            failure_policy="skip",
+            limits=ResourceLimits(batch_size=overrides.pop("batch_size", 10), max_workers=1),
+            checkpoint_every=overrides.pop("checkpoint_every", 10),
+            record_history=True,
+        )
+        return (
+            Conductor(
+                compiled, config, repository=repo, project_id=project_id, revision_id=revision_id
+            ),
+            repo,
+        )
+
+    def test_a_resumed_run_that_drops_records_does_not_skip_or_repeat(self, tmp_path) -> None:
+        """Rows written are not a position (design document section 32).
+
+        Half of these records fail validation and are dropped, so resuming at
+        `offset + rows written` restarts in the wrong place: the run used to
+        come back with more rows than it ever generated positions for, and with
+        the wrong ones.
+        """
+        conductor, repo = self._filtered(tmp_path, records=100)
+        conductor.plan()
+        first = self._interrupt_at(conductor, 20)
+        assert first.state is RunState.CANCELLED
+
+        resumed = Conductor.resume(
+            compile_from(self.FILTERED, name="Filtered", seed=7),
+            repo.get_run(first.run_id),
+            repository=repo,
+        )
+        asyncio.run(resumed.execute_resume())
+
+        rows = lines(tmp_path / "out" / "employee.jsonl")
+        indices = [row["index"] for row in rows]
+        # A hundred source records, the even half of which survive validation.
+        assert indices == list(range(0, 100, 2))
+        assert len(indices) == len(set(indices)) == 50
+
+    def test_the_same_run_uninterrupted_produces_exactly_that(self, tmp_path) -> None:
+        """The comparison that makes the previous test mean something."""
+        conductor, _repo = self._filtered(tmp_path, records=100)
+        conductor.plan()
+        asyncio.run(conductor.execute())
+
+        indices = [row["index"] for row in lines(tmp_path / "out" / "employee.jsonl")]
+        assert indices == list(range(0, 100, 2))
+
+    #: One badge for every two records, so the second half of a resumed run
+    #: sees values the first half already used.
+    COLLIDING = {
+        "person": {
+            "count": 400,
+            "fields": {
+                "badge": {
+                    "type": "integer",
+                    "generator": "expression",
+                    "expression": "int(index) % 200",
+                    "unique": True,
+                },
+                "index": {"type": "integer", "generator": "sequence", "start": 0},
+            },
+        }
+    }
+
+    def _colliding(self, tmp_path: Path, fmt: str = "jsonl") -> tuple[Conductor, Repository]:
+        compiled = compile_from(self.COLLIDING, name="Colliding", seed=6)
+        repo = Repository(Database(tmp_path / "store.db"))
+        project_id, revision_id = repo.upsert_project(
+            make_project(self.COLLIDING, name="Colliding", seed=6),
+            path=str(tmp_path / "p.yaml"),
+            source_text="project:\n  name: Colliding\n",
+        )
+        config = RunConfig(
+            output_dir=tmp_path / "out",
+            output_format=fmt,
+            records=400,
+            drop_invalid=True,
+            failure_policy="skip",
+            limits=ResourceLimits(batch_size=20, max_workers=1),
+            checkpoint_every=20,
+            record_history=True,
+        )
+        return (
+            Conductor(
+                compiled, config, repository=repo, project_id=project_id, revision_id=revision_id
+            ),
+            repo,
+        )
+
+    def test_uniqueness_survives_a_resume(self, tmp_path) -> None:
+        """The tracker lives in memory, and memory does not survive the stop."""
+        conductor, repo = self._colliding(tmp_path)
+        conductor.plan()
+        first = self._interrupt_at(conductor, 60)
+        assert first.state is RunState.CANCELLED
+
+        resumed = Conductor.resume(
+            compile_from(self.COLLIDING, name="Colliding", seed=6),
+            repo.get_run(first.run_id),
+            repository=repo,
+        )
+        asyncio.run(resumed.execute_resume())
+
+        badges = [row["badge"] for row in lines(tmp_path / "out" / "person.jsonl")]
+        assert len(badges) == len(set(badges)) == 200
+
+    def test_a_format_that_cannot_be_read_back_says_so(self, tmp_path) -> None:
+        """Parquet cannot be re-read cheaply; the run reports the gap."""
+        pytest.importorskip("pyarrow")
+        conductor, repo = self._colliding(tmp_path, fmt="parquet")
+        conductor.plan()
+        first = self._interrupt_at(conductor, 60)
+
+        resumed = Conductor.resume(
+            compile_from(self.COLLIDING, name="Colliding", seed=6),
+            repo.get_run(first.run_id),
+            repository=repo,
+        )
+        outcome = asyncio.run(resumed.execute_resume())
+
+        assert outcome.summary.get("uniqueness_unverified") == ["person"]
+
+    def test_a_partitioned_resume_opens_a_new_part(self, tmp_path) -> None:
+        """A partitioned writer is never appendable, whatever the format is."""
+        conductor, repo = build(
+            tmp_path,
+            records=200,
+            entities=["employee"],
+            batch_size=20,
+            partition_by=["department"],
+        )
+        conductor.plan()
+        first = self._interrupt_at(conductor, 60)
+
+        resumed = Conductor.resume(
+            compile_from(SCHEMA, name="Runs Test", seed=99),
+            repo.get_run(first.run_id),
+            repository=repo,
+        )
+        asyncio.run(resumed.execute_resume())
+
+        job = repo.get_jobs(first.run_id)[0]
+        assert job["part"] >= 1
+        parts = sorted((tmp_path / "out" / "employee").rglob("*.part[0-9]*.jsonl"))
+        assert parts, "a resumed partitioned run must write a new part"
+
+    def test_a_fresh_run_refuses_a_destination_that_is_already_full(self, tmp_path) -> None:
+        """Two datasets in one directory look exactly like one dataset."""
+        first, _repo = build(tmp_path, records=40, entities=["employee"])
+        first.plan()
+        asyncio.run(first.execute())
+
+        second, _repo2 = build(tmp_path, records=10, entities=["employee"])
+        with pytest.raises(GenerationError, match="already holds output"):
+            second.plan()
+
+    def test_overwrite_replaces_what_it_would_have_written(self, tmp_path) -> None:
+        first, _repo = build(tmp_path, records=40, entities=["employee"])
+        first.plan()
+        asyncio.run(first.execute())
+        # A part file from an earlier resume, which no writer would truncate.
+        stale = tmp_path / "out" / "employee.part0001.jsonl"
+        stale.write_text('{"employee_id": "EMP-999999"}\n', encoding="utf-8")
+
+        second, _repo2 = build(tmp_path, records=10, entities=["employee"], overwrite=True)
+        second.plan()
+        outcome = asyncio.run(second.execute())
+
+        assert not stale.exists()
+        assert len(lines(tmp_path / "out" / "employee.jsonl")) == 10
+        assert (
+            outcome.summary["bytes_written"] == (tmp_path / "out" / "employee.jsonl").stat().st_size
+        )
+
+    def test_a_resumed_summary_describes_the_whole_dataset(self, tmp_path) -> None:
+        """Both parts, and both parts' bytes - not just what this attempt added."""
+        pytest.importorskip("pyarrow")
+        conductor, repo = build(
+            tmp_path, records=300, entities=["employee"], batch_size=20, output_format="parquet"
+        )
+        conductor.plan()
+        first = self._interrupt_at(conductor, 80)
+
+        resumed = Conductor.resume(
+            compile_from(SCHEMA, name="Runs Test", seed=99),
+            repo.get_run(first.run_id),
+            repository=repo,
+        )
+        outcome = asyncio.run(resumed.execute_resume())
+
+        on_disk = sorted(path for path in (tmp_path / "out").rglob("*.parquet") if path.is_file())
+        assert len(on_disk) == 2, "the resume should have written a second part"
+        assert sorted(Path(name) for name in outcome.summary["files"]) == on_disk
+        assert outcome.summary["bytes_written"] == sum(path.stat().st_size for path in on_disk)
+
+    def test_resume_from_another_directory_continues_the_same_dataset(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """`out/` means "here", and a resume is often started somewhere else."""
+        here = tmp_path / "here"
+        there = tmp_path / "there"
+        here.mkdir()
+        there.mkdir()
+        monkeypatch.chdir(here)
+
+        conductor, repo = build(
+            tmp_path, records=100, entities=["employee"], batch_size=10, output_dir=Path("out")
+        )
+        conductor.plan()
+        first = self._interrupt_at(conductor, 30)
+        assert first.state is RunState.CANCELLED
+
+        monkeypatch.chdir(there)
+        resumed = Conductor.resume(
+            compile_from(SCHEMA, name="Runs Test", seed=99),
+            repo.get_run(first.run_id),
+            repository=repo,
+        )
+        asyncio.run(resumed.execute_resume())
+
+        assert not (there / "out").exists(), "the resume started a second dataset"
+        ids = [row["employee_id"] for row in lines(here / "out" / "employee.jsonl")]
+        assert len(ids) == len(set(ids)) == 100
 
     def test_resume_reuses_the_original_configuration(self, tmp_path) -> None:
         """Section 73: a resumed dataset must not be generated two ways."""

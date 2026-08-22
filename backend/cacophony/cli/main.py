@@ -540,6 +540,13 @@ def generate(
     out_dir: Annotated[
         Path | None, typer.Option("--out-dir", "-d", help="Destination directory.")
     ] = None,
+    overwrite: Annotated[
+        bool,
+        typer.Option(
+            "--overwrite",
+            help="Replace an earlier run's output at this destination instead of refusing.",
+        ),
+    ] = False,
     output_profile: Annotated[
         str | None,
         typer.Option(
@@ -660,6 +667,7 @@ def generate(
         llm_batch_size=llm_batch_size,
         checkpoint_every=checkpoint_every,
         record_history=not no_history,
+        overwrite=overwrite,
         assets_dir=assets_dir,
         overwrite_assets=regenerate_assets,
         edge_cases=edge_cases,

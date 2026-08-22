@@ -10,6 +10,7 @@ testing the test client.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -264,6 +265,8 @@ class TestRuns:
         limit the store is the record, which is where a finished run's numbers
         live anyway.
         """
+        import time
+
         from cacophony.api import service as service_module
 
         monkeypatch.setattr(service_module, "TERMINAL_CONDUCTORS_KEPT", 2)
@@ -273,6 +276,13 @@ class TestRuns:
             run_id = self._start(client, project_id, tmp_path / f"r{index}", records=2)
             await_run(client, run_id)
             ids.append(run_id)
+
+        # Retirement happens on the task's done-callback, which fires just
+        # after the run's own record says completed.
+        for _ in range(200):
+            if len(service._conductors) <= 2:
+                break
+            time.sleep(0.01)
 
         assert len(service._conductors) == 2
         assert ids[0] not in service._conductors
@@ -332,6 +342,74 @@ class TestRuns:
         )
         assert written > 0
         assert final["summary"]["bytes_written"] == written
+
+    def test_resuming_uses_the_schema_the_run_recorded(self, client, tmp_path) -> None:
+        """Section 73: one dataset, generated one way.
+
+        The API used to recompile the project's *head* revision, so editing a
+        schema between a cancelled run and its resume produced a file whose
+        first half came from one schema and whose second half came from
+        another - silently, and only visible in the data.
+        """
+        import shutil
+        import time
+
+        # A copy: this test edits the schema, and the shipped template is not
+        # this test's to edit.
+        project_path = tmp_path / "project.yaml"
+        shutil.copy(CORPORATE, project_path)
+        project_id = client.post("/api/projects", json={"path": str(project_path)}).json()["id"]
+
+        started = client.post(
+            f"/api/projects/{project_id}/runs",
+            json={
+                "output_dir": str(tmp_path / "out"),
+                "records": 400,
+                "limits": {"batch_size": 20},
+            },
+        ).json()
+        run_id = started["id"]
+        for _ in range(400):
+            live = client.get(f"/api/runs/{run_id}").json().get("live") or {}
+            if live.get("records_written", 0) > 40:
+                break
+            time.sleep(0.01)
+        client.post(f"/api/runs/{run_id}/cancel")
+        cancelled = await_run(client, run_id)
+        assert cancelled["state"] == "cancelled"
+
+        patched = client.patch(
+            f"/api/projects/{project_id}/schema",
+            json={
+                "operations": [
+                    {
+                        "op": "set_field",
+                        "entity": "employee",
+                        "field": "first_name",
+                        "key": "generator",
+                        "value": "constant",
+                    },
+                    {
+                        "op": "set_field",
+                        "entity": "employee",
+                        "field": "first_name",
+                        "key": "value",
+                        "value": "AFTERWARDS",
+                    },
+                ]
+            },
+        )
+        assert patched.status_code == 200 and patched.json()["changed"], patched.text
+
+        assert client.post(f"/api/runs/{run_id}/resume").status_code == 200
+        await_run(client, run_id)
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "out" / "employee.jsonl").read_text().splitlines()
+        ]
+        assert rows, "the resumed run wrote nothing"
+        assert not any(row.get("first_name") == "AFTERWARDS" for row in rows)
 
     def test_a_missing_run_is_a_404(self, client) -> None:
         assert client.get("/api/runs/nope").status_code == 404

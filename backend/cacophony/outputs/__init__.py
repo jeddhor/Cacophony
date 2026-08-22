@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..core.errors import OutputError
 from ..core.interfaces import OutputWriter
@@ -20,6 +20,9 @@ from .writers import (
     count_records,
 )
 from .writers import align_to_records as align_file
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Sequence
 
 __all__ = [
     "OUTPUT_FORMATS",
@@ -163,6 +166,79 @@ def align_to_records(path: str | Path, records: int, fmt: str, *, table: str | N
             return records
         return sum(count for count in counted if count is not None)
     return align_file(target, records, fmt)
+
+
+def read_written_values(
+    path: str | Path, fmt: str, columns: Sequence[str], *, table: str | None = None
+) -> dict[str, list[Any]] | None:
+    """Read back the values already written for these columns.
+
+    For resuming a run that enforces `unique: true`: the tracker that remembers
+    what has been seen lives in the engine, and a resumed run builds a new one -
+    so without this, the second half of a run cannot see the first half's values
+    and duplicates pass. Returns ``None`` when the format cannot be read back
+    cheaply, which is the caller's cue to say so rather than to pretend.
+    """
+    import csv as _csv
+    import json as _json
+
+    target = Path(path)
+    wanted = list(columns)
+    if not wanted or not target.exists():
+        return {name: [] for name in wanted}
+
+    kind = fmt.lower()
+    found: dict[str, list[Any]] = {name: [] for name in wanted}
+    try:
+        if kind in ("jsonl", "ndjson"):
+            with target.open(encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    row = _json.loads(line)
+                    for name in wanted:
+                        if name in row:
+                            found[name].append(row[name])
+            return found
+
+        if kind == "json":
+            rows = _json.loads(target.read_text(encoding="utf-8"))
+            for row in rows if isinstance(rows, list) else []:
+                for name in wanted:
+                    if isinstance(row, dict) and name in row:
+                        found[name].append(row[name])
+            return found
+
+        if kind == "csv":
+            with target.open(newline="", encoding="utf-8") as handle:
+                for row in _csv.DictReader(handle):
+                    for name in wanted:
+                        if name in row:
+                            found[name].append(row[name])
+            return found
+
+        if kind == "sqlite":
+            import sqlite3
+
+            connection = sqlite3.connect(str(target))
+            try:
+                quoted = ", ".join(f'"{name}"' for name in wanted)
+                cursor = connection.execute(f'SELECT {quoted} FROM "{table or target.stem}"')
+                for row in cursor:
+                    for name, value in zip(wanted, row, strict=True):
+                        found[name].append(value)
+            finally:
+                connection.close()
+            return found
+    except (OSError, ValueError, LookupError):
+        return None
+    except Exception:  # pragma: no cover - a database that will not open
+        return None
+
+    # Parquet and the partitioned tree: readable, but not without pulling in
+    # the whole dataset, which is the one thing this project does not do.
+    return None
 
 
 def output_path_for(
