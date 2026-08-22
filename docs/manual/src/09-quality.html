@@ -111,6 +111,31 @@ the policy says, and <code>--no-validate</code> switches the checking off
 entirely &mdash; which is occasionally the right thing when you already know the
 data is deliberately broken and you want the bytes.</p>
 
+<h2>One field, its own policy</h2>
+
+<p>Section&nbsp;65 asks for the policy to be configurable per generator, and a
+generator is what produces a field:</p>
+
+<pre><code class="language-yaml">  biography:
+    type: text
+    generator: llm
+    on_failure: skip        # this field alone; the run still aborts on the rest</code></pre>
+
+<p>A field with no <code>on_failure</code> follows the run. A field that has one
+uses it for its <em>own</em> generation failures, in either direction: a
+<code>skip</code> field keeps a run alive that would otherwise abort, and an
+<code>abort</code> field stops a run that would otherwise shrug. Where several
+model fields travel in one call, a single <code>abort</code> among them stops
+the run and the others fall back to what each asked for. Whichever fields
+decided for themselves are listed in the run summary as
+<code>failure_policy_overrides</code>, because a run that says <em>abort</em>
+and did not should be explicable from its own report.</p>
+
+<p>What a field cannot decide is what happens to a <em>record</em> that fails
+validation. That is a property of the record rather than of any one generator,
+so it stays <code>--on-failure</code>'s and <code>--drop-invalid</code>'s
+decision &mdash; and it is not the question section&nbsp;65 asks.</p>
+
 <div class="callout">
   <span class="callout-title">This used to be two behaviours</span>
   <p>Until recently <code>--on-failure</code> governed only generation. A run
@@ -121,6 +146,33 @@ data is deliberately broken and you want the bytes.</p>
   <em>abort</em> meaning "abort unless the data is merely invalid" is not a
   promise anybody can plan around.</p>
 </div>
+
+<h2>Looking at what was thrown away</h2>
+
+<p>A run that reports <code>validation failures 30,705</code> has told you
+almost nothing: not which constraint, not what the values looked like, not
+whether it is one bug or thirty thousand. So a run keeps some of the records it
+rejected &mdash; the record, the categories, and the issues that rejected it
+&mdash; beside the data:</p>
+
+<pre class="small"><code class="language-console">out/rejects/reading.jsonl
+{"entity": "reading", "index": 50, "record_id": "reading#50",
+ "categories": ["constraint"], "issues": ["[constraint] celsius: 50 is above the maximum 49"],
+ "values": {"celsius": 50, "index": 50}}</code></pre>
+
+<p>Beside the data rather than in the store, because a rejected record is
+generated data and section&nbsp;42 keeps that out of the metadata database. The
+run inspector reads them, and so does
+<code>GET /api/runs/{id}/rejects</code>.</p>
+
+<p>It is a <em>sample</em>, and it says so. Rejections scale with the dataset
+and section&nbsp;31 forbids anything here that does: each entity keeps up to
+<code>--keep-rejects</code> records, default two hundred, chosen by reservoir
+sampling from a seed derived from the run's own &mdash; so the sample spans the
+whole run rather than its first few batches, and the same run keeps the same
+examples every time it is generated. The report says how many were rejected as
+well as how many were kept, because a sample that stood in silently for the
+whole would be a number people go on to divide by.</p>
 
 <h2>What stopping looks like</h2>
 

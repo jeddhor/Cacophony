@@ -31,6 +31,7 @@ compiler's message rather than a 500 with a traceback.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -625,6 +626,51 @@ def create_app(
             # rather than a route of its own: "how much of this is the same
             # thing twice" is the same question as "is this any good".
             "duplication": summary.get("duplication") or {},
+        }
+
+    @app.get("/api/runs/{run_id}/rejects", tags=["runs"])
+    async def run_rejects(
+        run_id: str,
+        entity: str | None = Query(default=None),
+        category: str | None = Query(default=None),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> dict[str, Any]:
+        """Records this run threw away, and why (design document section 56).
+
+        A bounded sample, written beside the data - rejected records are
+        generated data, and section 42 keeps that out of the store. What the
+        summary counts, this shows.
+        """
+        stored = _found(runs.repository.get_run(run_id), "run")
+        summary = stored.get("summary") or {}
+        rejected = summary.get("rejected") or {}
+        directory = rejected.get("path")
+        if not directory:
+            return {"run_id": run_id, "entities": {}, "rejects": [], "total": 0}
+
+        root = runs.permitted(directory, what="rejected records")
+        rows: list[dict[str, Any]] = []
+        for path in sorted(root.glob("*.jsonl")) if root.is_dir() else []:
+            if entity and path.stem != entity:
+                continue
+            try:
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    if category and category not in (row.get("categories") or []):
+                        continue
+                    rows.append(row)
+            except (OSError, ValueError):  # pragma: no cover - a file removed
+                continue
+
+        return {
+            "run_id": run_id,
+            # The counts as well as the sample, so a page can say "200 of
+            # 4,000" rather than implying it is showing everything.
+            "entities": rejected.get("entities") or {},
+            "total": len(rows),
+            "rejects": rows[:limit],
         }
 
     @app.get("/api/runs/{run_id}/assets", tags=["assets"])

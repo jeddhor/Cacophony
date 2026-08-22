@@ -233,12 +233,13 @@ sections:
           different thing, and the documentation says so.
   - {section: 62, state: implemented}
   - section: 63
-    state: partial
+    state: implemented
     note: >
       Project files hold logical secret ids and are refused if they hold
-      anything that looks like a credential. Resolution reads an explicit
-      override, then the environment, then the OS keychain. The section's
-      encrypted secret store is not built.
+      anything that looks like a credential. All three of the section's places
+      exist: resolution reads an explicit override, then the environment, then
+      an encrypted store (scrypt and AES-GCM, `cacophony secrets`), then the OS
+      keychain. There is deliberately no default passphrase.
   - section: 64
     state: partial
     note: >
@@ -250,13 +251,14 @@ sections:
       ceiling - a limit this process cannot impose on itself without lying
       about it.
   - section: 65
-    state: partial
+    state: implemented
     note: >
       All six policies - abort, retry, skip, placeholder, incomplete, report -
-      and a run distinguishes a generation failure from a validation failure.
-      The policy is per run rather than per generator, which is what the
-      section asks for; a field can only choose its own behaviour for an
-      unavailable provider.
+      per run and per field: `on_failure:` on a field governs what happens when
+      that generator cannot produce a value, and the run's policy applies to
+      everything that does not say. Whether an invalid *record* is kept stays a
+      run-wide decision, because that is a property of the record rather than
+      of any one generator.
   - {section: 66, state: implemented}
   - section: 67
     state: partial

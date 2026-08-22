@@ -79,8 +79,8 @@ these pages:</p>
   documentation and fiction. This is on by default and switchable per field.</li>
   <li><strong>It will not hold a credential.</strong> A project names a
   <em>logical</em> secret; the value is resolved at run time from the
-  environment or the OS keychain, and the loader rejects anything that looks
-  like a literal key.</li>
+  environment, an encrypted store or the OS keychain, and the loader rejects
+  anything that looks like a literal key.</li>
   <li><strong>It will not pretend a language model is trustworthy.</strong>
   Model output is extracted, parsed, type-checked, constraint-checked, repaired
   where repair needs no judgement, and retried up a three-step ladder. Then it
@@ -154,6 +154,7 @@ program by another door.</p>
     <tr><td class="mono">parquet</td><td>pyarrow</td><td>the <code>parquet</code> output format</td></tr>
     <tr><td class="mono">kafka</td><td>a Kafka client</td><td><code>--to kafka://…</code> when streaming</td></tr>
     <tr><td class="mono">keyring</td><td>keyring</td><td>resolving a provider secret from the OS keychain <span class="sec">section&nbsp;63</span></td></tr>
+    <tr><td class="mono">secrets</td><td>cryptography</td><td><code>cacophony secrets</code> &mdash; the encrypted store, for machines with no keychain</td></tr>
     <tr><td class="mono">dev</td><td>pytest, ruff, mypy, httpx2</td><td>working on Cacophony itself</td></tr>
   </tbody>
 </table>

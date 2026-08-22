@@ -33,6 +33,7 @@ what is already on disk or producing a corrupt file. Both are worse.
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import time
 import uuid
@@ -817,6 +818,7 @@ class Conductor:
                 runtime=self.runtime,
                 assets=self.assets,
                 unique_memory_ceiling=self.config.limits.unique_memory_values,
+                keep_rejects=self.config.limits.keep_rejects,
                 edge_cases=self.config.edge_cases,
                 edge_categories=self.config.edge_categories,
                 # What this run will actually produce, which is not what the
@@ -1090,6 +1092,8 @@ class Conductor:
     def _finish(self, state: RunState, error: str | None) -> None:
         from ..store.models import utcnow
 
+        # Before the summary, which reports where they went.
+        self._write_rejects()
         summary = self.summary()
         self._set_run_state(
             state,
@@ -1161,6 +1165,21 @@ class Conductor:
             if engine.resolver.stats.key_lookups:
                 data["relations"] = engine.resolver.describe()
 
+        if engine is not None:
+            rejections = engine.rejection_summary()
+            if rejections:
+                # Where they are, as well as how many: a count in a summary is
+                # a question, and the file is the answer to it (section 56).
+                data["rejected"] = {
+                    "entities": rejections,
+                    "path": str(self._rejects_dir()),
+                }
+
+        overrides = engine.policy_overrides() if engine is not None else {}
+        if overrides:
+            # Section 65: which fields decided for themselves.
+            data["failure_policy_overrides"] = overrides
+
         if self._unique_gaps:
             # In the summary as well as in the events: a report that quietly
             # omits a check somebody asked for is worse than one that failed it.
@@ -1224,6 +1243,36 @@ class Conductor:
             data["providers"] = self.runtime.stats.to_dict()
             data["cache"] = self.runtime.cache.describe()
         return data
+
+    def _rejects_dir(self) -> Path:
+        """Where rejected records go: beside the data, never in the store.
+
+        Section 42 keeps generated data out of the metadata database, and a
+        rejected record is generated data - it is a record the run produced and
+        then declined to write.
+        """
+        return Path(self.config.output_dir) / "rejects"
+
+    def _write_rejects(self) -> None:
+        """Write the sample of rejected records, one file per entity."""
+        engine = getattr(self, "_engine_instance", None)
+        if engine is None:
+            return
+        rejected = engine.rejected_records()
+        if not rejected:
+            return
+
+        directory = self._rejects_dir()
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            for entity, records in rejected.items():
+                path = directory / f"{entity}.jsonl"
+                with path.open("w", encoding="utf-8") as handle:
+                    for record in records:
+                        handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+                self.files.append(str(path))
+        except OSError as exc:  # pragma: no cover - filesystem specific
+            self.log.warning(f"could not write the rejected records: {exc}", status="degraded")
 
     async def aclose(self) -> None:
         """Let go of everything this run held open.

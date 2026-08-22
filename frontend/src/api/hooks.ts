@@ -45,6 +45,7 @@ export const keys = {
   runEvents: (id: string) => ["run-events", id] as const,
   runQuality: (id: string) => ["run-quality", id] as const,
   runAssets: (id: string, params: Record<string, unknown>) => ["run-assets", id, params] as const,
+  runRejects: (id: string) => ["run-rejects", id] as const,
   providers: (id?: number) => ["providers", id ?? null] as const,
   outputs: (id?: number) => ["outputs", id ?? null] as const,
 };
@@ -223,6 +224,14 @@ export function useRunQuality(id: string | null, live = false) {
 
   return query;
 }
+
+/** Records a run threw away (design document section 56). */
+export const useRunRejects = (id: string | null, enabled = true) =>
+  useQuery({
+    queryKey: keys.runRejects(id ?? ""),
+    queryFn: () => api.runRejects(id as string, { limit: 200 }),
+    enabled: Boolean(id) && enabled,
+  });
 
 /** The files a run produced (design document section 81). */
 export const useRunAssets = (

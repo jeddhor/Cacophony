@@ -76,7 +76,8 @@ def build_run_config(
     workers: int,
     llm_batch_size: int,
     checkpoint_every: int,
-    record_history: bool,
+    keep_rejects: int = 200,
+    record_history: bool = True,
     overwrite: bool = False,
     assets_dir: Path | None = None,
     overwrite_assets: bool = False,
@@ -135,6 +136,7 @@ def build_run_config(
             max_workers=max(1, workers),
             batch_size=max(1, batch_size),
             llm_batch_size=max(1, llm_batch_size),
+            keep_rejects=max(0, keep_rejects),
         ),
     )
 

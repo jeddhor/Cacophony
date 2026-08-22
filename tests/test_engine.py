@@ -215,6 +215,103 @@ class TestFailurePolicies:
         engine.preview("e", 1)
         assert engine.stats["e"].retries == 2  # attempts 1 and 2 retried, 3 gave up
 
+    #: One field that cannot be produced, saying for itself what that means.
+    PER_FIELD = {
+        "e": {
+            "count": 3,
+            "fields": {
+                "ok": {"type": "integer", "generator": "constant", "value": 1},
+                "boom": {"type": "text", "generator": "llm", "on_failure": "skip"},
+            },
+        }
+    }
+
+    def test_a_field_may_decide_for_itself(self) -> None:
+        """Section 65: the policy is per generator, not only per run."""
+        engine = GenerationEngine(
+            compile_from(self.PER_FIELD), failure_policy=FailurePolicy.ABORT, validate=False
+        )
+        records = engine.preview("e", 3)
+
+        assert len(records) == 3, "the field's own policy should have kept the run alive"
+        assert all(record.values["boom"] is None for record in records)
+        assert all(record.values["ok"] == 1 for record in records)
+
+    def test_a_field_can_be_stricter_than_the_run(self) -> None:
+        import copy
+
+        schema = copy.deepcopy(self.PER_FIELD)
+        schema["e"]["fields"]["boom"]["on_failure"] = "abort"
+        engine = GenerationEngine(
+            compile_from(schema), failure_policy=FailurePolicy.SKIP, validate=False
+        )
+        with pytest.raises(GenerationError, match=r"e\.boom"):
+            engine.preview("e", 1)
+
+    def test_a_field_can_ask_for_a_placeholder_alone(self) -> None:
+        import copy
+
+        schema = copy.deepcopy(self.PER_FIELD)
+        schema["e"]["fields"]["boom"]["on_failure"] = "placeholder"
+        engine = GenerationEngine(
+            compile_from(schema), failure_policy=FailurePolicy.SKIP, validate=False
+        )
+        assert engine.preview("e", 1)[0].values["boom"] == "[FAILED:boom]"
+
+    def test_the_override_is_reported(self) -> None:
+        """A run that says abort and did not must be explicable afterwards."""
+        engine = GenerationEngine(
+            compile_from(self.PER_FIELD), failure_policy=FailurePolicy.ABORT, validate=False
+        )
+        engine.preview("e", 1)
+        assert engine.policy_overrides() == {"e.boom": "skip"}
+
+    def test_a_field_that_agrees_with_the_run_is_not_reported(self) -> None:
+        engine = GenerationEngine(
+            compile_from(self.PER_FIELD), failure_policy=FailurePolicy.SKIP, validate=False
+        )
+        engine.preview("e", 1)
+        assert engine.policy_overrides() == {}
+
+    def test_retry_at_field_level_still_respects_the_ceiling(self) -> None:
+        import copy
+
+        schema = copy.deepcopy(self.PER_FIELD)
+        schema["e"]["fields"]["boom"]["on_failure"] = "retry"
+        engine = GenerationEngine(
+            compile_from(schema),
+            failure_policy=FailurePolicy.ABORT,
+            max_attempts=3,
+            validate=False,
+        )
+        engine.preview("e", 1)
+        assert engine.stats["e"].retries == 2
+
+    def test_a_field_policy_does_not_decide_what_happens_to_a_record(self) -> None:
+        """Validation is about the record, so it stays the run's decision.
+
+        A field saying `skip` must not turn a run that aborts on an invalid
+        record into one that keeps it: those are different questions and
+        section 65 asks about the first.
+        """
+        schema = {
+            "e": {
+                "count": 3,
+                "fields": {
+                    "small": {
+                        "type": "integer",
+                        "generator": "constant",
+                        "value": 500,
+                        "constraints": {"max": 10},
+                        "on_failure": "skip",
+                    }
+                },
+            }
+        }
+        engine = GenerationEngine(compile_from(schema), validation_policy=FailurePolicy.ABORT)
+        with pytest.raises(ValidationFailedError):
+            engine.preview("e", 1)
+
     def test_max_attempts_is_capped(self) -> None:
         engine = GenerationEngine(compile_from(SIMPLE), max_attempts=10_000)
         assert engine.max_attempts == 10

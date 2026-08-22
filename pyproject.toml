@@ -41,6 +41,9 @@ dependencies = [
 [project.optional-dependencies]
 parquet = ["pyarrow>=16.0,<26"]
 keyring = ["keyring>=25.0,<26"]
+# Section 63's encrypted store: scrypt and AES-GCM, from one well-reviewed
+# library rather than from anything written here.
+secrets = ["cryptography>=42,<48"]
 # Starlette is pinned directly although FastAPI brings it: the TestClient that
 # breaks is Starlette's, so the constraint belongs where it can be read.
 api = [

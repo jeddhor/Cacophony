@@ -48,6 +48,7 @@ class LimitsRequest(BaseModel):
     batch_size: int = Field(default=1000, ge=1, le=1_000_000)
     llm_batch_size: int = Field(default=20, ge=1, le=500)
     min_free_disk_mb: int = Field(default=512, ge=0)
+    keep_rejects: int = Field(default=200, ge=0, le=10_000)
     memory_ceiling_mb: int | None = Field(default=None, ge=0)
     request_timeout_seconds: float = Field(default=120.0, gt=0)
     max_retries: int = Field(default=3, ge=1, le=10)

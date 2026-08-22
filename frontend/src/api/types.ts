@@ -364,6 +364,27 @@ export interface ResolverStats {
   derived_parent_records: number;
 }
 
+/** One record a run produced and then declined to write (section 56). */
+export interface RejectedRecord {
+  entity: string;
+  index: number;
+  record_id: string;
+  categories: string[];
+  issues: string[];
+  values: Record<string, unknown>;
+}
+
+export interface RejectsView {
+  run_id: string;
+  /** Per entity: how many were rejected, how many kept, and the cap. */
+  entities: Record<
+    string,
+    { entity: string; rejected: number; kept: number; cap: number; sampled: boolean }
+  >;
+  total: number;
+  rejects: RejectedRecord[];
+}
+
 /** `GET /api/runs/{id}/quality` - the report of section 58. */
 export interface QualityReport {
   run_id: string;

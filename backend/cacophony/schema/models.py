@@ -88,6 +88,10 @@ _FIELD_KEYS = frozenset(
         "tone",
         "locale",
         "primary_key",
+        # What to do when *this* field cannot be produced (section 65). A field
+        # key rather than a generator option, because it governs the generator
+        # rather than configuring it - and every generator has one.
+        "on_failure",
         # Which recipe this field came from (section 80). A field key rather
         # than a generator option, so it round-trips through `dump_project` and
         # shows up wherever a field is described - expansion that cannot be
@@ -209,6 +213,16 @@ class FieldSpec(_Base):
     depends_on: list[str] = Field(default_factory=list)
     #: Related records the generator may consult (``context: [employee, device]``).
     context: list[str] = Field(default_factory=list)
+
+    #: Section 65's policy, for this field alone. ``None`` means the run's.
+    #: Governs a failure to *produce* the value - a model that will not answer,
+    #: an expression that raises. Whether a *record* that fails validation is
+    #: kept is a property of the record, so it stays a run-wide decision.
+    #: Distinct from a media generator's ``on_unavailable``, which is about a
+    #: provider being absent rather than a generator failing.
+    on_failure: Literal["abort", "retry", "skip", "placeholder", "incomplete", "report"] | None = (
+        None
+    )
 
     transform: list[str | dict[str, Any]] = Field(default_factory=list)
     examples: list[Any] = Field(default_factory=list)

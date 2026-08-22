@@ -397,3 +397,73 @@ class TestQualityReport:
 
         assert sample_size_for(2) >= 100
         assert sample_size_for(50) > sample_size_for(5)
+
+
+class TestTheRejectionSample:
+    """A bounded, seeded sample of what a run threw away (sections 31, 56)."""
+
+    def _sample(self, keep: int = 3, seed: int = 1):
+        from cacophony.validation.rejects import RejectedRecord, RejectionSample
+
+        sample = RejectionSample(entity="thing", keep=keep, seed=seed)
+        for index in range(100):
+            sample.observe(
+                RejectedRecord(
+                    entity="thing",
+                    index=index,
+                    record_id=f"thing#{index}",
+                    categories=["constraint"],
+                    issues=["too big"],
+                    values={"n": index},
+                )
+            )
+        return sample
+
+    def test_it_keeps_no_more_than_the_cap(self) -> None:
+        sample = self._sample(keep=3)
+        assert len(sample.kept) == 3
+        assert sample.seen == 100
+
+    def test_it_says_that_it_is_a_sample(self) -> None:
+        summary = self._sample(keep=3).summary()
+        assert summary == {
+            "entity": "thing",
+            "rejected": 100,
+            "kept": 3,
+            "cap": 3,
+            "sampled": True,
+        }
+
+    def test_a_run_under_the_cap_is_not_a_sample(self) -> None:
+        from cacophony.validation.rejects import RejectedRecord, RejectionSample
+
+        sample = RejectionSample(entity="thing", keep=10, seed=1)
+        sample.observe(
+            RejectedRecord(
+                entity="thing",
+                index=0,
+                record_id="thing#0",
+                categories=[],
+                issues=[],
+                values={},
+            )
+        )
+        assert sample.summary()["sampled"] is False
+
+    def test_it_spans_the_run_rather_than_its_first_batches(self) -> None:
+        """First-N would only ever show the beginning, which is the wrong end."""
+        kept = [record.index for record in self._sample(keep=5).kept]
+        assert max(kept) > 20, f"the sample never reached the later records: {kept}"
+
+    def test_the_same_seed_keeps_the_same_records(self) -> None:
+        assert [r.index for r in self._sample(seed=7).kept] == [
+            r.index for r in self._sample(seed=7).kept
+        ]
+        assert [r.index for r in self._sample(seed=7).kept] != [
+            r.index for r in self._sample(seed=8).kept
+        ]
+
+    def test_a_cap_of_zero_keeps_nothing(self) -> None:
+        sample = self._sample(keep=0)
+        assert sample.kept == []
+        assert sample.seen == 100

@@ -20,6 +20,7 @@ import {
   useRun,
   useRunControl,
   useRunQuality,
+  useRunRejects,
   useRunStream,
 } from "../api/hooks";
 import type {
@@ -237,6 +238,10 @@ export function RunPage(): ReactNode {
 
       <div style={{ height: 16 }} />
 
+      <RejectedRecordsPanel runId={runId} finished={!active} />
+
+      <div style={{ height: 16 }} />
+
       <EventLog runId={runId} live={live.events} active={active} />
     </>
   );
@@ -310,6 +315,110 @@ function JobsPanel({ run }: { run: RunView }): ReactNode {
               </Notice>
             ))}
         </div>
+      )}
+    </Panel>
+  );
+}
+
+/**
+ * Records the run threw away (design document section 56).
+ *
+ * The count was always in the report; what it never had was the records. "Four
+ * thousand failed constraint validation" tells nobody which constraint, and
+ * the answer is one row of this table. It is a bounded sample and says so,
+ * because a sample that stands in silently for the whole is a number people go
+ * on to divide by.
+ */
+function RejectedRecordsPanel({
+  runId,
+  finished,
+}: {
+  runId: string;
+  finished: boolean;
+}): ReactNode {
+  const [entity, setEntity] = useState<string | null>(null);
+  const rejects = useRunRejects(runId, finished);
+
+  if (!rejects.data || rejects.data.total === 0) return null;
+
+  const counts = Object.values(rejects.data.entities);
+  const shown = entity
+    ? rejects.data.rejects.filter((row) => row.entity === entity)
+    : rejects.data.rejects;
+
+  return (
+    <Panel
+      title="Rejected records"
+      actions={
+        counts.length > 1 ? (
+          <div className="row" style={{ gap: 6 }}>
+            <button
+              type="button"
+              className={`button-sm ${entity === null ? "button-primary" : ""}`}
+              onClick={() => setEntity(null)}
+            >
+              all
+            </button>
+            {counts.map((count) => (
+              <button
+                key={count.entity}
+                type="button"
+                className={`button-sm ${entity === count.entity ? "button-primary" : ""}`}
+                onClick={() => setEntity(count.entity)}
+              >
+                {count.entity}
+              </button>
+            ))}
+          </div>
+        ) : undefined
+      }
+    >
+      <div className="row" style={{ gap: 12, marginBottom: 10 }}>
+        {counts.map((count) => (
+          <span key={count.entity} className="faint" style={{ fontSize: "0.8rem" }}>
+            <strong>{count.entity}</strong> · {formatNumber(count.rejected)} rejected
+            {count.sampled && <> · showing {formatNumber(count.kept)}</>}
+          </span>
+        ))}
+      </div>
+
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Record</th>
+              <th>Category</th>
+              <th>Why</th>
+              <th>Values</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.slice(0, 100).map((row) => (
+              <tr key={`${row.entity}-${row.index}`}>
+                <td className="mono">{row.record_id}</td>
+                <td>
+                  {row.categories.map((category) => (
+                    <span key={category} className="badge badge-rule">
+                      {category}
+                    </span>
+                  ))}
+                </td>
+                <td>{row.issues.join("; ")}</td>
+                <td className="mono truncate" title={JSON.stringify(row.values)}>
+                  {JSON.stringify(row.values)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {counts.some((count) => count.sampled) && (
+        <p className="hint" style={{ marginBottom: 0 }}>
+          A sample, not the whole: each entity keeps up to{" "}
+          {formatNumber(counts[0]?.cap ?? 0)} rejected records, chosen across the whole run
+          rather than from its first batches.
+        </p>
       )}
     </Panel>
   );

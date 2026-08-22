@@ -329,8 +329,36 @@ in every user agent it ever sees, and one that reports every dotted word reports
 <ol class="tight">
   <li>The environment variable <code>CACOPHONY_SECRET_MODELS_INTERNAL</code>.</li>
   <li>An environment variable named after the id itself.</li>
+  <li>The encrypted store, if one exists and its passphrase is available.</li>
   <li>The OS keychain, under the service name <code>cacophony</code>.</li>
 </ol>
+
+<p>The environment comes before the file so a one-off run can override what is
+stored without editing it, and the keychain comes last because a machine with
+both has usually chosen the file deliberately.</p>
+
+<h3>The encrypted store</h3>
+
+<pre><code class="language-console">$ pip install 'cacophony[secrets]'
+$ export CACOPHONY_SECRETS_PASSPHRASE='…'
+$ cacophony secrets set models-internal      # prompts, without echo
+$ cacophony secrets list                     # ids, never values
+$ cacophony secrets forget models-internal</code></pre>
+
+<p>Section&nbsp;63's third place, for the machines the first two serve badly. A
+headless box or a container has no keychain, which leaves environment variables
+&mdash; readable in <code>/proc</code>, inherited by every child process, and
+printed by anything that dumps the environment on a crash. This is a file at
+<code>~/.config/cacophony/secrets.enc</code> instead: scrypt from the passphrase
+to a key, AES-GCM per entry with the id authenticated alongside the value, mode
+<code>0600</code>.</p>
+
+<p>Its honest limit: a passphrase in the environment of the process that reads
+the store is a smaller secret in the same place, not a different kind of
+safety. What it buys is that one passphrase can be rotated, prompted for or
+supplied by a launcher, and that the file can be backed up without publishing
+what is in it. There is no default passphrase, because a store everybody can
+open is not a store.</p>
 
 <p>The loader rejects a <code>secret:</code> whose value looks like a literal
 key rather than an identifier. The distributed controller's shared token is read

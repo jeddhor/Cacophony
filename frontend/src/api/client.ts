@@ -23,6 +23,7 @@ import type {
   AssetsView,
   ProvidersView,
   QualityReport,
+  RejectsView,
   RunView,
   SchemaOperation,
   SchemaTypesView,
@@ -196,6 +197,13 @@ export const api = {
     if (params.entity) query.set("entity", params.entity);
     const suffix = query.toString();
     return request<AssetsView>(`/runs/${id}/assets${suffix ? `?${suffix}` : ""}`);
+  },
+  runRejects: (id: string, params: { entity?: string | null; limit?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.entity) query.set("entity", params.entity);
+    if (params.limit) query.set("limit", String(params.limit));
+    const suffix = query.toString();
+    return request<RejectsView>(`/runs/${id}/rejects${suffix ? `?${suffix}` : ""}`);
   },
   runEvents: (id: string, after = 0, limit = 200) =>
     request<StoredEvent[]>(`/runs/${id}/events?after=${after}&limit=${limit}`),

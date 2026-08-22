@@ -35,6 +35,9 @@ class ResourceLimits:
     #: disk-backed index (section 31). The check stays exact either way; this
     #: decides where the memory goes.
     unique_memory_values: int = 250_000
+    #: How many rejected records each entity keeps for the inspector
+    #: (section 56). Bounded on purpose: rejections scale with the dataset.
+    keep_rejects: int = 200
     #: Records per language-model call in batch mode.
     llm_batch_size: int = 20
     #: Refuse to start if the destination has less than this much space free.
@@ -101,6 +104,7 @@ class ResourceLimits:
             "batch_size": self.batch_size,
             "llm_batch_size": self.llm_batch_size,
             "min_free_disk_mb": self.min_free_disk_mb,
+            "keep_rejects": self.keep_rejects,
             "memory_ceiling_mb": self.memory_ceiling_mb,
             "request_timeout_seconds": self.request_timeout_seconds,
             "max_retries": self.max_retries,

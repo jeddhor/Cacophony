@@ -486,6 +486,82 @@ class TestRuns:
         client.post(f"/api/runs/{run_id}/cancel")
         await_run(client, run_id)
 
+    def test_rejected_records_can_be_looked_at(self, client, tmp_path) -> None:
+        """Section 56 asks to browse them, not to be told how many there were."""
+        source = """
+project: {name: Rejects, seed: 4}
+entities:
+  reading:
+    count: 60
+    fields:
+      celsius:
+        type: integer
+        generator: expression
+        expression: "int(index) % 100"
+        constraints: {max: 49}
+      index: {type: integer, generator: sequence, start: 0}
+"""
+        project_id = client.post("/api/projects", json={"source": source}).json()["id"]
+        run_id = client.post(
+            f"/api/projects/{project_id}/runs",
+            json={
+                "output_dir": str(tmp_path / "out"),
+                "drop_invalid": True,
+                "failure_policy": "skip",
+            },
+        ).json()["id"]
+        await_run(client, run_id)
+
+        body = client.get(f"/api/runs/{run_id}/rejects").json()
+        assert body["total"] > 0
+        assert body["entities"]["reading"]["rejected"] > 0
+
+        first = body["rejects"][0]
+        assert first["entity"] == "reading"
+        assert "constraint" in first["categories"]
+        assert first["values"]["celsius"] > 49
+        assert first["issues"], "a rejected record should say why"
+
+    def test_the_reject_sample_is_capped_and_says_so(self, client, tmp_path) -> None:
+        """Section 31: nothing here may grow with the dataset."""
+        source = """
+project: {name: Rejects, seed: 4}
+entities:
+  reading:
+    count: 400
+    fields:
+      celsius:
+        type: integer
+        generator: constant
+        value: 500
+        constraints: {max: 49}
+"""
+        project_id = client.post("/api/projects", json={"source": source}).json()["id"]
+        run_id = client.post(
+            f"/api/projects/{project_id}/runs",
+            json={
+                "output_dir": str(tmp_path / "out"),
+                "drop_invalid": True,
+                "failure_policy": "skip",
+                "limits": {"keep_rejects": 25},
+            },
+        ).json()["id"]
+        await_run(client, run_id)
+
+        counts = client.get(f"/api/runs/{run_id}/rejects").json()["entities"]["reading"]
+        assert counts["rejected"] == 400
+        assert counts["kept"] == 25
+        assert counts["sampled"] is True
+
+    def test_a_run_that_rejected_nothing_has_nothing_to_show(
+        self, client, project_id, tmp_path
+    ) -> None:
+        run_id = self._start(client, project_id, tmp_path, records=5)
+        await_run(client, run_id)
+        body = client.get(f"/api/runs/{run_id}/rejects").json()
+        assert body["total"] == 0
+        assert body["rejects"] == []
+
     def test_a_missing_run_is_a_404(self, client) -> None:
         assert client.get("/api/runs/nope").status_code == 404
 

@@ -616,6 +616,13 @@ def generate(
         int,
         typer.Option("--llm-batch-size", help="Records per language-model call in batch mode."),
     ] = 20,
+    keep_rejects: Annotated[
+        int,
+        typer.Option(
+            "--keep-rejects",
+            help="Rejected records to keep per entity for the inspector (section 56).",
+        ),
+    ] = 200,
     checkpoint_every: Annotated[
         int, typer.Option("--checkpoint-every", help="Records between checkpoints.")
     ] = 10_000,
@@ -666,6 +673,7 @@ def generate(
         workers=workers,
         llm_batch_size=llm_batch_size,
         checkpoint_every=checkpoint_every,
+        keep_rejects=keep_rejects,
         record_history=not no_history,
         overwrite=overwrite,
         assets_dir=assets_dir,
@@ -1998,11 +2006,13 @@ from .afterwards import register as _register_afterwards  # noqa: E402
 from .begin import register as _register_begin  # noqa: E402
 from .bundles import register as _register_bundles  # noqa: E402
 from .distributed import register as _register_distributed  # noqa: E402
+from .secrets_cli import register as _register_secrets  # noqa: E402
 from .stream import register as _register_stream  # noqa: E402
 
 _register_stream(app)
 _register_distributed(app)
 _register_bundles(app)
+_register_secrets(app)
 _register_afterwards(app)
 _register_begin(app)
 

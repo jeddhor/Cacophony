@@ -10,7 +10,12 @@ at run time from, in order:
 1. an explicit override supplied by the caller,
 2. the environment variable ``CACOPHONY_SECRET_<ID>``,
 3. the environment variable named by the id itself, upper-cased,
-4. the OS keychain, if ``keyring`` is installed.
+4. the encrypted store, if one exists and its passphrase is available,
+5. the OS keychain, if ``keyring`` is installed.
+
+The environment comes before the file so a one-off run can override what is
+stored without editing it, and the keychain comes last because a machine with
+both has usually chosen the file deliberately.
 
 Resolution failures are not fatal here. Plenty of local providers - Ollama and
 llama.cpp among them - need no credential at all, so a missing secret is only
@@ -21,6 +26,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import Final
 
 __all__ = ["SecretResolver", "redact", "secret_env_var"]
@@ -58,10 +64,20 @@ class SecretResolver:
         *,
         overrides: dict[str, str] | None = None,
         use_keyring: bool = True,
+        use_store: bool = True,
+        store_path: str | Path | None = None,
+        passphrase: str | None = None,
         environ: dict[str, str] | None = None,
     ) -> None:
         self.overrides = dict(overrides or {})
         self.use_keyring = use_keyring
+        #: Consult the encrypted store (section 63). Off for a resolver that
+        #: must not prompt or fail on a passphrase - a health check, say.
+        self.use_store = use_store
+        self.store_path = store_path
+        #: Supplied rather than read from the environment. For a caller that
+        #: has one already - the CLI, holding what it prompted for.
+        self.passphrase = passphrase
         self._environ = environ if environ is not None else os.environ
         self._cache: dict[str, str | None] = {}
 
@@ -76,6 +92,7 @@ class SecretResolver:
             self.overrides.get(secret_id)
             or self._environ.get(secret_env_var(secret_id))
             or self._environ.get(_NON_ALNUM.sub("_", secret_id).strip("_").upper())
+            or self._from_store(secret_id)
             or self._from_keyring(secret_id)
         )
         self._cache[secret_id] = value
@@ -87,11 +104,32 @@ class SecretResolver:
         if value is None:
             raise LookupError(
                 f"No credential found for secret id '{secret_id}'. Set the environment "
-                f"variable {secret_env_var(secret_id)}, or store it in the OS keychain "
-                f"under service '{KEYRING_SERVICE}'. Never put the credential in the "
-                f"project file (design document section 63)."
+                f"variable {secret_env_var(secret_id)}, put it in the encrypted store "
+                f"with `cacophony secrets set {secret_id}`, or store it in the OS "
+                f"keychain under service '{KEYRING_SERVICE}'. Never put the credential "
+                f"in the project file (design document section 63)."
             )
         return value
+
+    def _from_store(self, secret_id: str) -> str | None:
+        """The encrypted store, if there is one and it can be opened.
+
+        A store that cannot be opened - no passphrase, wrong passphrase, no
+        `cryptography` installed - is not an error here. Resolution is
+        best-effort by design: the credential may be somewhere else, and the
+        run only fails if something actually needs one it cannot find.
+        """
+        if not self.use_store:
+            return None
+        try:
+            from .secret_store import EncryptedSecretStore
+
+            store = EncryptedSecretStore(self.store_path, passphrase=self.passphrase)
+            if not store.exists():
+                return None
+            return store.get(secret_id)
+        except Exception:
+            return None
 
     def _from_keyring(self, secret_id: str) -> str | None:
         if not self.use_keyring:

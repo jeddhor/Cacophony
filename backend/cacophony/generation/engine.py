@@ -37,9 +37,10 @@ from ..core.errors import (
 )
 from ..core.provenance import FieldProvenance, ProvenanceMode, RecordProvenance
 from ..core.record import GeneratedRecord
-from ..core.seeds import SeedChain
+from ..core.seeds import SeedChain, mix_seed
 from ..core.types import coerce_value
 from ..validation.pipeline import RecordValidator
+from ..validation.rejects import DEFAULT_KEEP as DEFAULT_KEEP_REJECTS
 from ..validation.results import ValidationResult
 from ..validation.uniqueness import DEFAULT_MEMORY_CEILING
 from .relations import EntityResolver
@@ -51,6 +52,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = ["EntityStats", "FailurePolicy", "GenerationEngine", "StreamChunk"]
 
 DEFAULT_BATCH_SIZE = 1_000
+
+#: Distinguishes the reject sampler's seed from every other derivation.
+_REJECT_SALT = 0x52454A43
 
 #: What ``profile: maximum_chaos`` sets ``--edge-cases`` to when nothing else
 #: has. High enough to find something, low enough that the dataset is still
@@ -179,6 +183,7 @@ class GenerationEngine:
         edge_categories: list[str] | None = None,
         patches: bool = True,
         unique_memory_ceiling: int = DEFAULT_MEMORY_CEILING,
+        keep_rejects: int = DEFAULT_KEEP_REJECTS,
     ) -> None:
         for name, policy in (("failure", failure_policy), ("validation", validation_policy)):
             if policy is not None and policy not in FailurePolicy.ALL:
@@ -200,6 +205,15 @@ class GenerationEngine:
         #: raises, which is a different kind of problem and still theirs to
         #: surface.
         self.validation_policy = validation_policy or failure_policy
+        #: How many rejected records each entity keeps for the inspector
+        #: (section 56). Bounded, because rejections scale with the dataset
+        #: and section 31 says nothing here may.
+        self.keep_rejects = max(0, keep_rejects)
+        self._rejects: dict[str, Any] = {}
+        #: Fields that decided for themselves, and what they decided
+        #: (section 65). Reported, so a run that says `abort` and did not is
+        #: explicable from its own summary.
+        self._policy_overrides: dict[str, str] = {}
         # Section 66: never permit infinite retry loops.
         self.max_attempts = max(1, min(max_attempts, 10))
         self.seed_namespace = seed_namespace
@@ -726,16 +740,32 @@ class GenerationEngine:
             try:
                 await enricher.run(group, records, contexts)
             except GenerationError:
-                if self.failure_policy == FailurePolicy.ABORT:
+                # One call produced several fields, and they may not agree
+                # about what a failure means. A field that says `abort` aborts
+                # the run; the others fall back to what each of them asked for.
+                policies = {compiled.name: self._policy_for(compiled) for compiled in group.fields}
+                if FailurePolicy.ABORT in policies.values():
                     raise
                 stats.field_failures += len(records)
                 for record in records:
                     for compiled in group.fields:
+                        policy = policies[compiled.name]
+                        if policy != self.failure_policy:
+                            self._policy_overrides[f"{entity.name}.{compiled.name}"] = policy
                         record.values[compiled.name] = (
                             f"[FAILED:{compiled.name}]"
-                            if self.failure_policy == FailurePolicy.PLACEHOLDER
+                            if policy == FailurePolicy.PLACEHOLDER
                             else None
                         )
+
+    def _policy_for(self, compiled_field: CompiledField) -> str:
+        """The failure policy governing this field (design document section 65).
+
+        A field may state its own; otherwise the run's applies. Section 65 asks
+        for the policy to be configurable per generator, and a generator is
+        what produces a field - so this is where "per generator" lives.
+        """
+        return compiled_field.spec.on_failure or self.failure_policy
 
     async def _generate_field(
         self,
@@ -751,6 +781,7 @@ class GenerationEngine:
             provenance.extra["nulled"] = True
             return None, provenance, []
 
+        policy = self._policy_for(compiled_field)
         last_error: Exception | None = None
         for attempt in range(1, self.max_attempts + 1):
             context.attempt = attempt
@@ -768,7 +799,7 @@ class GenerationEngine:
                 return coerce_value(value, compiled_field.spec.type), provenance, assets
             except Exception as exc:
                 last_error = exc
-                if self.failure_policy != FailurePolicy.RETRY or attempt == self.max_attempts:
+                if policy != FailurePolicy.RETRY or attempt == self.max_attempts:
                     break
                 stats.retries += 1
 
@@ -782,9 +813,15 @@ class GenerationEngine:
         if len(stats.errors) < 100:
             stats.errors.append(message)
 
-        if self.failure_policy == FailurePolicy.ABORT:
+        if policy != self.failure_policy:
+            # Recorded so the run report can say which fields decided for
+            # themselves: a run that says "abort" and did not is otherwise a
+            # mystery in the log.
+            self._policy_overrides[f"{context.entity.name}.{compiled_field.name}"] = policy
+
+        if policy == FailurePolicy.ABORT:
             raise GenerationError(message) from last_error
-        if self.failure_policy == FailurePolicy.PLACEHOLDER:
+        if policy == FailurePolicy.PLACEHOLDER:
             provenance.extra["placeholder"] = True
             return f"[FAILED:{compiled_field.name}]", provenance, []
         provenance.extra["failed"] = True
@@ -1188,8 +1225,35 @@ class GenerationEngine:
             if len(stats.errors) < 100:
                 stats.errors.append(f"{where}: {issue.render()}")
 
+        # And keep some of them, so section 56's inspector has records to show
+        # rather than a count and three sentences.
+        if self.keep_rejects > 0:
+            from ..validation.rejects import RejectionSample, describe
+
+            sample = self._rejects.get(entity.name)
+            if sample is None:
+                sample = RejectionSample(
+                    entity=entity.name,
+                    keep=self.keep_rejects,
+                    seed=mix_seed(self.compiled.seed, _REJECT_SALT, len(entity.name)),
+                )
+                self._rejects[entity.name] = sample
+            sample.observe(describe(entity.name, index, where, record, result))
+
     def validation_stats(self) -> dict[str, Any]:
         return {name: validator.summary() for name, validator in self._validators.items()}
+
+    def rejected_records(self) -> dict[str, list[dict[str, Any]]]:
+        """The sample of rejected records, per entity (section 56)."""
+        return {
+            name: [rejected.to_dict() for rejected in sample.kept]
+            for name, sample in self._rejects.items()
+            if sample.kept
+        }
+
+    def rejection_summary(self) -> dict[str, dict[str, Any]]:
+        """How many were rejected, how many kept, and whether that is a sample."""
+        return {name: sample.summary() for name, sample in self._rejects.items() if sample.seen}
 
     def summary(self) -> dict[str, Any]:
         summary: dict[str, Any] = {
@@ -1230,6 +1294,10 @@ class GenerationEngine:
             await self.runtime.aclose()
         for validator in self._validators.values():
             validator.close()
+
+    def policy_overrides(self) -> dict[str, str]:
+        """Fields whose own failure policy was used instead of the run's."""
+        return dict(self._policy_overrides)
 
     def entity_order(self) -> Sequence[str]:
         return self.compiled.entity_order
