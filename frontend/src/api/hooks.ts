@@ -110,9 +110,13 @@ export const useOutputs = (projectId?: number) =>
 
 export function useRegisterProject() {
   const client = useQueryClient();
+  const countsChanged = useSystemInvalidation();
   return useMutation({
     mutationFn: (body: { path?: string; source?: string }) => api.registerProject(body),
-    onSuccess: () => client.invalidateQueries({ queryKey: keys.projects }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: keys.projects });
+      countsChanged();
+    },
   });
 }
 
@@ -196,13 +200,29 @@ export const useRun = (id: string | null) =>
  * before the run finishes: referential integrity measured over four million
  * records is already the answer.
  */
-export const useRunQuality = (id: string | null, live = false) =>
-  useQuery({
+export function useRunQuality(id: string | null, live = false) {
+  const client = useQueryClient();
+  const query = useQuery({
     queryKey: keys.runQuality(id ?? ""),
     queryFn: () => api.runQuality(id as string),
     enabled: Boolean(id),
     refetchInterval: live ? 5_000 : false,
   });
+
+  // One more request when the run stops. Turning the polling off is not the
+  // same as taking a final reading: without this the page kept whatever it
+  // last saw mid-run, and went on describing a finished run's numbers as
+  // "measured so far".
+  const wasLive = useRef(live);
+  useEffect(() => {
+    if (wasLive.current && !live && id) {
+      void client.invalidateQueries({ queryKey: keys.runQuality(id) });
+    }
+    wasLive.current = live;
+  }, [client, id, live]);
+
+  return query;
+}
 
 /** The files a run produced (design document section 81). */
 export const useRunAssets = (
@@ -215,19 +235,40 @@ export const useRunAssets = (
     enabled: Boolean(id),
   });
 
+/**
+ * The store's own counters (design document section 46's footer).
+ *
+ * Invalidated by anything that changes them, because a footer reading "0 runs
+ * recorded" beside a run somebody just watched finish is the interface saying
+ * it has not looked.
+ */
+function useSystemInvalidation() {
+  const client = useQueryClient();
+  return useCallback(
+    () => void client.invalidateQueries({ queryKey: keys.system }),
+    [client],
+  );
+}
+
 export function useStartRun(projectId: number) {
   const client = useQueryClient();
+  const countsChanged = useSystemInvalidation();
   return useMutation({
     mutationFn: (body: CreateRunBody) => api.startRun(projectId, body),
-    onSuccess: () => client.invalidateQueries({ queryKey: ["runs"] }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["runs"] });
+      countsChanged();
+    },
   });
 }
 
 export function useRunControl(runId: string) {
   const client = useQueryClient();
+  const countsChanged = useSystemInvalidation();
   const refresh = () => {
     void client.invalidateQueries({ queryKey: keys.run(runId) });
     void client.invalidateQueries({ queryKey: ["runs"] });
+    countsChanged();
   };
   return {
     pause: useMutation({ mutationFn: () => api.pauseRun(runId), onSuccess: refresh }),
@@ -256,6 +297,7 @@ const TERMINAL = new Set(["run.completed", "run.failed", "run.cancelled"]);
  * back to polling rather than showing nothing.
  */
 export function useRunStream(runId: string | null, enabled = true): LiveRun {
+  const client = useQueryClient();
   const [status, setStatus] = useState<StreamStatus>("connecting");
   const [snapshot, setSnapshot] = useState<RunSnapshot | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
@@ -304,6 +346,10 @@ export function useRunStream(runId: string | null, enabled = true): LiveRun {
       }
       if (TERMINAL.has(event.kind)) {
         setFinished(true);
+        // The store now holds one more finished run, and the footer counts
+        // those. Nothing else would tell it.
+        void client.invalidateQueries({ queryKey: keys.system });
+        void client.invalidateQueries({ queryKey: keys.run(runId) });
       }
     };
 
@@ -317,7 +363,7 @@ export function useRunStream(runId: string | null, enabled = true): LiveRun {
       if (socket.readyState <= WebSocket.OPEN) socket.close();
       socketRef.current = null;
     };
-  }, [runId, enabled]);
+  }, [client, runId, enabled]);
 
   return { status, snapshot, events, finished };
 }

@@ -744,19 +744,144 @@ class TestControl:
 # --------------------------------------------------------------------------- #
 
 
+class TestLiveNumbers:
+    """Section 55's rates, and section 86's metrics, measured while it happens."""
+
+    def test_bytes_are_counted_once_per_destination(self, tmp_path) -> None:
+        """Three entities share one SQLite file; its growth is not three runs' worth."""
+        conductor, _ = build(tmp_path, records=40, output_format="sqlite")
+        conductor.plan()
+        outcome = asyncio.run(conductor.execute())
+
+        database = next((tmp_path / "out").glob("*.db"))
+        assert outcome.summary["bytes_written"] == database.stat().st_size
+        assert conductor.metrics.bytes_written <= database.stat().st_size
+
+    def test_the_queue_depth_is_measured(self, tmp_path) -> None:
+        """Declared by section 86, reported forever as zero."""
+        conductor, _ = build(tmp_path, records=20)
+        conductor.config.limits.max_workers = 1
+        conductor.plan()
+        depths: list[int] = []
+
+        original = conductor._run_entity_job
+
+        async def watched(job: Any) -> None:
+            depths.append(conductor.metrics.queue_depth)
+            await original(job)
+
+        conductor._run_entity_job = watched  # type: ignore[method-assign]
+        asyncio.run(conductor.execute())
+
+        # Two entities, one worker: the second waits, and the depth says so.
+        assert max(depths) >= 1
+
+    def test_provider_counters_move_during_the_run(self, tmp_path) -> None:
+        """They used to arrive all at once, when the entity finished."""
+        schema = {
+            "note": {
+                "count": 60,
+                "fields": {
+                    "body": {
+                        "type": "text",
+                        "semantic": "a short note",
+                        "generator": "llm",
+                        "provider": "writer",
+                        "constraints": {"max_length": 80},
+                    }
+                },
+            }
+        }
+        project = make_project(
+            schema,
+            name="Live",
+            seed=3,
+            providers={"writer": {"type": "language_model", "adapter": "mock"}},
+        )
+        from cacophony.generation.runtime import GenerationRuntime
+        from cacophony.schema.compiler import compile_project
+
+        compiled = compile_project(project)
+        config = RunConfig(
+            output_dir=tmp_path / "out",
+            limits=ResourceLimits(batch_size=10, max_workers=1),
+            record_history=False,
+        )
+        conductor = Conductor(compiled, config, runtime=GenerationRuntime.for_project(project))
+        conductor.plan()
+
+        seen: list[int] = []
+        original = conductor._emit_progress
+
+        def watch(job: Any) -> None:
+            seen.append(conductor.metrics.provider_calls)
+            original(job)
+
+        conductor._emit_progress = watch  # type: ignore[method-assign]
+        asyncio.run(conductor.execute())
+
+        assert seen, "no progress was emitted"
+        assert any(count > 0 for count in seen[:-1]), "provider calls only arrived at the end"
+
+
 class TestResourceLimits:
-    def test_a_full_disk_is_reported_before_the_run(self, tmp_path) -> None:
+    def test_a_full_disk_stops_the_run_before_it_starts(self, tmp_path) -> None:
+        """A floor is a floor: below it the run refuses rather than warns."""
         conductor, _ = build(tmp_path, records=10)
         conductor.config.limits.min_free_disk_mb = 10**9  # more than any disk has
         conductor.plan()
+        with pytest.raises(GenerationError, match="free"):
+            conductor.preflight()
+
+    def test_an_estimate_larger_than_the_disk_is_only_a_warning(self, tmp_path) -> None:
+        """Section 69: an estimate is not a measurement, so it does not stop a run."""
+        conductor, _ = build(tmp_path, records=10)
+        conductor.config.limits.min_free_disk_mb = 0
+        conductor.plan()
+        assert conductor.compiled.plan is not None
+        conductor.compiled.plan.estimate.estimated_bytes = 10**18
         warnings = conductor.preflight()
-        assert any("free" in warning for warning in warnings)
+        assert any("estimated to" in warning for warning in warnings)
 
     def test_a_healthy_disk_produces_no_complaint(self, tmp_path) -> None:
         conductor, _ = build(tmp_path, records=10)
         conductor.config.limits.min_free_disk_mb = 0
         conductor.plan()
         assert conductor.preflight() == []
+
+    def test_max_retries_means_retries(self, tmp_path) -> None:
+        """`max_retries=1` used to mean one attempt, which is no retry at all."""
+        conductor, _ = build(tmp_path, records=10)
+        conductor.config.limits.max_retries = 1
+        conductor.plan()
+        assert conductor._engine().max_attempts == 2
+
+    def test_the_request_timeout_is_a_ceiling_providers_obey(self) -> None:
+        """Section 64's timeout was carried into every run and read by nothing."""
+        from cacophony.generation.runtime import GenerationRuntime
+
+        project = make_project(
+            SCHEMA,
+            name="Timeout",
+            seed=1,
+            providers={
+                "slow": {
+                    "type": "language_model",
+                    "adapter": "mock",
+                    "timeout_seconds": 600.0,
+                },
+                "quick": {
+                    "type": "language_model",
+                    "adapter": "mock",
+                    "timeout_seconds": 5.0,
+                },
+            },
+        )
+        runtime = GenerationRuntime.for_project(project, request_timeout_seconds=30.0)
+
+        assert runtime.providers.get("slow").config["timeout_seconds"] == 30.0
+        # A provider that asks for less keeps it; the limit is a ceiling.
+        assert runtime.providers.get("quick").config["timeout_seconds"] == 5.0
 
     def test_limits_round_trip_through_a_stored_config(self) -> None:
         config = RunConfig(limits=ResourceLimits(max_workers=9, batch_size=13))

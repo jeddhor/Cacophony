@@ -119,6 +119,13 @@ class RunMetrics:
     entities: dict[str, EntityMetrics] = field(default_factory=dict)
     records: Throughput = field(default_factory=Throughput)
     tokens: Throughput = field(default_factory=Throughput)
+    #: Section 55's other three rates. Bytes are counted as they land; images
+    #: and audio as the assets are produced, with audio measured in seconds of
+    #: material rather than in files, because a rate of "clips per minute" says
+    #: nothing about how much audio that is.
+    disk: Throughput = field(default_factory=Throughput)
+    images: Throughput = field(default_factory=Throughput)
+    audio_seconds: Throughput = field(default_factory=Throughput)
     bytes_written: int = 0
 
     provider_calls: int = 0
@@ -128,6 +135,9 @@ class RunMetrics:
     validation_failures: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
+    #: Jobs that are ready to run and waiting for a worker slot. Reported by
+    #: section 86 and, for a long time, never measured - which made it a
+    #: number in a dashboard that was always zero.
     queue_depth: int = 0
 
     def entity(self, name: str, *, requested: int = 0) -> EntityMetrics:
@@ -143,6 +153,15 @@ class RunMetrics:
         self.entity(entity).record(count)
         self.records.record(count)
         self.bytes_written += bytes_written
+        if bytes_written:
+            self.disk.record(bytes_written)
+
+    def record_assets(self, *, images: int = 0, audio_seconds: float = 0.0) -> None:
+        """Media produced, for the two rates section 55 asks for by name."""
+        if images:
+            self.images.record(images)
+        if audio_seconds:
+            self.audio_seconds.record(round(audio_seconds))
 
     def absorb_provider_stats(self, stats: Any) -> None:
         """Fold the provider layer's counters in (design document section 58)."""
@@ -191,6 +210,9 @@ class RunMetrics:
             "cache_hits": self.cache_hits,
             "cache_misses": self.cache_misses,
             "queue_depth": self.queue_depth,
+            "bytes_per_second": round(self.disk.rate, 2),
+            "images_per_minute": round(self.images.rate * 60, 2),
+            "audio_minutes_per_minute": round(self.audio_seconds.rate, 3),
             "entities": {name: metrics.to_dict() for name, metrics in self.entities.items()},
         }
 

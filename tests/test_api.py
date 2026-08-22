@@ -411,6 +411,81 @@ class TestRuns:
         assert rows, "the resumed run wrote nothing"
         assert not any(row.get("first_name") == "AFTERWARDS" for row in rows)
 
+    def test_the_api_takes_what_the_command_line_takes(self, client, project_id, tmp_path) -> None:
+        """Section 36's claim, which the API had been quietly short of."""
+        response = client.post(
+            f"/api/projects/{project_id}/runs",
+            json={
+                "output_dir": str(tmp_path / "out"),
+                "record_counts": {"employee": 7, "device": 3},
+                "entities": ["employee", "device"],
+                "failure_policy": "report",
+                "edge_cases": 0.25,
+                "edge_categories": ["emoji"],
+                "overwrite_assets": True,
+                "record_history": True,
+            },
+        )
+        assert response.status_code == 202, response.text
+        final = await_run(client, response.json()["id"])
+        assert final["state"] == "completed"
+        assert final["records_written"] == 10
+        assert final["config"]["edge_cases"] == 0.25
+        assert final["config"]["failure_policy"] == "report"
+
+    def test_an_unknown_option_is_refused_rather_than_ignored(
+        self, client, project_id, tmp_path
+    ) -> None:
+        """A misspelled option that silently does nothing is the expensive kind."""
+        response = client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"output_dir": str(tmp_path / "out"), "recrods": 10},
+        )
+        assert response.status_code == 422
+        assert "recrods" in response.text
+
+    def test_an_unknown_edge_case_category_is_named(self, client, project_id, tmp_path) -> None:
+        response = client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"output_dir": str(tmp_path / "out"), "edge_categories": ["glitter"]},
+        )
+        assert response.status_code == 422
+        assert "glitter" in response.text
+
+    def test_pausing_says_so_in_the_jobs_and_in_the_events(
+        self, client, project_id, tmp_path
+    ) -> None:
+        """A paused run whose jobs all say `running` describes nothing real."""
+        import time
+
+        started = client.post(
+            f"/api/projects/{project_id}/runs",
+            json={
+                "output_dir": str(tmp_path / "out"),
+                "records": 4_000,
+                "limits": {"batch_size": 50, "max_workers": 1},
+            },
+        ).json()
+        run_id = started["id"]
+
+        for _ in range(400):
+            if client.post(f"/api/runs/{run_id}/pause").status_code == 200:
+                break
+            time.sleep(0.01)
+        else:  # pragma: no cover - timing
+            pytest.skip("the run finished before it could be paused")
+
+        jobs = client.get(f"/api/runs/{run_id}/jobs").json()
+        assert not any(job["state"] == "running" for job in jobs)
+        kinds = [event["event"] for event in client.get(f"/api/runs/{run_id}/events").json()]
+        assert "run.paused" in kinds
+
+        assert client.post(f"/api/runs/{run_id}/resume").status_code == 200
+        kinds = [event["event"] for event in client.get(f"/api/runs/{run_id}/events").json()]
+        assert "run.resumed" in kinds
+        client.post(f"/api/runs/{run_id}/cancel")
+        await_run(client, run_id)
+
     def test_a_missing_run_is_a_404(self, client) -> None:
         assert client.get("/api/runs/nope").status_code == 404
 

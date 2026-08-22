@@ -93,6 +93,12 @@ class AssetStats:
     deduplicated: int = 0
     reused: int = 0
     bytes_written: int = 0
+    #: Counted by kind, for section 55's image and audio rates. Audio is kept
+    #: in seconds of material, because "clips per minute" says nothing about
+    #: how much audio a run is producing.
+    images: int = 0
+    audio_clips: int = 0
+    audio_seconds: float = 0.0
 
     @property
     def total(self) -> int:
@@ -105,6 +111,9 @@ class AssetStats:
             "deduplicated": self.deduplicated,
             "reused_from_disk": self.reused,
             "bytes_written": self.bytes_written,
+            "images": self.images,
+            "audio_clips": self.audio_clips,
+            "audio_seconds": round(self.audio_seconds, 2),
         }
 
 
@@ -257,6 +266,7 @@ class AssetStore:
         """
         with self._lock:
             self.stats.reused += 1
+            self._count(stored)
             self._record(stored)
         return stored
 
@@ -306,6 +316,7 @@ class AssetStore:
         with self._lock:
             if not replace and self.exists(path):
                 self.stats.reused += 1
+                self._count(stored)
                 self._record(stored)
                 return stored
 
@@ -324,8 +335,24 @@ class AssetStore:
             except OSError as exc:
                 raise OutputError(f"could not write the asset {path}: {exc}") from exc
 
+            self._count(stored)
             self._record(stored)
         return stored
+
+    def _count(self, stored: StoredAsset) -> None:
+        """Tally an asset by kind. Called with the lock held.
+
+        Counted however it was stored - written, deduplicated or reused - because
+        the question these answer is "what is this run producing", and a
+        deduplicated image is still an image the run produced.
+        """
+        if stored.kind == "image" or stored.media_type.startswith("image/"):
+            self.stats.images += 1
+        elif stored.kind in ("audio", "speech") or stored.media_type.startswith("audio/"):
+            self.stats.audio_clips += 1
+            seconds = (stored.metadata or {}).get("duration_seconds")
+            if isinstance(seconds, (int, float)):
+                self.stats.audio_seconds += float(seconds)
 
     def _record(self, stored: StoredAsset) -> None:
         """Append one manifest line. Called with the lock held."""

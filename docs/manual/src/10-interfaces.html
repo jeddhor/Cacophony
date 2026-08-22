@@ -10,9 +10,17 @@
 progress feeds the Studio is built on. One application serves the API and the
 interface, which is what keeps them from drifting apart.</p>
 
-<pre><code class="language-console">$ pip install 'cacophony[api]'
+<pre><code class="language-console">$ .venv/bin/pip install -e '.[api]'
 $ cacophony serve --port 8765
 # interactive documentation at http://127.0.0.1:8765/docs</code></pre>
+
+<p>"Everything the command line does" is meant literally for starting a run: a
+request takes the record counts, per-entity overrides, output layout, failure
+policy, edge cases, assets, provenance, cache and resource limits that
+<code>generate</code> takes. An option it does not recognise is a
+<strong>422</strong> naming the field, rather than a run that quietly ignored
+it &mdash; a misspelled setting that succeeds is the expensive kind of
+typo.</p>
 
 <h2>What serving exposes</h2>
 

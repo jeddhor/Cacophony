@@ -17,8 +17,8 @@ built and how to run it.
 
 All fourteen delivery phases are done. What that does *not* mean is that every
 line of the design document is built: of its 112 sections,
-<!-- claim:sections_implemented -->86<!-- /claim --> are built,
-<!-- claim:sections_partial -->25<!-- /claim --> are partly built and
+<!-- claim:sections_implemented -->88<!-- /claim --> are built,
+<!-- claim:sections_partial -->23<!-- /claim --> are partly built and
 <!-- claim:sections_deferred -->1<!-- /claim --> is deferred, with
 <!-- claim:refusals -->6<!-- /claim --> sub-items considered and refused.
 [docs/CONFORMANCE.md](docs/CONFORMANCE.md) says which, section by section, and
@@ -176,8 +176,8 @@ python docs/manual/build.py
 ```
 
 **What is and is not built.** [docs/CONFORMANCE.md](docs/CONFORMANCE.md) is the
-design document section by section — <!-- claim:sections_implemented -->86<!-- /claim -->
-built, <!-- claim:sections_partial -->25<!-- /claim --> partial,
+design document section by section — <!-- claim:sections_implemented -->88<!-- /claim -->
+built, <!-- claim:sections_partial -->23<!-- /claim --> partial,
 <!-- claim:sections_deferred -->1<!-- /claim --> deferred, and
 <!-- claim:refusals -->6<!-- /claim --> sub-items deliberately refused with the
 reasoning recorded. It is generated from data and checked by CI, because the

@@ -110,9 +110,16 @@ class GenerationRuntime:
         cache: GenerationCache | None = None,
         secrets: SecretResolver | None = None,
         llm_batch_size: int = 20,
+        request_timeout_seconds: float | None = None,
         create_providers: bool = True,
     ) -> GenerationRuntime:
-        """Build a runtime, instantiating the project's declared providers."""
+        """Build a runtime, instantiating the project's declared providers.
+
+        ``request_timeout_seconds`` is section 64's resource control, and it is
+        a *ceiling*: a provider that asks for less keeps it, one that asks for
+        more is capped. The setting was carried into every run configuration
+        and read by nothing, which is a control in name only.
+        """
         registry = providers if providers is not None else ProviderRegistry()
         if providers is None:
             # A fresh registry needs the adapter classes, which register on import.
@@ -133,6 +140,12 @@ class GenerationRuntime:
             for provider_id, spec in project.providers.items():
                 if provider_id in registry:
                     continue
+                if request_timeout_seconds is not None:
+                    spec = spec.model_copy(
+                        update={
+                            "timeout_seconds": min(spec.timeout_seconds, request_timeout_seconds)
+                        }
+                    )
                 try:
                     registry.create(spec, secrets=resolver)
                 except ProviderNotFoundError as exc:

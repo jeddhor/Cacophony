@@ -48,6 +48,24 @@ class ResourceLimits:
     #: Section 66: never permit infinite retry loops.
     max_retries: int = 3
 
+    def below_floor(self, destination: Path | str) -> bool:
+        """Whether free space is under `min_free_disk_mb`, which is a refusal.
+
+        Distinct from the estimate-based warning beside it: one is a measured
+        fact about the disk, the other is an order-of-magnitude guess about the
+        run, and only the first is worth stopping for.
+        """
+        import shutil as _shutil
+
+        target = Path(destination)
+        while not target.exists() and target.parent != target:
+            target = target.parent
+        try:
+            usage = _shutil.disk_usage(target)
+        except OSError:
+            return False
+        return usage.free / (1024 * 1024) < self.min_free_disk_mb
+
     def check_disk(self, destination: Path, *, estimated_bytes: int = 0) -> str | None:
         """Return a complaint if the destination cannot hold the run.
 

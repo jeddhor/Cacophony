@@ -72,10 +72,26 @@ class CreateRunRequest(BaseModel):
     records: int | None = Field(default=None, ge=0)
     seed: int | None = None
 
+    #: Per-entity counts, the API's half of `-n employee=5000`.
+    record_counts: dict[str, int] = Field(default_factory=dict)
+
     validate_records: bool = Field(default=True, alias="validate")
     drop_invalid: bool = False
     provenance: ProvenanceMode = ProvenanceMode.NONE
-    failure_policy: Literal["abort", "retry", "skip", "placeholder", "incomplete"] = "abort"
+    failure_policy: Literal["abort", "retry", "skip", "placeholder", "incomplete", "report"] = (
+        "abort"
+    )
+
+    #: Section 79's deliberate awkwardness, which the API could not ask for.
+    edge_cases: float = Field(default=0.0, ge=0.0, le=1.0)
+    edge_categories: list[str] = Field(default_factory=list)
+
+    #: Where generated media goes, and whether to pay for it again.
+    assets_dir: str | None = None
+    overwrite_assets: bool = False
+
+    #: Recording this run in the store. Off is the API's `--no-history`.
+    record_history: bool = True
 
     cache_mode: CacheMode = CacheMode.DISABLED
     cache_path: str | None = None
@@ -86,7 +102,21 @@ class CreateRunRequest(BaseModel):
     overwrite: bool = False
     limits: LimitsRequest = Field(default_factory=LimitsRequest)
 
-    model_config = {"populate_by_name": True}
+    # Unknown fields are refused rather than ignored: a misspelled option that
+    # silently does nothing is the most expensive kind of typo, because the run
+    # succeeds and the setting was never applied.
+    model_config = {"populate_by_name": True, "extra": "forbid"}
+
+    @field_validator("edge_categories")
+    @classmethod
+    def _known_categories(cls, value: list[str]) -> list[str]:
+        from ..simulation.edges import CATEGORIES
+
+        unknown = [name for name in value if name not in CATEGORIES]
+        if unknown:
+            known = ", ".join(sorted(CATEGORIES))
+            raise ValueError(f"unknown edge-case category {', '.join(unknown)}. Available: {known}")
+        return value
 
     @field_validator("output_format")
     @classmethod
@@ -120,6 +150,12 @@ class CreateRunRequest(BaseModel):
             ),
             entities=list(self.entities),
             records=self.records,
+            record_counts=dict(self.record_counts),
+            edge_cases=self.edge_cases,
+            edge_categories=list(self.edge_categories),
+            assets_dir=Path(self.assets_dir) if self.assets_dir else None,
+            overwrite_assets=self.overwrite_assets,
+            record_history=self.record_history,
             seed=self.seed,
             validate=self.validate_records,
             drop_invalid=self.drop_invalid,

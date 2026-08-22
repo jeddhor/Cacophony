@@ -613,7 +613,10 @@ def create_app(
             "run_id": run_id,
             "state": stored["state"],
             "live": conductor is not None,
-            "records": summary.get("total_written", stored.get("records_written", 0)),
+            # `records_written` is what a snapshot calls it; `total_written` is
+            # the property it comes from, and reading the summary by that name
+            # silently fell through to the stored count on every live run.
+            "records": summary.get("records_written", stored.get("records_written", 0)),
             "quality": summary.get("quality") or {},
             "validation": summary.get("validation") or {},
             "relations": summary.get("relations"),

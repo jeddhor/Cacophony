@@ -79,7 +79,8 @@ rather than fidelity.</p>
     <tr><td class="mono">-n, --records N</td><td>&mdash;</td><td>Override every entity's count. Repeatable, and <code>-n ticket=100000</code> overrides one entity</td></tr>
     <tr><td class="mono">--seed N</td><td>project</td><td>Override the project seed</td></tr>
     <tr><td class="mono">-o, --output FORMAT</td><td><code>jsonl</code></td><td>csv, json, jsonl, ndjson, parquet, sql, sqlite</td></tr>
-    <tr><td class="mono">-d, --out-dir DIR</td><td><code>out</code></td><td>Destination directory</td></tr>
+    <tr><td class="mono">-d, --out-dir DIR</td><td><code>out</code></td><td>Destination directory. A run refuses one that already holds output it would own</td></tr>
+    <tr><td class="mono">--overwrite</td><td>off</td><td>Replace that output instead of refusing &mdash; those files, their parts and their partition directories, and nothing else</td></tr>
     <tr><td class="mono">--output-profile NAME</td><td>&mdash;</td><td>Write a layout declared under <code>outputs:</code> (chapter&nbsp;10)</td></tr>
     <tr><td class="mono">-e, --entity NAME</td><td>all</td><td>Generate one entity</td></tr>
     <tr><td class="mono">--batch-size N</td><td><code>1000</code></td><td>Records per write batch</td></tr>
@@ -378,6 +379,20 @@ resume changes nothing about the resumed run: it continues the dataset it
 started. The paths are the run's own, resolved when it began, so resuming from
 a different working directory continues that dataset rather than starting a
 second one beside you.</p>
+
+<h2>What a run reports while it runs</h2>
+
+<p>Section 55's figures, over the socket and in the run row: records and tokens
+a second, disk throughput, images a minute, audio minutes a minute, progress
+and an estimate of what is left, per entity and for the run. They are folded in
+per batch rather than per finished entity, so a single-entity run that takes an
+hour is not a dashboard of zeros for fifty-nine minutes.</p>
+
+<p>Bytes are attributed to the destination that grew, which matters for SQLite:
+every entity writes into one database, and asking each writer how large its
+file is and adding the answers counts the same bytes once per entity. Queue
+depth is the number of jobs waiting for a worker &mdash; a number section 86
+asks for, and one this reported as zero for as long as it existed.</p>
 
 <h2>Events</h2>
 

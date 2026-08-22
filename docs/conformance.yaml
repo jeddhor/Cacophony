@@ -114,7 +114,13 @@ sections:
       Stdout, file, syslog, HTTP, Kafka and an in-memory window, with rates,
       retargeting and attainment. The section's database destination is not
       built; a stream cannot write into a table.
-  - {section: 36, state: implemented}
+  - section: 36
+    state: implemented
+    note: >
+      Every route the section lists, and a run request that takes what
+      `generate` takes - per-entity counts, edge cases, assets, history and
+      all six failure policies. An unknown field is refused rather than
+      ignored.
   - {section: 37, state: implemented, note: "28 commands."}
   - {section: 38, state: implemented}
   - {section: 39, state: implemented}
@@ -160,13 +166,13 @@ sections:
       provider requirements the run actually has, and an estimate in 69's own
       units - tokens and peak memory rather than a guess.
   - section: 55
-    state: partial
+    state: implemented
     note: >
-      Progress, throughput and per-entity counters, live over a socket, and
-      bytes on disk now that something feeds that counter. Three of the
-      section's rates are still missing - disk, images and audio per unit time
-      - and byte accounting is per writer, so several entities sharing one
-      SQLite file count it several times.
+      Every figure the section lists, live over a socket: progress, records and
+      tokens a second, disk throughput, images a minute, audio minutes a
+      minute, and per-entity counters. Bytes are attributed to the destination
+      that grew, so entities sharing one SQLite file are not counted three
+      times.
   - section: 56
     state: partial
     note: >
@@ -233,14 +239,13 @@ sections:
   - section: 64
     state: partial
     note: >
-      Six of the seven settings exist - workers, provider concurrency, disk
-      threshold, memory ceiling, request timeout, retry count - and three of
-      those six are weaker than they look. The memory ceiling is recorded
-      rather than enforced; the disk threshold is a pre-flight warning rather
-      than a floor a run refuses to cross; and the request timeout is carried
-      into the run configuration without an adapter reading it, so a provider
-      uses its own. `max_retries` is passed as an attempt count, so 1 means one
-      attempt and no retry. There is no CPU ceiling.
+      Six of the seven settings exist and are enforced: workers, provider
+      concurrency, batch size, the disk threshold (a run below the floor does
+      not start), the request timeout (a ceiling on every provider's own), and
+      the retry count, which now means retries rather than attempts. The
+      memory ceiling is recorded rather than enforced, and there is no CPU
+      ceiling - a limit this process cannot impose on itself without lying
+      about it.
   - section: 65
     state: partial
     note: >
@@ -320,13 +325,13 @@ sections:
   - {section: 84, state: implemented}
   - {section: 85, state: implemented}
   - section: 86
-    state: partial
+    state: implemented
     note: >
       Every log field the section lists, structured, with a run and job on
-      every line. Of the metrics, queue depth is reported and never measured,
-      and provider latency, errors and retries are folded in when an entity
-      finishes rather than while it runs - so a long single-entity run shows
-      zeros until the end.
+      every line, and every metric measured while the run happens - provider
+      latency, errors and retries per batch rather than per finished entity,
+      and a queue depth that counts jobs waiting for a worker rather than
+      reporting zero forever.
   - {section: 87, state: implemented}
   - section: 88
     state: partial

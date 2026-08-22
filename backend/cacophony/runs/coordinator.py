@@ -245,6 +245,12 @@ class Conductor:
         self._semantic: dict[str, Any] = {}
         #: Entities whose uniqueness could not be rechecked across a resume.
         self._unique_gaps: list[str] = []
+        #: Images and audio-seconds already folded into the live rates.
+        self._assets_seen: tuple[int, float] = (0, 0.0)
+        #: How large each destination was when it was last measured, so bytes
+        #: are attributed to the file that grew rather than to every writer
+        #: that happens to share it.
+        self._destination_bytes: dict[str, int] = {}
         #: Set by :meth:`resume`; a resumed run reports differently and skips
         #: the planning step because its jobs come from the store.
         self._resumed = False
@@ -294,6 +300,7 @@ class Conductor:
             self.compiled.spec,
             cache=cache,
             llm_batch_size=self.config.limits.llm_batch_size,
+            request_timeout_seconds=self.config.limits.request_timeout_seconds,
         )
 
     def _entity_names(self) -> list[str]:
@@ -413,6 +420,11 @@ class Conductor:
             self.config.output_dir, estimated_bytes=estimated_bytes
         )
         if complaint:
+            # A floor is a floor. Below the free-space threshold the run does
+            # not start; the estimate-based complaint stays a warning, because
+            # section 69 is explicit that an estimate is not a measurement.
+            if self.config.limits.below_floor(self.config.output_dir):
+                raise GenerationError(complaint)
             warnings.append(complaint)
 
         if self.runtime is not None:
@@ -592,6 +604,10 @@ class Conductor:
         declared dead. Every task is cancelled and awaited before the failure
         is re-raised, so a terminal state means nothing is still writing.
         """
+        # Everything in this layer is ready and waiting for a worker; the depth
+        # falls as each one gets a slot. Section 86 asks for this number, and
+        # for a long time it was reported as zero because nothing set it.
+        self.metrics.queue_depth = len(ready)
         tasks = [
             asyncio.create_task(self._guarded(job, limit), name=f"cacophony-job-{job.entity}")
             for job in ready
@@ -615,6 +631,8 @@ class Conductor:
 
     async def _guarded(self, job: PlannedJob, limit: asyncio.Semaphore) -> None:
         async with limit:
+            # Off the queue and onto a worker.
+            self.metrics.queue_depth = max(0, self.metrics.queue_depth - 1)
             await self._run_entity_job(job)
 
     async def _run_entity_job(self, job: PlannedJob) -> None:
@@ -676,8 +694,12 @@ class Conductor:
         since_checkpoint = 0
         batch_started = time.perf_counter()
         # Where this destination started. A resumed run continues somebody
-        # else's file, and only what this attempt adds is this attempt's.
-        written_bytes = writer.bytes_written
+        # else's file, and only what this attempt adds is this attempt's. Keyed
+        # by destination rather than by writer: in a SQLite run every entity
+        # writes into one database, and one file's growth counted once per
+        # writer is the same bytes counted three times.
+        destination = str(Path(writer.path).resolve())  # type: ignore[attr-defined]
+        self._destination_bytes.setdefault(destination, writer.bytes_written)
 
         await writer.open()
         try:
@@ -705,10 +727,11 @@ class Conductor:
                 # byte rate at all: section 55 asks for disk throughput, and
                 # this counter was never given anything to count.
                 on_disk = writer.bytes_written
-                self.metrics.record_batch(
-                    job.entity, len(chunk.records), bytes_written=max(0, on_disk - written_bytes)
+                grew = max(0, on_disk - self._destination_bytes.get(destination, 0))
+                self._destination_bytes[destination] = max(
+                    on_disk, self._destination_bytes.get(destination, 0)
                 )
-                written_bytes = on_disk
+                self.metrics.record_batch(job.entity, len(chunk.records), bytes_written=grew)
                 self.log.batch(
                     entity=job.entity,
                     first=first,
@@ -718,6 +741,12 @@ class Conductor:
                 )
                 batch_started = time.perf_counter()
 
+                self._absorb_asset_stats()
+                # Folded in per batch rather than when the entity finishes: a
+                # single-entity run showed zeros for provider calls, tokens and
+                # validation failures until the very end, which is exactly when
+                # nobody needs them (section 86).
+                self._absorb_engine_stats(engine, job.entity)
                 self._emit_progress(job)
 
                 # Progress is recorded after *every* batch, not every
@@ -779,7 +808,11 @@ class Conductor:
                 drop_invalid=self.config.drop_invalid,
                 provenance=self.config.provenance,
                 failure_policy=self.config.failure_policy,
-                max_attempts=self.config.limits.max_retries,
+                # Retries, not attempts: `max_retries=1` means one retry, so
+                # two attempts. Passed straight through, it meant one attempt
+                # and no retry at all - a setting that did the opposite of its
+                # name (section 64).
+                max_attempts=self.config.limits.max_retries + 1,
                 run_id=self.run_id,
                 runtime=self.runtime,
                 assets=self.assets,
@@ -1029,6 +1062,17 @@ class Conductor:
                 **self.metrics.snapshot(),
             },
         )
+
+    def _absorb_asset_stats(self) -> None:
+        """Media produced since the last look, as section 55's two rates."""
+        store = self._asset_store
+        if store is None:
+            return
+        images = store.stats.images - self._assets_seen[0]
+        seconds = store.stats.audio_seconds - self._assets_seen[1]
+        if images or seconds:
+            self.metrics.record_assets(images=max(0, images), audio_seconds=max(0.0, seconds))
+            self._assets_seen = (store.stats.images, store.stats.audio_seconds)
 
     def _absorb_engine_stats(self, engine: GenerationEngine, entity: str) -> None:
         stats = engine.stats.get(entity)

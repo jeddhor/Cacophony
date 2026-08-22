@@ -23,7 +23,7 @@ from ..core.files import atomic_write_text
 from ..runs.config import RunConfig
 from ..runs.coordinator import Conductor
 from ..runs.events import EventBus, EventKind
-from ..runs.state import RunState
+from ..runs.state import JobState, RunState
 from ..schema.compiler import compile_project
 from ..schema.loader import load_project, load_project_data
 from ..store.database import Database
@@ -362,6 +362,12 @@ class RunService:
             return False
         conductor.handle.pause()
         self.repository.update_run(run_id, state=RunState.PAUSED.value)
+        # The state of the jobs, not only of the run: a paused run whose jobs
+        # all say `running` is a run inspector describing something that is not
+        # happening. And the event is emitted so it reaches the log the manual
+        # says holds it (section 56).
+        self._hold_jobs(run_id, JobState.PAUSED)
+        conductor.bus.emit(EventKind.RUN_PAUSED, run_id, message="paused", data={"source": "api"})
         return True
 
     def resume_paused(self, run_id: str) -> bool:
@@ -371,7 +377,16 @@ class RunService:
             return False
         conductor.handle.resume()
         self.repository.update_run(run_id, state=RunState.RUNNING.value)
+        self._hold_jobs(run_id, JobState.RUNNING)
+        conductor.bus.emit(EventKind.RUN_RESUMED, run_id, message="resumed", data={"source": "api"})
         return True
+
+    def _hold_jobs(self, run_id: str, state: JobState) -> None:
+        """Move this run's in-flight jobs into ``state``."""
+        moving = {JobState.RUNNING, JobState.PAUSED}
+        for row in self.repository.get_jobs(run_id):
+            if JobState(row["state"]) in moving and JobState(row["state"]) is not state:
+                self.repository.update_job(row["id"], state=state.value)
 
     def cancel(self, run_id: str) -> bool:
         conductor = self._live(run_id)
