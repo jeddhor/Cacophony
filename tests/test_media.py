@@ -36,7 +36,7 @@ from cacophony.assets.audio import (
 from cacophony.assets.documents import PAGE_SIZES, Document, render_template
 from cacophony.assets.imaging import Canvas, encode_png, is_png
 from cacophony.assets.store import AssetStore, extension_for
-from cacophony.core.errors import GenerationError
+from cacophony.core.errors import CacophonyError, GenerationError, OutputError
 from cacophony.generation.engine import GenerationEngine
 from cacophony.generation.runtime import GenerationRuntime
 from cacophony.providers.base import ImageRequest, SpeechRequest
@@ -277,6 +277,227 @@ class TestDocuments:
 # --------------------------------------------------------------------------- #
 # The asset store
 # --------------------------------------------------------------------------- #
+
+
+class TestRasterisedDocuments:
+    """Section 23's optional half: the page as a scanner would see it."""
+
+    def _document(self):
+        from cacophony.assets.documents import Document
+
+        return Document(page_size="a4").layout(
+            "INVOICE INV-2026-0042\n\nAcme Corporation\nTotal due 1,284.00"
+        )
+
+    def test_a_page_becomes_an_image(self) -> None:
+        pytest.importorskip("PIL")
+        from cacophony.assets.imaging import is_png
+        from cacophony.assets.scanning import render_page
+
+        data, media_type = render_page(self._document(), dpi=100)
+        assert media_type == "image/png"
+        assert is_png(data)
+
+    def test_jpeg_is_available_for_the_pipelines_that_want_it(self) -> None:
+        pytest.importorskip("PIL")
+        from cacophony.assets.scanning import Degradation, render_page
+
+        data, media_type = render_page(
+            self._document(), dpi=100, image_format="jpeg", degrade=Degradation(quality=40)
+        )
+        assert media_type == "image/jpeg"
+        assert data[:2] == b"\xff\xd8"
+
+    def test_degradation_changes_the_page_and_not_its_content(self) -> None:
+        pytest.importorskip("PIL")
+        from cacophony.assets.scanning import Degradation, render_page
+
+        clean, _ = render_page(self._document(), dpi=100)
+        spoiled, _ = render_page(
+            self._document(),
+            dpi=100,
+            degrade=Degradation(rotate=1.2, blur=0.5, speckle=0.002, contrast=0.8),
+            seed=3,
+        )
+        assert clean != spoiled
+
+    def test_the_same_seed_scans_the_same_way(self) -> None:
+        pytest.importorskip("PIL")
+        from cacophony.assets.scanning import Degradation, render_page
+
+        spoil = Degradation(rotate=1.0, speckle=0.002)
+        first, _ = render_page(self._document(), dpi=100, degrade=spoil, seed=9)
+        again, _ = render_page(self._document(), dpi=100, degrade=spoil, seed=9)
+        other, _ = render_page(self._document(), dpi=100, degrade=spoil, seed=10)
+        assert first == again
+        assert first != other
+
+    def test_an_unknown_degradation_lists_the_ones_there_are(self) -> None:
+        from cacophony.assets.scanning import Degradation
+
+        with pytest.raises(OutputError, match="Available"):
+            Degradation.from_options({"sepia": 0.5})
+
+    def test_higher_dpi_is_a_bigger_image(self) -> None:
+        pytest.importorskip("PIL")
+        from cacophony.assets.scanning import render_page
+
+        small, _ = render_page(self._document(), dpi=72)
+        large, _ = render_page(self._document(), dpi=200)
+        assert len(large) > len(small)
+
+    def test_the_generator_records_the_text_it_rendered(self) -> None:
+        """An OCR dataset without an answer key is a pile of pictures."""
+        pytest.importorskip("PIL")
+        import asyncio
+        import tempfile
+
+        from cacophony.assets.store import AssetStore
+        from cacophony.generation.engine import GenerationEngine
+        from cacophony.schema.compiler import compile_project
+        from cacophony.schema.loader import load_project_data
+
+        project = load_project_data(
+            {
+                "project": {"name": "Scans", "seed": 2},
+                "entities": {
+                    "letter": {
+                        "count": 2,
+                        "fields": {
+                            "who": {"type": "string", "generator": "constant", "value": "Ada"},
+                            "scan": {
+                                "type": "file",
+                                "generator": "document",
+                                "rasterise": True,
+                                "dpi": 90,
+                                "template": "Dear {who},\n\nRegards.",
+                                "degrade": {"rotate": 0.5, "speckle": 0.001},
+                            },
+                        },
+                    }
+                },
+            }
+        )
+        engine = GenerationEngine(compile_project(project), assets=AssetStore(tempfile.mkdtemp()))
+        records = asyncio.run(engine.generate_batch("letter", 2))
+
+        asset = records[0].assets[0]
+        assert asset.media_type == "image/png"
+        assert asset.metadata["text"].startswith("Dear Ada")
+        assert asset.metadata["degraded"] is True
+        assert asset.metadata["dpi"] == 90
+
+    def test_rasterising_a_text_file_is_refused(self) -> None:
+        from cacophony.schema.compiler import compile_project
+        from cacophony.schema.loader import load_project_data
+
+        with pytest.raises(CacophonyError, match="rasterise"):
+            compile_project(
+                load_project_data(
+                    {
+                        "project": {"name": "Scans", "seed": 2},
+                        "entities": {
+                            "letter": {
+                                "count": 1,
+                                "fields": {
+                                    "scan": {
+                                        "type": "file",
+                                        "generator": "document",
+                                        "format": "txt",
+                                        "rasterise": True,
+                                        "template": "hello",
+                                    }
+                                },
+                            }
+                        },
+                    }
+                )
+            )
+
+    def test_degrading_without_rasterising_is_refused(self) -> None:
+        from cacophony.schema.compiler import compile_project
+        from cacophony.schema.loader import load_project_data
+
+        with pytest.raises(CacophonyError, match="rasterise"):
+            compile_project(
+                load_project_data(
+                    {
+                        "project": {"name": "Scans", "seed": 2},
+                        "entities": {
+                            "letter": {
+                                "count": 1,
+                                "fields": {
+                                    "doc": {
+                                        "type": "file",
+                                        "generator": "document",
+                                        "template": "hello",
+                                        "degrade": {"blur": 1.0},
+                                    }
+                                },
+                            }
+                        },
+                    }
+                )
+            )
+
+
+class TestTheOcrTemplate:
+    """Section 70's Multimodal OCR template: pages, and the text in them."""
+
+    def _template(self):
+        from cacophony.schema.compiler import compile_project
+        from cacophony.schema.loader import load_project
+        from helpers import TEMPLATES
+
+        return compile_project(load_project(TEMPLATES / "multimodal-ocr.yaml"))
+
+    def test_it_compiles(self) -> None:
+        compiled = self._template()
+        assert set(compiled.entities) == {"supplier", "invoice"}
+
+    def test_every_page_has_the_text_that_made_it(self) -> None:
+        """The pairing is the point: an OCR set needs an answer key."""
+        pytest.importorskip("PIL")
+        import asyncio
+        import tempfile
+
+        from cacophony.assets.store import AssetStore
+
+        engine = GenerationEngine(
+            self._template(),
+            counts={"supplier": 5, "invoice": 4},
+            assets=AssetStore(tempfile.mkdtemp()),
+        )
+        records = asyncio.run(engine.generate_batch("invoice", 4))
+
+        assert len(records) == 4
+        for record in records:
+            assert record.assets, "every invoice should have been scanned"
+            asset = record.assets[0]
+            assert asset.media_type == "image/jpeg"
+            assert asset.metadata["degraded"] is True
+            # The image and the record agree about what the invoice says.
+            assert record.values["invoice_number"] in asset.metadata["text"]
+            assert record.values["document_text"] == asset.metadata["text"]
+
+    def test_the_arithmetic_holds(self) -> None:
+        """A scanned invoice whose total is wrong teaches a model the wrong thing."""
+        import tempfile
+        from decimal import Decimal
+
+        from cacophony.assets.store import AssetStore
+
+        pytest.importorskip("PIL")
+        engine = GenerationEngine(
+            self._template(),
+            counts={"supplier": 5, "invoice": 6},
+            assets=AssetStore(tempfile.mkdtemp()),
+        )
+        for record in engine.preview("invoice", 6):
+            values = record.values
+            assert Decimal(str(values["subtotal"])) + Decimal(str(values["tax"])) == Decimal(
+                str(values["total"])
+            )
 
 
 class TestAssetStore:

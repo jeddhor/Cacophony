@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from ..core.errors import OutputError
 from ..core.interfaces import OutputWriter
 from .database import SqliteWriter, SqlScriptWriter, align_table, sql_type_for
+from .remote import ElasticsearchWriter, ObjectStoreWriter
 from .writers import (
     MAX_OPEN_PARTITIONS,
     CsvWriter,
@@ -26,11 +27,14 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = [
     "OUTPUT_FORMATS",
+    "REQUIRED_OPTIONS",
     "SINGLE_FILE_FORMATS",
     "CsvWriter",
+    "ElasticsearchWriter",
     "FileWriter",
     "JsonLinesWriter",
     "JsonWriter",
+    "ObjectStoreWriter",
     "ParquetWriter",
     "PartitionedWriter",
     "SqlScriptWriter",
@@ -45,7 +49,9 @@ __all__ = [
     "sql_type_for",
 ]
 
-OUTPUT_FORMATS: dict[str, type[FileWriter]] = {
+# `OutputWriter` rather than `FileWriter`: two of these do not write a file,
+# which is section 33's whole point and the reason `remote.py` exists.
+OUTPUT_FORMATS: dict[str, type[OutputWriter]] = {
     "csv": CsvWriter,
     "json": JsonWriter,
     "jsonl": JsonLinesWriter,
@@ -53,9 +59,21 @@ OUTPUT_FORMATS: dict[str, type[FileWriter]] = {
     "parquet": ParquetWriter,
     "sqlite": SqliteWriter,
     "sql": SqlScriptWriter,
+    # Section 33's "Later" destinations. Not files, and the module says how
+    # each one deals with that.
+    "elasticsearch": ElasticsearchWriter,
+    "opensearch": ElasticsearchWriter,
+    "s3": ObjectStoreWriter,
 }
 """Registered output formats. Stream and object-store writers register here in
 later phases without anything above having to change."""
+
+#: Options a format cannot start without. Everything else has a default.
+REQUIRED_OPTIONS: dict[str, tuple[str, ...]] = {
+    "elasticsearch": ("url",),
+    "opensearch": ("url",),
+    "s3": ("bucket",),
+}
 
 SINGLE_FILE_FORMATS = frozenset({"sqlite"})
 """Formats where every entity writes into one destination.
@@ -78,7 +96,7 @@ def describe_formats() -> list[dict[str, Any]]:
     `ndjson` is `jsonl` under another name, and offering both as separate
     choices only invites the question of how they differ.
     """
-    by_writer: dict[type[FileWriter], dict[str, Any]] = {}
+    by_writer: dict[type[OutputWriter], dict[str, Any]] = {}
     for name, writer_class in OUTPUT_FORMATS.items():
         entry = by_writer.get(writer_class)
         if entry is None:
@@ -89,13 +107,17 @@ def describe_formats() -> list[dict[str, Any]]:
                 "single_file": name in SINGLE_FILE_FORMATS,
                 "partitionable": name not in SINGLE_FILE_FORMATS,
                 "summary": _summary(writer_class),
+                # Options without which this format cannot run. An interface
+                # that offers a destination it cannot configure is offering an
+                # error message.
+                "requires": list(REQUIRED_OPTIONS.get(name, ())),
             }
         else:
             entry["aliases"].append(name)
     return sorted(by_writer.values(), key=lambda entry: str(entry["name"]))
 
 
-def _summary(writer_class: type[FileWriter]) -> str:
+def _summary(writer_class: type[OutputWriter]) -> str:
     """The first line of a writer's docstring, which is what it is for.
 
     The design-document reference every docstring carries is for a reader of

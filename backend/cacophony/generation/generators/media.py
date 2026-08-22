@@ -490,10 +490,18 @@ class DocumentGenerator(MediaGenerator):
         ``title``       a title template
         ``page_size``   a4, a5, letter, legal
         ``font`` / ``font_size``
+        ``rasterise``   produce a page *image* instead of the document
+        ``dpi``         how finely, when rasterising. Default 150
+        ``image_format`` ``png`` (default) or ``jpeg``
+        ``degrade``     skew, blur, speckle, contrast, JPEG quality
 
     Needs no provider: a document is rendered from the record it describes, so
     this is the one media generator that works on any machine with nothing
     configured.
+
+    Rasterising is section 23's optional half, and it is what an OCR dataset
+    needs: the page as a scanner would see it, with the text that produced it
+    recorded in the manifest as the answer key.
     """
 
     requires_provider = None
@@ -506,6 +514,17 @@ class DocumentGenerator(MediaGenerator):
     def prepare(self) -> None:
         super().prepare()
         self.format = self.opt_choice("format", ("pdf", "html", "txt"), "pdf")
+        self.rasterise = self.opt_bool("rasterise", False, "scan", "as_image")
+        self.dpi = self.opt_int("dpi", 150) or 150
+        self.image_format = self.opt_choice("image_format", ("png", "jpeg"), "png")
+        self.degrade = self.opt("degrade", None, "degradation")
+        if self.rasterise and self.format != "pdf":
+            raise self._fail(
+                f"'rasterise' renders the laid-out page, which only the pdf format "
+                f"produces - not {self.format}. Drop 'format', or drop 'rasterise'."
+            )
+        if self.degrade is not None and not self.rasterise:
+            raise self._fail("'degrade' only means something with 'rasterise: true'")
         self.template = self.opt_str("template", None, "body")
         self.template_path = self.opt_str("template_path", None, "path")
         if not self.template and not self.template_path:
@@ -565,6 +584,33 @@ class DocumentGenerator(MediaGenerator):
                 font=self.font,
                 size=self.font_size,
             ).layout(text)
+
+            if self.rasterise:
+                from ...assets.scanning import Degradation, render_page
+
+                data, media_type = render_page(
+                    document,
+                    dpi=self.dpi,
+                    image_format=self.image_format,
+                    degrade=Degradation.from_options(self.degrade),
+                    seed=self._seed_for(context),
+                )
+                return (
+                    data,
+                    media_type,
+                    {
+                        "format": self.image_format,
+                        "title": title,
+                        "characters": len(text),
+                        "dpi": self.dpi,
+                        "pages": len(document.pages),
+                        "degraded": not Degradation.from_options(self.degrade).is_noop,
+                        # The answer key. An OCR dataset without one is a pile
+                        # of pictures (section 23).
+                        "text": text,
+                    },
+                )
+
             data = document.to_pdf()
 
         return (
@@ -574,10 +620,16 @@ class DocumentGenerator(MediaGenerator):
         )
 
     def placeholder(self, context: GenerationContext) -> Any:
-        suffix = {"pdf": "pdf", "html": "html", "txt": "txt"}[self.format]
+        suffix = (
+            self.image_format
+            if self.rasterise
+            else {"pdf": "pdf", "html": "html", "txt": "txt"}[self.format]
+        )
         return f"assets/{context.entity.name}/placeholder_{context.record_index:08d}.{suffix}"
 
     def describe(self) -> str:
+        if self.rasterise:
+            return f"document(scanned {self.image_format}, {self.dpi}dpi)"
         return f"document({self.format})"
 
 

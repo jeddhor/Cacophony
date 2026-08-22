@@ -90,7 +90,12 @@ def count_pages() -> int | None:
 
 def count_registry() -> dict[str, int | None]:
     """Sizes that are facts about the code: generators, recipes, commands."""
-    counts: dict[str, int | None] = {"generators": None, "recipes": None, "commands": None}
+    counts: dict[str, int | None] = {
+        "generators": None,
+        "recipes": None,
+        "commands": None,
+        "templates": None,
+    }
     try:
         sys.path.insert(0, str(ROOT / "backend"))
         from cacophony.generation.registry import REGISTRY
@@ -107,6 +112,7 @@ def count_registry() -> dict[str, int | None]:
         from cacophony.cli.main import app as cli
 
         counts["commands"] = len(getattr(typer.main.get_command(cli), "commands", {}))
+        counts["templates"] = len(list((ROOT / "templates").glob("*.yaml")))
     except Exception:  # pragma: no cover - a partial install should not fail the docs
         pass
     return counts
@@ -261,6 +267,10 @@ CLAIM_FILES = {
         "<!-- /claim -->",
     ),
     ROOT / "docs" / "manual" / "src" / "04-generators.html": (
+        "<!-- claim:{key} -->",
+        "<!-- /claim -->",
+    ),
+    ROOT / "docs" / "manual" / "src" / "06-worlds.html": (
         "<!-- claim:{key} -->",
         "<!-- /claim -->",
     ),

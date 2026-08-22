@@ -303,6 +303,16 @@ class OutputWriter(ABC):
     #: instead (design document section 32).
     appendable: ClassVar[bool] = False
 
+    def __init__(self, path: str | Path, **options: Any) -> None:
+        """Every writer is built the same way: a destination and its options.
+
+        Declared here rather than left to each subclass so the registry can be
+        typed as "some writer" - which it has to be, because two of them do not
+        write to a filesystem at all (section 33).
+        """
+        self.path = Path(path)
+        self.options = options
+
     @abstractmethod
     async def open(self) -> None:
         raise NotImplementedError

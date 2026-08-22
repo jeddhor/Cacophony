@@ -67,11 +67,14 @@ sections:
       `sound` generator, synthesised rather than sampled so ten thousand alarms
       cost no GPU.
   - section: 23
-    state: partial
+    state: implemented
     note: >
-      Documents render to TXT, HTML and PDF from the record they describe. The
-      section's optional extras - degrading a page and rasterising it into an
-      image for OCR pipelines - are not built.
+      Documents render to TXT, HTML and PDF from the record they describe, and
+      `rasterise: true` produces the page as an image instead - skewed,
+      blurred, speckled and greyed to taste - with the text that produced it
+      recorded in the manifest as the answer key. Rendered from the laid-out
+      document rather than from the PDF bytes, so no PDF engine has to be
+      shipped to read back what this program just wrote.
   - {section: 24, state: implemented}
   - section: 25
     state: partial
@@ -103,13 +106,15 @@ sections:
     state: partial
     note: >
       The section's own "Initial support" list is complete, partitioned
-      directories included. Of its "Later" list nothing is built as an output
-      format: Kafka and HTTP exist as live-stream destinations (section 35) and
-      a plugin can register a writer, but neither is what this section asks
-      for, and Elasticsearch and object storage have neither.
-    defers:
-      ["PostgreSQL", "MySQL/MariaDB", "SQL Server", "MongoDB",
-       "Elasticsearch/OpenSearch", "object storage"]
+      directories included. Of its "Later" list, Elasticsearch, OpenSearch and
+      object storage are built: the search writer indexes through the bulk API
+      with a document id derived from the record's position, so re-running
+      converges rather than duplicating, and the object writer produces the
+      ordinary local file and uploads it when it closes. Kafka and HTTP exist
+      as live-stream destinations (section 35) rather than as output formats,
+      which is a different thing and said so here. The four relational
+      databases remain a schedule.
+    defers: ["PostgreSQL", "MySQL/MariaDB", "SQL Server", "MongoDB"]
   - {section: 34, state: implemented, note: "`--output-profile`, with partitioning."}
   - section: 35
     state: implemented
@@ -289,12 +294,12 @@ sections:
           here would be a guess wearing a unit.
   - {section: 68, state: implemented}
   - section: 70
-    state: partial
+    state: implemented
     note: >
-      Eight templates, each asserted in the suite, covering seven of the
-      section's list. The Multimodal OCR template is not among them - the
-      shipped multimodal template generates support-call audio and badge
-      images instead.
+      Nine templates, each asserted in the suite, covering the section's list.
+      Multimodal OCR is scanned supplier invoices paired with the exact text
+      that was rendered into them - the one kind of dataset that can honestly
+      ship an answer key.
   - section: 71
     state: implemented
     note: >

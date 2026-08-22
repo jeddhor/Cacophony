@@ -294,3 +294,200 @@ class TestPartitionedOutput:
         root = tmp_path / "employee"
         self._write("jsonl", root, rows, compiled.entity("employee").field_order)
         assert align_to_records(root, 0, "jsonl") == 40
+
+
+# --------------------------------------------------------------------------- #
+# Section 33's destinations that are not files
+# --------------------------------------------------------------------------- #
+
+
+class TestElasticsearch:
+    """The bulk API, against a transport that answers instead of a cluster."""
+
+    def _writer(self, handler, **options):
+        import httpx
+
+        from cacophony.outputs import create_writer as build
+
+        writer = build("elasticsearch", "/tmp/unused", url="http://es.example:9200", **options)
+        writer._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        return writer
+
+    def _ok(self, seen):
+        import httpx
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, json={"errors": False, "items": []})
+
+        return handler
+
+    def test_it_sends_one_action_and_one_document_per_record(self, records) -> None:
+        _compiled, rows = records
+        seen: list = []
+        writer = self._writer(self._ok(seen), index="people")
+
+        asyncio.run(writer.write_batch(rows[:3]))
+        asyncio.run(writer.close())
+
+        lines = seen[0].content.decode().strip().split("\n")
+        assert len(lines) == 6
+        assert json.loads(lines[0])["index"]["_index"] == "people"
+        assert json.loads(lines[1])["employee_id"].startswith("EMP-")
+        assert writer.records_written == 3
+
+    def test_the_document_id_is_the_records_position(self, records) -> None:
+        """So a re-run overwrites rather than duplicating."""
+        _compiled, rows = records
+        seen: list = []
+        writer = self._writer(self._ok(seen))
+        asyncio.run(writer.write_batch(rows[:2]))
+
+        again: list = []
+        twice = self._writer(self._ok(again))
+        asyncio.run(twice.write_batch(rows[:2]))
+
+        first = [json.loads(line) for line in seen[0].content.decode().strip().split("\n")[::2]]
+        second = [json.loads(line) for line in again[0].content.decode().strip().split("\n")[::2]]
+        assert [item["index"]["_id"] for item in first] == [item["index"]["_id"] for item in second]
+
+    def test_a_partial_failure_is_a_failure(self, records) -> None:
+        """A 200 whose body says `errors` describes documents that are not there."""
+        import httpx
+
+        _compiled, rows = records
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "errors": True,
+                    "items": [{"index": {"error": {"reason": "mapper_parsing_exception"}}}],
+                },
+            )
+
+        writer = self._writer(handler)
+        with pytest.raises(OutputError, match="mapper_parsing_exception"):
+            asyncio.run(writer.write_batch(rows[:1]))
+
+    def test_a_refused_batch_is_reported(self, records) -> None:
+        import httpx
+
+        _compiled, rows = records
+        writer = self._writer(lambda request: httpx.Response(403, text="forbidden"))
+        with pytest.raises(OutputError, match="403"):
+            asyncio.run(writer.write_batch(rows[:1]))
+
+    def test_it_batches_at_the_bulk_size(self, records) -> None:
+        _compiled, rows = records
+        seen: list = []
+        writer = self._writer(self._ok(seen), bulk_size=5)
+        asyncio.run(writer.write_batch(rows[:12]))
+        assert len(seen) == 3
+
+    def test_without_a_url_it_says_so(self) -> None:
+        with pytest.raises(OutputError, match="url"):
+            create_writer("elasticsearch", "/tmp/unused")
+
+
+class TestObjectStorage:
+    """Write the ordinary file, then put it in a bucket."""
+
+    def _uploaded(self):
+        seen: list[tuple[str, str, str, int]] = []
+
+        def uploader(source: Path, bucket: str, key: str) -> None:
+            seen.append((source.name, bucket, key, source.stat().st_size))
+
+        return seen, uploader
+
+    def test_the_local_file_is_a_normal_file(self, tmp_path: Path, records) -> None:
+        _compiled, rows = records
+        _seen, uploader = self._uploaded()
+
+        write(
+            "s3",
+            tmp_path / "employee",
+            rows[:10],
+            columns=list(rows[0].values),
+            bucket="datasets",
+            format="jsonl",
+            uploader=uploader,
+        )
+
+        written = tmp_path / "employee.jsonl"
+        assert written.exists()
+        assert len(written.read_text().strip().split("\n")) == 10
+
+    def test_it_uploads_once_when_it_closes(self, tmp_path: Path, records) -> None:
+        _compiled, rows = records
+        seen, uploader = self._uploaded()
+
+        write(
+            "s3",
+            tmp_path / "employee",
+            rows[:10],
+            columns=list(rows[0].values),
+            bucket="datasets",
+            prefix="2026/q1",
+            uploader=uploader,
+        )
+
+        assert len(seen) == 1
+        _name, bucket, key, size = seen[0]
+        assert (bucket, key) == ("datasets", "2026/q1/employee.jsonl")
+        assert size > 0
+
+    def test_it_can_take_the_local_copy_away(self, tmp_path: Path, records) -> None:
+        _compiled, rows = records
+        _seen, uploader = self._uploaded()
+
+        write(
+            "s3",
+            tmp_path / "employee",
+            rows[:5],
+            columns=list(rows[0].values),
+            bucket="datasets",
+            keep_local=False,
+            uploader=uploader,
+        )
+
+        assert not (tmp_path / "employee.jsonl").exists()
+
+    def test_any_file_format_can_go_in_a_bucket(self, tmp_path: Path, records) -> None:
+        _compiled, rows = records
+        seen, uploader = self._uploaded()
+
+        write(
+            "s3",
+            tmp_path / "employee",
+            rows[:5],
+            columns=list(rows[0].values),
+            bucket="datasets",
+            format="csv",
+            uploader=uploader,
+        )
+
+        assert seen[0][2].endswith(".csv")
+        assert (tmp_path / "employee.csv").exists()
+
+    def test_without_a_bucket_it_says_so(self, tmp_path: Path) -> None:
+        with pytest.raises(OutputError, match="bucket"):
+            create_writer("s3", tmp_path / "employee")
+
+    def test_an_unknown_inner_format_lists_the_ones_there_are(self, tmp_path: Path) -> None:
+        with pytest.raises(OutputError, match="jsonl"):
+            create_writer("s3", tmp_path / "employee", bucket="datasets", format="papyrus")
+
+
+class TestTheRegistryDescribesWhatEachFormatNeeds:
+    def test_a_destination_that_needs_configuring_says_which_option(self) -> None:
+        from cacophony.outputs import describe_formats
+
+        formats = {entry["name"]: entry for entry in describe_formats()}
+        assert formats["elasticsearch"]["requires"] == ["url"]
+        assert formats["s3"]["requires"] == ["bucket"]
+        assert formats["jsonl"]["requires"] == []
+
+    def test_opensearch_is_the_same_writer_under_another_name(self) -> None:
+        assert OUTPUT_FORMATS["opensearch"] is OUTPUT_FORMATS["elasticsearch"]

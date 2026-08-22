@@ -699,7 +699,7 @@ class Conductor:
         # by destination rather than by writer: in a SQLite run every entity
         # writes into one database, and one file's growth counted once per
         # writer is the same bytes counted three times.
-        destination = str(Path(writer.path).resolve())  # type: ignore[attr-defined]
+        destination = str(Path(writer.path).resolve())
         self._destination_bytes.setdefault(destination, writer.bytes_written)
 
         await writer.open()
@@ -879,7 +879,7 @@ class Conductor:
             # 24). Without this the first nulled field aborts the insert.
             chaos=self._engine().inject_chaos,
         )
-        return writer, writer.path  # type: ignore[attr-defined]
+        return writer, writer.path
 
     def _output_path(self, entity: str) -> Path:
         """Where one entity's records go.

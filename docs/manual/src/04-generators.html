@@ -594,7 +594,31 @@ produces the same bytes on every run.</p>
   <dt>title</dt><dd><span class="type">string</span> Also a template.</dd>
   <dt>page_size</dt><dd><span class="type">string</span> <code>a4</code>, <code>a5</code>, <code>letter</code>.</dd>
   <dt>font, font_size</dt><dd><span class="type">&mdash;</span> Typeface and size.</dd>
+  <dt>rasterise</dt><dd><span class="type">boolean</span> Produce the page as an <em>image</em> instead of a document. Aliases <code>scan</code>, <code>as_image</code>.</dd>
+  <dt>dpi</dt><dd><span class="type">integer</span> How finely, when rasterising. Default 150.</dd>
+  <dt>image_format</dt><dd><span class="type">enum</span> <code>png</code> (default) or <code>jpeg</code>.</dd>
+  <dt>degrade</dt><dd><span class="type">mapping</span> <code>rotate</code> degrees, <code>blur</code> radius, <code>speckle</code> fraction, <code>contrast</code> multiplier, JPEG <code>quality</code>.</dd>
 </dl>
+
+<pre><code class="language-yaml">  scan:
+    type: file
+    generator: document
+    rasterise: true
+    image_format: jpeg
+    template: "{document_text}"
+    degrade: {rotate: 0.7, blur: 0.4, speckle: 0.0004, contrast: 0.88, quality: 72}</code></pre>
+
+<p>Section&nbsp;23's optional half, and what an OCR dataset is made of: the page
+as a flatbed would see it, with the text that produced it recorded in the asset
+manifest as <code>text</code>. A dataset of perfect pages tests nothing &mdash;
+the hard part of document processing is the photocopier &mdash; and a dataset of
+scans without an answer key is a pile of pictures.</p>
+
+<p>The image is rendered from the laid-out document rather than from the PDF
+bytes. Both come from the same lines, so they say the same thing, and rendering
+the model directly means no PDF engine has to be installed to read back
+something this program just wrote. Needs the <code>ocr</code> extra; without it
+the field says which one.</p>
 <pre><code class="language-yaml">  id_badge:
     type: file
     generator: document

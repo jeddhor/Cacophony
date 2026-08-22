@@ -185,6 +185,13 @@ def _wrap(paragraph: str, width: float, size: float) -> list[str]:
     per_character = size * 0.5
     limit = max(1, int(width / per_character))
 
+    # A line that already fits is kept exactly as written, spaces and all.
+    # Re-joining its words on single spaces is what turned every column in an
+    # invoice into a sentence - and a document generator that cannot lay out a
+    # table is one nobody uses for the documents people actually scan.
+    if len(paragraph) <= limit:
+        return [paragraph.rstrip()]
+
     lines: list[str] = []
     current = ""
     for word in paragraph.split():

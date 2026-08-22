@@ -312,8 +312,38 @@ command-line argument and stays relative to where you are standing.</p>
     <tr><td class="mono">parquet</td><td>Columnar, optionally partitioned</td><td>Needs <code>pip install 'cacophony[parquet]'</code>. Resume opens a new part.</td></tr>
     <tr><td class="mono">sqlite</td><td>One database for the whole project</td><td>Every entity a table, every reference an enforced <code>FOREIGN KEY</code>.</td></tr>
     <tr><td class="mono">sql</td><td>A portable <code>CREATE TABLE</code> plus <code>INSERT</code> script per entity</td><td>For a database Cacophony has no adapter for.</td></tr>
+    <tr><td class="mono">elasticsearch</td><td>Documents, through the bulk API</td><td>Also <code>opensearch</code>. Needs <code>url</code>; see below.</td></tr>
+    <tr><td class="mono">s3</td><td>The ordinary file, uploaded to a bucket</td><td>Needs <code>bucket</code> and <code>pip install 'cacophony[s3]'</code>.</td></tr>
   </tbody>
 </table>
+
+<h3>The two that are not files</h3>
+
+<p>A search index and a bucket are destinations rather than paths, and each
+deals with that differently &mdash; deliberately, because the alternative is a
+run that cannot resume and cannot say how much it wrote.</p>
+
+<pre><code class="language-yaml">outputs:
+  search:
+    format: elasticsearch
+    options: {url: "http://localhost:9200", index: events, bulk_size: 1000}
+  archive:
+    format: s3
+    path: out/archive          # written here first
+    options: {bucket: datasets, prefix: 2026/q1, format: parquet}</code></pre>
+
+<p><strong>Elasticsearch</strong> gives every document an id derived from the
+record's own position, so re-sending it overwrites rather than duplicates: a
+re-run or a resume converges on the dataset instead of doubling it. A
+<code>200</code> whose body reports <code>errors</code> is treated as the
+failure it is, because a writer that called that success would be describing
+documents the index does not hold.</p>
+
+<p><strong>Object storage</strong> does not pretend to be a filesystem. It
+writes the ordinary local file with the ordinary local writer and uploads it
+when it closes, so partitioning, parts, resume and byte accounting all work
+exactly as they do locally &mdash; locally is what they are.
+<code>keep_local: false</code> removes the file after the upload.</p>
 
 <pre><code class="language-console">$ cacophony generate project.yaml -o sqlite -d out/
 $ sqlite3 out/retail-commerce.db "PRAGMA foreign_key_check"   # silent</code></pre>

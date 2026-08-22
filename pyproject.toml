@@ -44,6 +44,13 @@ keyring = ["keyring>=25.0,<26"]
 # Section 63's encrypted store: scrypt and AES-GCM, from one well-reviewed
 # library rather than from anything written here.
 secrets = ["cryptography>=42,<48"]
+# Section 23's optional half: rendering a document to a page image and then
+# spoiling it. Pillow only - rasterising the *model* rather than the PDF means
+# no PDF engine has to be shipped on three platforms.
+ocr = ["pillow>=10.0,<14"]
+# Section 33's object storage. The search writer needs nothing new: it speaks
+# to the bulk API over the httpx that is already here.
+s3 = ["boto3>=1.34,<2"]
 # Starlette is pinned directly although FastAPI brings it: the TestClient that
 # breaks is Starlette's, so the constraint belongs where it can be read.
 api = [
