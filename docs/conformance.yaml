@@ -25,9 +25,10 @@ sections:
   - section: 8
     state: partial
     note: >
-      29 of the 30 strategies are built. `lookup` reads inline values, CSV, JSON
-      and text; the section's Parquet, SQL-result and another-entity sources are
-      not built, and `reference` is the way to point at another entity.
+      29 of the 30 strategies are built. `lookup` reads inline values, CSV,
+      JSON, text, Parquet, and the result of a query against a SQLite file, and
+      `from_entity: employee.department` samples another entity by resolving a
+      position rather than by holding a table.
     refuses:
       - item: "script"
         why: >
@@ -58,11 +59,13 @@ sections:
       duration, sentiment and resolution fields, and timed alignment between
       the audio and the transcript.
   - section: 22
-    state: partial
+    state: implemented
     note: >
-      Speech is built - Piper, an OpenAI-compatible adapter, and a procedural
-      voice that needs no server. The section's non-speech audio - alarms,
-      ambience, machine noise, notifications, distortion - has no generator.
+      Speech through Piper and an OpenAI-compatible adapter, a procedural voice
+      that needs no server, and the section's non-speech audio - alarms,
+      ambience, machine noise, notifications and a distortion pass - as the
+      `sound` generator, synthesised rather than sampled so ten thousand alarms
+      cost no GPU.
   - section: 23
     state: partial
     note: >
@@ -109,11 +112,11 @@ sections:
        "Elasticsearch/OpenSearch", "object storage"]
   - {section: 34, state: implemented, note: "`--output-profile`, with partitioning."}
   - section: 35
-    state: partial
+    state: implemented
     note: >
-      Stdout, file, syslog, HTTP, Kafka and an in-memory window, with rates,
-      retargeting and attainment. The section's database destination is not
-      built; a stream cannot write into a table.
+      Stdout, file, syslog, HTTP, Kafka, a database and an in-memory window,
+      with rates, retargeting and attainment. `db://path.db` creates a table
+      per entity from the first record it sees and commits on every flush.
   - section: 36
     state: implemented
     note: >
@@ -291,13 +294,12 @@ sections:
       shipped multimodal template generates support-call audio and badge
       images instead.
   - section: 71
-    state: partial
+    state: implemented
     note: >
-      Users, devices, authentication and findings, with eight scenarios of
-      which five are enabled. The section lists twelve entities; the other
-      eight - organisation, application, network connection, endpoint event,
-      alert, incident, analyst, ticket - are not there, and the three disabled
-      scenarios are disabled because they need them.
+      All twelve entities the section lists, and all eight scenarios enabled.
+      The three that used to be declared and off needed process telemetry and
+      egress volumes to express themselves; `endpoint_event` and
+      `network_connection` are where malware and exfiltration now happen.
   - {section: 72, state: implemented}
   - {section: 73, state: implemented}
   - {section: 74, state: implemented, note: "Edits are applied to the document in place."}
@@ -310,11 +312,11 @@ sections:
       `quick_mock` and `high_realism` change only the language-model prompt;
       neither changes which generators are chosen.
   - section: 78
-    state: partial
+    state: implemented
     note: >
-      Every control the section lists, and all five presets, settable under
-      `chaos:` and by `--chaos-preset`. What is missing is the Chaos Panel
-      itself: the Studio has no interface for any of it.
+      Every control the section lists and all five presets, in the schema and
+      in the Studio's Chaos Panel - which writes YAML like every other part of
+      the editor, so what it sets is legible in the file afterwards.
   - {section: 79, state: implemented, note: "Nine categories."}
   - {section: 80, state: implemented}
   - {section: 81, state: implemented}

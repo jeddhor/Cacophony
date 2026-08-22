@@ -107,8 +107,9 @@ async def _single_machine(
         path = directory / f"{name}.jsonl"
         writer = create_writer("jsonl", path, columns=entity.spec.field_names())
         await writer.open()
-        async for batch in engine.stream(name, count=counts[name], batch_size=250):
-            await writer.write_batch(batch)
+        async for chunk in engine.stream(name, count=counts[name], batch_size=250):
+            if chunk.records:
+                await writer.write_batch(chunk.records)
         await writer.close()
         written[name] = path
     return written
@@ -727,7 +728,19 @@ class TestByteIdentity:
         is the test that would say so.
         """
         compiled = compile_project(load_project(TEMPLATES / "security-operations.yaml"))
-        counts = {"user": 200, "device": 300, "authentication": 2_500, "security_finding": 400}
+        # Every entity, because the reference run walks `entity_order` - and
+        # the template has twelve of them now.
+        counts = dict.fromkeys(compiled.entity_order, 120)
+        counts.update(
+            {
+                "user": 200,
+                "device": 300,
+                "authentication": 2_500,
+                "security_finding": 400,
+                "endpoint_event": 800,
+                "network_connection": 800,
+            }
+        )
         one, many = tmp_path / "one", tmp_path / "many"
         one.mkdir()
 

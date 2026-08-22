@@ -124,6 +124,86 @@ class TestAudio:
         assert estimate_seconds("a sentence", speed=2.0) < estimate_seconds("a sentence")
 
 
+class TestNonSpeechAudio:
+    """Section 22's other audio: the sounds a dataset is full of and a TTS
+    engine cannot make. Procedural, so a thousand alarms need no GPU."""
+
+    def test_every_kind_the_section_names_exists(self) -> None:
+        from cacophony.assets.audio import SOUND_KINDS
+
+        assert {"alarm", "ambience", "machine", "notification"} <= set(SOUND_KINDS)
+
+    def test_each_one_is_a_wav_of_the_length_asked_for(self) -> None:
+        from cacophony.assets.audio import SOUND_KINDS, sound_like
+
+        for kind in SOUND_KINDS:
+            data = sound_like(kind, seconds=0.5, seed=3)
+            assert is_wav(data), kind
+            assert duration_of(data) == pytest.approx(0.5, abs=0.02), kind
+
+    def test_the_seed_decides_the_bytes(self) -> None:
+        from cacophony.assets.audio import sound_like
+
+        assert sound_like("alarm", seed=4) == sound_like("alarm", seed=4)
+        assert sound_like("alarm", seed=4) != sound_like("alarm", seed=5)
+
+    def test_distortion_changes_the_signal_and_not_the_length(self) -> None:
+        from cacophony.assets.audio import sound_like
+
+        clean = sound_like("beep", seconds=0.4, seed=1)
+        driven = sound_like("beep", seconds=0.4, seed=1, distortion=0.8)
+        assert clean != driven
+        assert duration_of(clean) == duration_of(driven)
+
+    def test_an_unknown_sound_lists_the_ones_there_are(self) -> None:
+        from cacophony.assets.audio import sound_like
+
+        with pytest.raises(ValueError, match="Available"):
+            sound_like("thunderclap")
+
+    def test_a_field_can_choose_the_sound_per_record(self) -> None:
+        """`kind_field` is what makes a mixed dataset of alarms and chimes."""
+        import asyncio
+
+        from cacophony.generation.engine import GenerationEngine
+        from cacophony.schema.compiler import compile_project
+        from cacophony.schema.loader import load_project_data
+
+        project = load_project_data(
+            {
+                "project": {"name": "Sounds", "seed": 5},
+                "entities": {
+                    "alert": {
+                        "count": 4,
+                        "fields": {
+                            "severity": {
+                                "type": "enum",
+                                "generator": "weighted",
+                                "choices": {"alarm": 1, "notification": 1},
+                            },
+                            "tone": {
+                                "type": "file",
+                                "generator": "sound",
+                                "kind_field": "severity",
+                                "seconds": 0.3,
+                            },
+                        },
+                    }
+                },
+            }
+        )
+        import tempfile
+
+        from cacophony.assets.store import AssetStore
+
+        engine = GenerationEngine(compile_project(project), assets=AssetStore(tempfile.mkdtemp()))
+        records = asyncio.run(engine.generate_batch("alert", 4))
+
+        kinds = {record.assets[0].metadata["sound"] for record in records if record.assets}
+        assert kinds <= {"alarm", "notification"}
+        assert all(record.assets[0].media_type == "audio/wav" for record in records)
+
+
 class TestDocuments:
     def test_placeholders_are_filled(self) -> None:
         assert render_template("{a} and {b}", {"a": "x", "b": "y"}) == "x and y"

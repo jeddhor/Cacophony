@@ -49,6 +49,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = [
     "SINK_TYPES",
+    "DatabaseSink",
     "DeliveryStats",
     "FileStreamSink",
     "HttpSink",
@@ -569,12 +570,142 @@ class KafkaSink(StreamSink):
 
 
 # --------------------------------------------------------------------------- #
+# Databases (section 35)
+# --------------------------------------------------------------------------- #
+
+
+class DatabaseSink(StreamSink):
+    """Insert records into a SQLite table as they arrive (section 35).
+
+    The destination a dashboard can be pointed at without a collector in the
+    middle: `db:///tmp/live.db`, one table per entity, committed on every
+    flush. A stream has no end, so the connection is held open and each flush
+    is its own transaction - a stream that held one transaction for six hours
+    would be a stream that lost six hours.
+
+    Unlike the SQLite *writer*, this has no compiled schema to work from: a
+    sink is handed records, not a project. So the table is created from the
+    first record of each entity and columns are typed from that record's
+    values. A field that later holds something else is stored as text rather
+    than refused, because a live stream is not the place to discover a type
+    disagreement.
+    """
+
+    name = "database"
+
+    #: Python types that SQLite stores natively; everything else becomes JSON.
+    _TYPES: dict[type, str] = {
+        bool: "INTEGER",
+        int: "INTEGER",
+        float: "REAL",
+        bytes: "BLOB",
+    }
+
+    def __init__(self, **options: Any) -> None:
+        super().__init__(**options)
+        self.path = Path(str(options.get("path") or "stream.db"))
+        #: One table for everything, when the caller names one; otherwise the
+        #: record's own entity, which is what a multi-entity stream wants.
+        self.table = options.get("table")
+        self._connection: Any = None
+        self._prepared: dict[str, list[str]] = {}
+
+    async def open(self) -> None:
+        import sqlite3
+
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._connection = sqlite3.connect(str(self.path), check_same_thread=False)
+        except (OSError, sqlite3.Error) as exc:
+            raise OutputError(f"could not open {self.path} for streaming: {exc}") from exc
+        # Regenerable by definition; durability costs more than it buys.
+        self._connection.execute("PRAGMA journal_mode=WAL")
+        self._connection.execute("PRAGMA synchronous=NORMAL")
+
+    async def close(self) -> None:
+        if self._connection is not None:
+            self._connection.commit()
+            self._connection.close()
+            self._connection = None
+
+    async def send(self, records: Sequence[GeneratedRecord]) -> int:
+        import sqlite3
+
+        if self._connection is None:
+            await self.open()
+        assert self._connection is not None
+
+        delivered = 0
+        size = 0
+        error: str | None = None
+        for table, group in self._grouped(records).items():
+            columns = self._prepare(table, group[0])
+            statement = (
+                f'INSERT INTO "{table}" ({", ".join(chr(34) + c + chr(34) for c in columns)}) '
+                f"VALUES ({', '.join('?' for _ in columns)})"
+            )
+            rows = [
+                tuple(_storable(record.values.get(column)) for column in columns)
+                for record in group
+            ]
+            try:
+                self._connection.executemany(statement, rows)
+                self._connection.commit()
+            except sqlite3.Error as exc:
+                error = str(exc)
+                continue
+            delivered += len(group)
+            size += sum(len(str(row)) for row in rows)
+
+        failed = len(records) - delivered
+        return self._note(delivered, failed, size, error)
+
+    def describe(self) -> dict[str, Any]:
+        return {**super().describe(), "path": str(self.path), "tables": sorted(self._prepared)}
+
+    # -- internals ----------------------------------------------------------- #
+
+    def _grouped(self, records: Sequence[GeneratedRecord]) -> dict[str, list[GeneratedRecord]]:
+        grouped: dict[str, list[GeneratedRecord]] = {}
+        for record in records:
+            name = str(self.table or record.entity or "records")
+            grouped.setdefault(name, []).append(record)
+        return grouped
+
+    def _prepare(self, table: str, sample: GeneratedRecord) -> list[str]:
+        """Create the table from the first record of it, once."""
+        columns = self._prepared.get(table)
+        if columns is not None:
+            return columns
+
+        assert self._connection is not None
+        columns = list(sample.values)
+        definitions = ", ".join(
+            f'"{name}" {self._TYPES.get(type(sample.values.get(name)), "TEXT")}' for name in columns
+        )
+        self._connection.execute(f'CREATE TABLE IF NOT EXISTS "{table}" ({definitions})')
+        self._connection.commit()
+        self._prepared[table] = columns
+        return columns
+
+
+def _storable(value: Any) -> Any:
+    """A value SQLite can bind, JSON for anything it cannot."""
+    if value is None or isinstance(value, (str, int, float, bytes)):
+        return value
+    if isinstance(value, (dict, list, tuple, set)):
+        return json.dumps(to_jsonable(value), ensure_ascii=False, default=str)
+    return str(value)
+
+
+# --------------------------------------------------------------------------- #
 # Registry
 # --------------------------------------------------------------------------- #
 
 
 SINK_TYPES: dict[str, type[StreamSink]] = {
     "stdout": StdoutSink,
+    "database": DatabaseSink,
     "memory": MemorySink,
     "file": FileStreamSink,
     "syslog": SyslogSink,
@@ -616,6 +747,11 @@ def destination_options(spec: str | dict[str, Any]) -> dict[str, Any]:
         return {"type": "http", "url": text}
     if scheme == "file":
         return {"type": "file", "path": remainder}
+    if scheme in ("db", "sqlite"):
+        # `db:///tmp/live.db` and `sqlite:///tmp/live.db`, with an optional
+        # `#table` naming one table for every entity.
+        target, _, table = remainder.partition("#")
+        return {"type": "database", "path": target, **({"table": table} if table else {})}
     if scheme in ("syslog", "syslog+udp", "syslog+tcp"):
         host, _, port = remainder.partition(":")
         return {

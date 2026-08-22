@@ -17,8 +17,8 @@ built and how to run it.
 
 All fourteen delivery phases are done. What that does *not* mean is that every
 line of the design document is built: of its 112 sections,
-<!-- claim:sections_implemented -->88<!-- /claim --> are built,
-<!-- claim:sections_partial -->23<!-- /claim --> are partly built and
+<!-- claim:sections_implemented -->92<!-- /claim --> are built,
+<!-- claim:sections_partial -->19<!-- /claim --> are partly built and
 <!-- claim:sections_deferred -->1<!-- /claim --> is deferred, with
 <!-- claim:refusals -->6<!-- /claim --> sub-items considered and refused.
 [docs/CONFORMANCE.md](docs/CONFORMANCE.md) says which, section by section, and
@@ -42,10 +42,11 @@ put it in a window.
 - Schema linter with the checks from design document section 102
 - Generator recommendation engine — a field with only a semantic description
   still gets a sensible generator instead of an expensive language-model call
-- 30 registered generators: constant, sequence, uuid, random, boolean,
-  distribution, weighted, lookup, pattern, template, expression, datetime, ip,
-  mac, phone, government_id, faker, composite, transform, null, reference, llm,
-  image, tts, document, event_time, subject, state and scenario. The design
+- <!-- claim:generators -->31<!-- /claim --> registered generators: constant,
+  sequence, uuid, random, boolean, distribution, weighted, lookup, pattern,
+  template, expression, datetime, ip, mac, phone, government_id, faker,
+  composite, transform, null, reference, llm, image, tts, sound, document,
+  event_time, subject, state and scenario. The design
   document's thirtieth, `script`, is declared and deliberately refused rather
   than pending — running a schema author's code is not a feature, it is
   arbitrary code execution with a nicer name
@@ -176,8 +177,8 @@ python docs/manual/build.py
 ```
 
 **What is and is not built.** [docs/CONFORMANCE.md](docs/CONFORMANCE.md) is the
-design document section by section — <!-- claim:sections_implemented -->88<!-- /claim -->
-built, <!-- claim:sections_partial -->23<!-- /claim --> partial,
+design document section by section — <!-- claim:sections_implemented -->92<!-- /claim -->
+built, <!-- claim:sections_partial -->19<!-- /claim --> partial,
 <!-- claim:sections_deferred -->1<!-- /claim --> deferred, and
 <!-- claim:refusals -->6<!-- /claim --> sub-items deliberately refused with the
 reasoning recorded. It is generated from data and checked by CI, because the

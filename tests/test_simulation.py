@@ -728,6 +728,56 @@ class TestSecurityTemplate:
         enabled = [s for s in compiled.spec.scenarios.values() if s.enabled]
         assert len(enabled) >= 4
 
+    def test_it_ships_what_section_71_asks_for(self) -> None:
+        """Twelve entities and eight scenarios, all of them enabled.
+
+        Three of the eight used to be declared and off, because they needed
+        process telemetry and egress volumes to express themselves and this
+        template shipped neither.
+        """
+        compiled = compile_project(load_project(SECURITY))
+        assert len(compiled.entities) == 12
+        assert len(compiled.spec.scenarios) == 8
+        assert all(scenario.enabled for scenario in compiled.spec.scenarios.values())
+
+    def test_the_new_entities_join_up(self) -> None:
+        """A ticket reaches an analyst through an incident, through an alert."""
+        compiled = compile_project(load_project(SECURITY))
+        assert "incident" in compiled.entities["ticket"].depends_on
+        assert "alert" in compiled.entities["incident"].depends_on
+        assert "security_finding" in compiled.entities["alert"].depends_on
+
+    def test_malware_and_exfiltration_appear_in_the_data(self) -> None:
+        """The two scenarios the new entities exist for."""
+        compiled = compile_project(load_project(SECURITY))
+        counts = dict.fromkeys(compiled.entity_order, 200)
+        # Enough devices that a per-mille scenario selects several of them:
+        # 0.3% of 300 is not a subject, and a test that depends on rounding up
+        # is a test that fails on somebody else's afternoon.
+        counts.update({"device": 1200, "endpoint_event": 6000, "network_connection": 6000})
+
+        engine = GenerationEngine(compiled, counts=counts, chaos=False)
+        endpoint = [r.values for r in asyncio.run(engine.generate_batch("endpoint_event", 6000))]
+        network = [r.values for r in asyncio.run(engine.generate_batch("network_connection", 6000))]
+
+        infected = [row for row in endpoint if row.get("scenario") == "malware_infection"]
+        assert infected, "malware_infection never fired"
+        # A record inside the window but outside any phase carries the
+        # scenario and no phase, which is the scenario's base effects applying.
+        assert {row.get("phase") for row in infected} <= {
+            "execution",
+            "persistence",
+            "defence_evasion",
+            None,
+        }
+
+        exfiltrating = [row for row in network if row.get("scenario") == "insider_exfiltration"]
+        assert exfiltrating, "insider_exfiltration never fired"
+        ordinary = sorted(row["bytes_sent"] for row in network if not row.get("scenario"))
+        median = ordinary[len(ordinary) // 2]
+        # The whole point: the flows that matter are orders of magnitude larger.
+        assert min(row["bytes_sent"] for row in exfiltrating) > median * 100
+
     def test_it_produces_a_correlated_incident(self) -> None:
         compiled = compile_project(load_project(SECURITY))
         counts = dict.fromkeys(compiled.entity_order, 400)

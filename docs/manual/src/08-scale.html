@@ -48,6 +48,7 @@ knowing.</p>
     <tr><td>Syslog</td><td class="mono">syslog://host:514<br>syslog+tcp://host:601</td><td>RFC 5424 by default, <code>rfc: 3164</code> available. TCP uses octet-counted framing.</td></tr>
     <tr><td>HTTP</td><td class="mono">https://host/ingest</td><td>POSTs an ndjson batch per delivery; <code>array</code> and <code>single</code> body styles available.</td></tr>
     <tr><td>Kafka</td><td class="mono">kafka://broker:9092/topic</td><td>Needs <code>pip install 'cacophony[kafka]'</code>. <code>key_field</code> partitions by a field.</td></tr>
+    <tr><td>Database</td><td class="mono">db://path.db<br>db://path.db#events</td><td>A table per entity, created from the first record of it and committed on every flush. <code>#name</code> puts every entity in one table.</td></tr>
     <tr><td>Memory</td><td class="mono">memory://200</td><td>A bounded window of recent records for the API and the Studio to read back. Useless from the CLI, where stdout already does this.</td></tr>
   </tbody>
 </table>

@@ -26,10 +26,12 @@ import wave
 
 __all__ = [
     "DEFAULT_SAMPLE_RATE",
+    "SOUND_KINDS",
     "duration_of",
     "encode_wav",
     "is_wav",
     "silence",
+    "sound_like",
     "speech_like",
 ]
 
@@ -127,6 +129,116 @@ def speech_like(
             + 0.25 * math.sin(2 * math.pi * fundamental * 3 * moment)
         ) / 1.75
         samples.append(value * envelope * gate * fade * 0.6)
+
+    return encode_wav(samples, sample_rate=sample_rate)
+
+
+# --------------------------------------------------------------------------- #
+# Section 22: the audio that is not a voice
+# --------------------------------------------------------------------------- #
+
+#: What ``sound_like`` can synthesise, and what each one is for. Section 22
+#: names these; they are built from the same oscillators and noise as the
+#: voice above, because a dataset of alarms should not need a GPU either.
+SOUND_KINDS: dict[str, str] = {
+    "alarm": "A two-tone siren, the pattern a klaxon or an alert makes.",
+    "ambience": "Broadband room tone: the sound of a place with nothing happening.",
+    "machine": "A periodic hum with harmonics - a pump, a fan, a conveyor.",
+    "notification": "A short rising chime, the shape of a device asking for attention.",
+    "beep": "One flat tone, the length of a button press.",
+}
+
+
+def _noise(index: int, seed: int) -> float:
+    """A deterministic pseudo-random sample in [-1, 1].
+
+    Derived from the index rather than drawn from a stream, for the same reason
+    every other value in this program is: a sample must not depend on how many
+    samples were produced before it (section 75).
+    """
+    mixed = (index * 6364136223846793005 + seed * 1442695040888963407) & 0xFFFFFFFFFFFFFFFF
+    mixed ^= mixed >> 33
+    mixed = (mixed * 0xFF51AFD7ED558CCD) & 0xFFFFFFFFFFFFFFFF
+    mixed ^= mixed >> 33
+    return (mixed / 0xFFFFFFFFFFFFFFFF) * 2.0 - 1.0
+
+
+def _low_passed(index: int, seed: int, previous: float, amount: float) -> float:
+    """One pole of low-pass filtering, which is what turns hiss into rumble."""
+    return previous + amount * (_noise(index, seed) - previous)
+
+
+def sound_like(
+    kind: str,
+    *,
+    seconds: float = 2.0,
+    seed: int = 0,
+    sample_rate: int = DEFAULT_SAMPLE_RATE,
+    level: float = 0.6,
+    distortion: float = 0.0,
+) -> bytes:
+    """Synthesise one of section 22's non-speech sounds.
+
+    Deterministic in ``seed``: the same seed produces the same bytes, so a
+    record's audio is reproducible in the way every other value is. ``level``
+    scales the result and ``distortion`` drives it into soft clipping, which is
+    what a cheap microphone or a saturated line does to any of these.
+    """
+    if kind not in SOUND_KINDS:
+        known = ", ".join(sorted(SOUND_KINDS))
+        raise ValueError(f"unknown sound '{kind}'. Available: {known}")
+
+    total = int(max(0.05, seconds) * sample_rate)
+    level = max(0.0, min(1.0, level))
+    samples: list[float] = []
+    rumble = 0.0
+
+    # A pitch derived from the seed, so two alarms are not the same alarm.
+    base = 220.0 + (seed % 660)
+
+    for index in range(total):
+        moment = index / sample_rate
+        fade = min(1.0, moment / 0.02, max(0.0, (total / sample_rate) - moment) / 0.02)
+
+        if kind == "alarm":
+            # Two tones, alternating twice a second: the interval is what makes
+            # it read as a warning rather than as a note.
+            high = (moment * 2.0) % 1.0 < 0.5
+            pitch = base * (1.0 if high else 0.75)
+            value = math.sin(2 * math.pi * pitch * moment)
+            value += 0.3 * math.sin(2 * math.pi * pitch * 2 * moment)
+        elif kind == "ambience":
+            rumble = _low_passed(index, seed, rumble, 0.02)
+            value = rumble * 3.0 + 0.05 * _noise(index, seed ^ 0x5EED)
+        elif kind == "machine":
+            # A fundamental with its harmonics, wobbling slightly - a motor
+            # that never wobbles sounds like a sine wave, because it is one.
+            wobble = 1.0 + 0.004 * math.sin(2 * math.pi * 0.7 * moment)
+            pitch = (base / 4.0) * wobble
+            value = (
+                math.sin(2 * math.pi * pitch * moment)
+                + 0.4 * math.sin(2 * math.pi * pitch * 2 * moment)
+                + 0.2 * math.sin(2 * math.pi * pitch * 3 * moment)
+            ) / 1.6
+            rumble = _low_passed(index, seed, rumble, 0.05)
+            value += 0.08 * rumble
+        elif kind == "notification":
+            # Two rising notes in the first third, then silence: the shape of
+            # every device that has ever wanted something.
+            step = 0 if moment < 0.12 else 1
+            pitch = base * (1.0 if step == 0 else 1.5)
+            decay = math.exp(-6.0 * (moment % 0.12))
+            value = math.sin(2 * math.pi * pitch * moment) * decay
+            if moment > 0.34:
+                value = 0.0
+        else:  # beep
+            value = math.sin(2 * math.pi * base * moment)
+
+        if distortion:
+            drive = 1.0 + 9.0 * max(0.0, min(1.0, distortion))
+            value = math.tanh(value * drive) / math.tanh(drive)
+
+        samples.append(value * fade * level)
 
     return encode_wav(samples, sample_rate=sample_rate)
 

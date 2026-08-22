@@ -81,8 +81,17 @@ def looks_like_a_real_card(digits: str) -> bool:
 
 
 def _safe_domain(domain: str) -> bool:
+    """Whether this domain is one nobody can own.
+
+    A *subdomain* of a reserved domain is reserved too: `mfg.example.net`
+    cannot be registered any more than `example.net` can, so reporting it as a
+    leak is a false positive - and one that would push somebody towards using a
+    real domain to quiet the detector.
+    """
     lowered = domain.lower().rstrip(".")
-    return lowered in SAFE_DOMAINS or any(lowered.endswith(tld) for tld in SAFE_TLDS)
+    if lowered in SAFE_DOMAINS or any(lowered.endswith(tld) for tld in SAFE_TLDS):
+        return True
+    return any(lowered.endswith("." + reserved) for reserved in SAFE_DOMAINS)
 
 
 def _is_an_address(text: str) -> bool:

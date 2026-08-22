@@ -35,10 +35,11 @@ import {
   formatNumber,
 } from "../components/ui";
 import { useStudio } from "../state/store";
+import { ChaosPanel } from "../studio/ChaosPanel";
 import { FieldEditor } from "../studio/FieldEditor";
 import { PreviewTable } from "../studio/PreviewTable";
 
-type Tab = "fields" | "preview" | "graph" | "source";
+type Tab = "fields" | "preview" | "graph" | "chaos" | "source";
 
 // React Flow is the single largest thing the Studio depends on, and only the
 // graph tab needs it. Loading it on demand keeps the initial bundle to the
@@ -146,7 +147,7 @@ export function StudioPage(): ReactNode {
 
         <div>
           <div className="row" style={{ marginBottom: 12, gap: 6 }}>
-            {(["fields", "preview", "graph", "source"] as Tab[]).map((name) => (
+            {(["fields", "preview", "graph", "chaos", "source"] as Tab[]).map((name) => (
               <button
                 key={name}
                 type="button"
@@ -214,6 +215,15 @@ export function StudioPage(): ReactNode {
                 declares but no field implements.
               </p>
             </Panel>
+          )}
+
+          {tab === "chaos" && (
+            <ChaosPanel
+              chaos={(schema.data.project.chaos as Record<string, unknown>) ?? {}}
+              editable={schema.data.editable}
+              onPatch={applyPatch}
+              pending={patch.isPending}
+            />
           )}
 
           {tab === "source" && (

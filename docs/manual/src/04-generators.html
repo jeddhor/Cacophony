@@ -18,7 +18,7 @@ naming one is how a schema documents its intent.</p>
 $ cacophony generators --json | jq '.[] | select(.cost_class=="llm")'</code></pre>
 
 <table class="compact">
-  <caption>All thirty generators</caption>
+  <caption>All <!-- claim:generators -->31<!-- /claim --> generators</caption>
   <thead><tr><th>Name</th><th>Aliases</th><th>Cost</th><th>Deterministic</th><th>Produces</th></tr></thead>
   <tbody>
     <tr><td class="mono">constant</td><td class="mono">fixed, literal</td><td>cpu</td><td>yes</td><td>The same value, always</td></tr>
@@ -49,6 +49,7 @@ $ cacophony generators --json | jq '.[] | select(.cost_class=="llm")'</code></pr
     <tr><td class="mono">llm</td><td class="mono">language_model, ai, gpt</td><td>llm</td><td>no</td><td>Prose, from a language model</td></tr>
     <tr><td class="mono">image</td><td class="mono">invokeai, text_to_image</td><td>gpu</td><td>no</td><td>A picture</td></tr>
     <tr><td class="mono">tts</td><td class="mono">speech, voice</td><td>gpu</td><td>no</td><td>Audio of generated text</td></tr>
+    <tr><td class="mono">sound</td><td class="mono">audio, noise</td><td>cpu</td><td>yes</td><td>Alarms, ambience, machine noise, notifications</td></tr>
     <tr><td class="mono">document</td><td class="mono">pdf, invoice, report</td><td>cpu</td><td>no</td><td>A rendered document</td></tr>
     <tr><td class="mono">script</td><td class="mono">custom, python</td><td>cpu</td><td>&mdash;</td><td>Declared, and deliberately not implemented</td></tr>
   </tbody>
@@ -195,14 +196,27 @@ almost nothing in the world is uniformly distributed.</p>
 <div class="signature">generator: lookup &nbsp;·&nbsp; aliases: dataset, from_list</div>
 <dl class="options">
   <dt>values</dt><dd><span class="type">list</span> Inline values. Aliases <code>choices</code>, <code>items</code>, <code>list</code>.</dd>
-  <dt>path</dt><dd><span class="type">path</span> A <code>.csv</code>, <code>.json</code> or <code>.txt</code> file. Relative to the <em>schema file</em>. Aliases <code>file</code>, <code>source</code>.</dd>
-  <dt>column</dt><dd><span class="type">string</span> Which column of a CSV. Alias <code>key</code>, <code>field</code>.</dd>
+  <dt>path</dt><dd><span class="type">path</span> A <code>.csv</code>, <code>.json</code>, <code>.txt</code>, <code>.parquet</code> or <code>.db</code> file. Relative to the <em>schema file</em>. Aliases <code>file</code>, <code>source</code>.</dd>
+  <dt>query</dt><dd><span class="type">string</span> A <code>SELECT</code> against that database. Its first column is the table of values. Alias <code>sql</code>.</dd>
+  <dt>column</dt><dd><span class="type">string</span> Which column of a CSV, Parquet file or table. Alias <code>key</code>, <code>field</code>.</dd>
+  <dt>from_entity</dt><dd><span class="type">string</span> <code>employee.department</code> &mdash; sample another entity's column instead of a file. Alias <code>sample_from</code>.</dd>
   <dt>mode</dt><dd><span class="type">enum</span> <code>random</code> (default) or <code>cycle</code>.</dd>
 </dl>
 <p>This is how a project uses real reference data &mdash; a list of product
 categories, a table of airport codes &mdash; without inventing it. The file
 travels with the project in a bundle, because export follows the paths in the
 expanded project.</p>
+
+<pre><code class="language-yaml">  city:      {generator: lookup, path: cities.parquet, column: name}
+  service:   {generator: lookup, path: catalog.db, query: "select name from services"}
+  raised_by: {generator: lookup, from_entity: employee.department}</code></pre>
+
+<p>A database is opened read-only: a lookup table is a source, and a query that
+tried to write would be a schema doing something a schema should not.
+<code>from_entity</code> reads no file at all &mdash; it resolves the other
+entity's value at a position, through the machinery a reference uses, so
+sampling a hundred-million-row table costs nothing and the planner knows to
+generate that entity first <span class="sec">sections&nbsp;8, 15</span>.</p>
 
 <h2 id="gen-null"><code>null</code></h2>
 <div class="signature">generator: null &nbsp;·&nbsp; aliases: none, empty</div>
@@ -553,6 +567,23 @@ before the name exists.</p>
 <p>The clip's duration and an aligned transcript go into the asset manifest,
 which is what makes a generated speech set usable for training or testing rather
 than merely present.</p>
+
+<h2 id="gen-sound"><code>sound</code></h2>
+<div class="signature">generator: sound &nbsp;·&nbsp; aliases: audio, noise</div>
+<dl class="options">
+  <dt>kind</dt><dd><span class="type">enum</span> <code>alarm</code>, <code>ambience</code>, <code>machine</code>, <code>notification</code>, <code>beep</code>.</dd>
+  <dt>kind_field</dt><dd><span class="type">string</span> Take the kind from a field, so severity can choose the sound. Alias <code>kind_from</code>.</dd>
+  <dt>seconds</dt><dd><span class="type">float</span> Length. Default 2.0.</dd>
+  <dt>level</dt><dd><span class="type">float</span> 0&ndash;1, how loud.</dd>
+  <dt>distortion</dt><dd><span class="type">float</span> 0&ndash;1, soft clipping &mdash; what a cheap microphone does to any of these.</dd>
+  <dt>sample_rate</dt><dd><span class="type">integer</span> Default 22,050.</dd>
+</dl>
+<p>Section&nbsp;22's other audio: the sounds a telemetry or security dataset is
+full of and a speech engine cannot make. Synthesised from oscillators and
+filtered noise rather than sampled, so it needs no provider, no server and no
+GPU &mdash; ten thousand alarms cost what ten thousand integers cost. The seed
+decides the pitch, so two alarms are not the same alarm, and the same record
+produces the same bytes on every run.</p>
 
 <h2 id="gen-document"><code>document</code></h2>
 <div class="signature">generator: document &nbsp;·&nbsp; aliases: pdf, invoice, report</div>

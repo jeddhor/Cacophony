@@ -43,7 +43,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...assets.store import AssetStore
     from ...core.context import GenerationContext
 
-__all__ = ["DocumentGenerator", "ImageGenerator", "SpeechGenerator"]
+__all__ = ["DocumentGenerator", "ImageGenerator", "SoundGenerator", "SpeechGenerator"]
 
 
 class MediaGenerator(OptionsMixin, PlaceholderMixin, Generator):
@@ -380,6 +380,93 @@ class SpeechGenerator(MediaGenerator):
                 # An aligned transcript is what makes a speech dataset usable
                 # (section 21), and it is free to record here.
                 "transcript": str(text),
+            },
+        )
+
+    def placeholder(self, context: GenerationContext) -> Any:
+        return f"assets/{context.entity.name}/placeholder_{context.record_index:08d}.wav"
+
+
+# --------------------------------------------------------------------------- #
+# Non-speech audio (section 22)
+# --------------------------------------------------------------------------- #
+
+
+@register_generator("sound", aliases=("audio", "noise"))
+class SoundGenerator(MediaGenerator):
+    """Synthesise audio that is not a voice (design document section 22).
+
+    Alarms, ambience, machine noise and notifications: the sounds a security
+    or telemetry dataset is full of and a speech provider cannot make. Like the
+    procedural image adapter, this needs no server and no GPU - a dataset of ten
+    thousand alarms should not require an inference stack, and the section's
+    point is the *variety* of audio rather than its fidelity.
+
+    Options:
+        ``kind``        alarm, ambience, machine, notification or beep
+        ``kind_field``  read the kind from another field instead
+        ``seconds``     length, default 2.0
+        ``level``       0-1, how loud
+        ``distortion``  0-1, soft clipping - what a cheap microphone does
+        ``sample_rate`` default 22,050
+    """
+
+    requires_provider = None
+    cost_class = "cpu"
+    kind = "audio"
+
+    def prepare(self) -> None:
+        super().prepare()
+        from ...assets.audio import SOUND_KINDS
+
+        self.sound_kind = self.opt_choice("kind", tuple(sorted(SOUND_KINDS)), "beep")
+        self.kind_field = self.opt_str("kind_field", None, "kind_from")
+        self.seconds = self.opt_float("seconds", 2.0) or 2.0
+        self.level = self.opt_float("level", 0.6) or 0.6
+        self.distortion = self.opt_float("distortion", 0.0) or 0.0
+        self.sample_rate = self.opt_int("sample_rate", None)
+
+    def _media_type(self) -> str:
+        return "audio/wav"
+
+    def dependencies(self) -> Sequence[str]:
+        base = [*super().dependencies()]
+        if self.kind_field:
+            base.append(self.kind_field)
+        return tuple(dict.fromkeys(base))
+
+    async def _produce(self, context: GenerationContext) -> tuple[bytes, str, dict[str, Any]]:
+        from ...assets.audio import DEFAULT_SAMPLE_RATE, SOUND_KINDS, duration_of, sound_like
+
+        kind = self.sound_kind
+        if self.kind_field:
+            named = str(context.value(self.kind_field, "") or "").strip().lower()
+            if named and named not in SOUND_KINDS:
+                raise self._fail(
+                    f"'{self.kind_field}' holds {named!r}, which is not a sound this "
+                    f"generator makes. Available: {', '.join(sorted(SOUND_KINDS))}"
+                )
+            kind = named or kind
+
+        data = sound_like(
+            kind,
+            seconds=self.seconds,
+            seed=self._seed_for(context),
+            sample_rate=self.sample_rate or DEFAULT_SAMPLE_RATE,
+            level=self.level,
+            distortion=self.distortion,
+        )
+        return (
+            data,
+            "audio/wav",
+            {
+                "provider": "procedural",
+                "sound": kind,
+                "duration_seconds": duration_of(data),
+                "sample_rate": self.sample_rate or DEFAULT_SAMPLE_RATE,
+                # Said in the manifest, not only in the manual: this is
+                # synthesised audio and nothing about it is a recording.
+                "synthetic": True,
             },
         )
 

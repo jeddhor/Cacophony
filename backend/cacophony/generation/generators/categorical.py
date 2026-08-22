@@ -83,16 +83,21 @@ class LookupGenerator(OptionsMixin, SyncGenerator):
     """Select a value from a static list or a data file (section 8).
 
     Options:
-        ``values``    an inline list
-        ``path``      a ``.csv``, ``.json`` or ``.txt`` file
-        ``column``    which CSV column / JSON object key to read
-        ``mode``      ``random`` (default) or ``cycle``
+        ``values``      an inline list
+        ``path``        a ``.csv``, ``.json``, ``.txt``, ``.parquet`` or
+                        ``.db``/``.sqlite`` file
+        ``query``       a SELECT against that database, for the SQL source
+        ``from_entity`` ``employee.department`` - sample another entity's column
+        ``column``      which CSV column / JSON object key / Parquet column
+        ``mode``        ``random`` (default) or ``cycle``
 
     ``cycle`` walks the table in order using ``record_index``, which is useful
     when a lookup table is meant to be exhausted rather than sampled.
 
-    Parquet and SQL sources, and lookups against another entity, arrive with
-    the relational phase.
+    ``from_entity`` is the one source that reads no file: it resolves the other
+    entity's value at a position, through the same machinery a reference uses,
+    so a hundred-million-row table costs nothing to sample from and the values
+    stay consistent with the records that hold them (section 15).
     """
 
     def prepare(self) -> None:
@@ -101,23 +106,66 @@ class LookupGenerator(OptionsMixin, SyncGenerator):
 
         values = self.opt("values", None, "items", "list")
         path = self.opt_str("path", None, "file", "source")
+        self.query = self.opt_str("query", None, "sql")
+        from_entity = self.opt_str("from_entity", None, "entity_column", "sample_from")
 
-        if values is not None:
+        self.from_entity: tuple[str, str] | None = None
+        self.values: list[Any] = []
+
+        if from_entity is not None:
+            entity_name, _, column = str(from_entity).partition(".")
+            if not entity_name or not column:
+                raise self._fail(
+                    f"'from_entity' names an entity and a column - "
+                    f"'employee.department', not {from_entity!r}"
+                )
+            self.from_entity = (entity_name, column)
+        elif values is not None:
             self.values = list(values)
         elif path is not None:
-            self.values = _load_table(self, self.resolve_path(path), self.column)
+            self.values = _load_table(self, self.resolve_path(path), self.column, self.query)
         else:
-            raise self._fail("either 'values' or 'path' is required")
+            raise self._fail("one of 'values', 'path' or 'from_entity' is required")
 
-        if not self.values:
+        if self.from_entity is None and not self.values:
             raise self._fail("the lookup table is empty")
 
     def generate_sync(self, context: GenerationContext) -> Any:
+        if self.from_entity is not None:
+            return self._from_entity(context)
         if self.mode == "cycle":
             return self.values[context.record_index % len(self.values)]
         return self.values[context.rng().randrange(len(self.values))]
 
+    def _from_entity(self, context: GenerationContext) -> Any:
+        """One value of another entity's column, resolved by position."""
+        assert self.from_entity is not None
+        entity_name, column = self.from_entity
+
+        resolver = getattr(context, "resolver", None)
+        if resolver is None:
+            raise self._fail(
+                f"this field samples '{entity_name}.{column}', but no entity resolver is "
+                "attached. Generate that entity in the same run."
+            )
+        try:
+            count = resolver.count_of(entity_name)
+        except Exception as exc:
+            raise self._fail(str(exc)) from exc
+        if count <= 0:
+            raise self._fail(f"entity '{entity_name}' generates no records to sample")
+
+        index = (
+            context.record_index % count if self.mode == "cycle" else context.rng().randrange(count)
+        )
+        try:
+            return resolver.key_at(entity_name, index, column)
+        except Exception as exc:
+            raise self._fail(str(exc)) from exc
+
     def describe(self) -> str:
+        if self.from_entity is not None:
+            return f"lookup({self.from_entity[0]}.{self.from_entity[1]}, {self.mode})"
         return f"lookup({len(self.values)} values, {self.mode})"
 
 
@@ -165,12 +213,20 @@ def _as_weight(generator: OptionsMixin, value: Any, weight: Any) -> float:
     return number
 
 
-def _load_table(generator: OptionsMixin, path: Path, column: str | None) -> list[Any]:
+def _load_table(
+    generator: OptionsMixin, path: Path, column: str | None, query: str | None = None
+) -> list[Any]:
     if not path.exists():
         raise generator._fail(f"lookup file not found: {path}")
 
     suffix = path.suffix.lower()
     try:
+        if suffix == ".parquet":
+            return _from_parquet(generator, path, column)
+
+        if suffix in (".db", ".sqlite", ".sqlite3"):
+            return _from_sql(generator, path, column, query)
+
         if suffix == ".json":
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
@@ -197,3 +253,64 @@ def _load_table(generator: OptionsMixin, path: Path, column: str | None) -> list
         raise generator._fail(f"could not read lookup file {path}: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise generator._fail(f"{path}: invalid JSON - {exc}") from exc
+
+
+def _from_parquet(generator: OptionsMixin, path: Path, column: str | None) -> list[Any]:
+    """One column of a Parquet file (section 8's third source).
+
+    Read with the same library that writes Parquet here, so a lookup table can
+    be the output of an earlier run without a conversion step.
+    """
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as exc:  # pragma: no cover - depends on the extra
+        raise generator._fail(
+            "reading a Parquet lookup table needs pyarrow: pip install 'cacophony[parquet]'"
+        ) from exc
+
+    try:
+        table = pq.read_table(path, columns=[column] if column else None)
+    except Exception as exc:
+        raise generator._fail(f"could not read {path}: {exc}") from exc
+
+    if not table.column_names:
+        raise generator._fail(f"{path}: the file has no columns")
+    chosen = column or table.column_names[0]
+    if chosen not in table.column_names:
+        available = ", ".join(table.column_names)
+        raise generator._fail(f"{path}: no column named '{chosen}'. Columns: {available}")
+    return [value for value in table.column(chosen).to_pylist() if value is not None]
+
+
+def _from_sql(
+    generator: OptionsMixin, path: Path, column: str | None, query: str | None
+) -> list[Any]:
+    """The first column of a query's result (section 8's SQL source).
+
+    A read-only door onto a SQLite file: the query is the caller's, and this is
+    their own machine, but the connection is opened read-only so a lookup table
+    cannot become a way to write one.
+    """
+    import sqlite3
+
+    statement = query
+    if not statement:
+        if not column:
+            raise generator._fail("a database lookup needs either 'query' or 'column' plus 'table'")
+        table = generator.opt_str("table", None) or path.stem
+        statement = f'SELECT "{column}" FROM "{table}"'
+
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        raise generator._fail(f"could not open {path}: {exc}") from exc
+    try:
+        rows = connection.execute(statement).fetchall()
+    except sqlite3.Error as exc:
+        raise generator._fail(f"{path}: {exc}") from exc
+    finally:
+        connection.close()
+
+    # The first column of whatever the query returned: a lookup table is a
+    # list of values, and a query that selects five columns has not said which.
+    return [row[0] for row in rows if row and row[0] is not None]

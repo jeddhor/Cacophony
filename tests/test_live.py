@@ -220,6 +220,80 @@ class TestFileSink:
         assert sink.stats.last_error
 
 
+class TestDatabaseSink:
+    """Section 35's database destination: a stream a dashboard can query."""
+
+    def test_it_creates_a_table_and_inserts(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        path = tmp_path / "live.db"
+        sink = create_sink({"type": "database", "path": str(path)})
+        asyncio.run(sink.open())
+        asyncio.run(sink.send(some_records(5)))
+        asyncio.run(sink.close())
+
+        connection = sqlite3.connect(path)
+        rows = connection.execute("select id, user from login order by id").fetchall()
+        connection.close()
+        assert rows == [(index, "u1") for index in range(5)]
+        assert sink.stats.delivered == 5
+
+    def test_each_flush_is_its_own_transaction(self, tmp_path: Path) -> None:
+        """A stream has no end; one open transaction would be one lost stream."""
+        import sqlite3
+
+        path = tmp_path / "live.db"
+        sink = create_sink({"type": "database", "path": str(path)})
+        asyncio.run(sink.open())
+        asyncio.run(sink.send(some_records(3)))
+
+        # Read from a *different* connection while the sink is still running.
+        connection = sqlite3.connect(path)
+        visible = connection.execute("select count(*) from login").fetchone()[0]
+        connection.close()
+        asyncio.run(sink.close())
+        assert visible == 3
+
+    def test_one_table_per_entity(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        records = [
+            GeneratedRecord(entity="login", id="L1", values={"id": 1}),
+            GeneratedRecord(entity="alert", id="A1", values={"id": 1, "severity": "high"}),
+        ]
+        sink = create_sink({"type": "database", "path": str(tmp_path / "live.db")})
+        asyncio.run(sink.open())
+        asyncio.run(sink.send(records))
+        asyncio.run(sink.close())
+
+        connection = sqlite3.connect(tmp_path / "live.db")
+        tables = {
+            row[0]
+            for row in connection.execute("select name from sqlite_master where type='table'")
+        }
+        connection.close()
+        assert {"login", "alert"} <= tables
+
+    def test_a_uri_names_the_file_and_optionally_the_table(self, tmp_path: Path) -> None:
+        sink = create_sink(f"db://{tmp_path / 'live.db'}#events")
+        assert sink.name == "database"
+        assert sink.table == "events"
+
+    def test_a_structured_value_is_stored_as_json(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        record = GeneratedRecord(entity="login", id="L1", values={"tags": ["a", "b"]})
+        sink = create_sink({"type": "database", "path": str(tmp_path / "live.db")})
+        asyncio.run(sink.open())
+        asyncio.run(sink.send([record]))
+        asyncio.run(sink.close())
+
+        connection = sqlite3.connect(tmp_path / "live.db")
+        stored = connection.execute("select tags from login").fetchone()[0]
+        connection.close()
+        assert json.loads(stored) == ["a", "b"]
+
+
 class TestSyslogFraming:
     def test_rfc_5424(self) -> None:
         sink = SyslogSink(host="h", app_name="app")

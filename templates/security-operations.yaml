@@ -387,6 +387,482 @@ entities:
           resolved_false_positive: 34
           suppressed: 3
 
+  # ------------------------------------------------------------------ #
+  # Section 71's remaining entities. Each one exists because a scenario or a
+  # question needs it: process telemetry for malware, connection volumes for
+  # exfiltration, an analyst and a ticket for what happens after the alert.
+  # ------------------------------------------------------------------ #
+
+  organisation:
+    count: 4
+    description: A legal entity inside the tenant. Users belong to one.
+    primary_key: org_id
+
+    fields:
+      org_id:
+        type: string
+        generator: sequence
+        format: "ORG-{00}"
+        unique: true
+
+      name:
+        type: string
+        # `cycle` rather than `random`: a catalogue holds each of its rows
+        # once, and four subsidiaries drawn at random would repeat.
+        generator: lookup
+        mode: cycle
+        values:
+          - Northwind Holdings
+          - Northwind Manufacturing
+          - Northwind Logistics EU
+          - Northwind Research
+
+      domain:
+        type: hostname
+        generator: lookup
+        mode: cycle
+        values: [example.com, mfg.example.net, logistics.example.org, research.example.com]
+
+      region:
+        type: enum
+        generator: lookup
+        mode: cycle
+        values: [us-east, eu-west, eu-central, apac]
+
+      employee_count:
+        type: integer
+        generator: random
+        min: 180
+        max: 2600
+
+  # ------------------------------------------------------------------ #
+  application:
+    count: 8
+    description: >
+      The application catalogue. Sign-ins name these by their usage
+      distribution; this is the inventory behind those names.
+    primary_key: app_id
+
+    fields:
+      app_id:
+        type: string
+        generator: sequence
+        format: "APP-{000}"
+        unique: true
+
+      name:
+        type: string
+        generator: lookup
+        mode: cycle
+        values:
+          - Microsoft 365
+          - VPN Gateway
+          - Salesforce
+          - Internal Wiki
+          - Jira
+          - GitHub Enterprise
+          - Expense Portal
+          - Admin Console
+
+      criticality:
+        type: enum
+        generator: weighted
+        choices: {tier_1: 3, tier_2: 3, tier_3: 2}
+
+      internet_facing:
+        type: boolean
+        generator: boolean
+        probability: 0.62
+
+      sso_enabled:
+        type: boolean
+        generator: boolean
+        probability: 0.87
+
+      owner_department:
+        type: enum
+        generator: weighted
+        choices: {Engineering: 3, Operations: 2, Finance: 1, Security: 2}
+
+  # ------------------------------------------------------------------ #
+  network_connection:
+    count: 40000
+    description: >
+      An egress flow from a managed endpoint. The volumes are what make
+      `insider_exfiltration` findable: one identity's ordinary week is
+      megabytes, and the week that matters is not.
+
+    simulation:
+      subject: device
+      distribution: skewed
+      skew: 1.7
+      minimum: 2
+
+    fields:
+      connection_id:
+        type: uuid
+
+      timestamp:
+        type: datetime
+        generator: event_time
+
+      device:
+        generator: subject
+        expose: true
+
+      hostname:
+        type: hostname
+        generator: template
+        template: "{device.hostname}"
+
+      destination_ip:
+        type: ip_address
+        generator: ip
+
+      destination_port:
+        type: integer
+        generator: weighted
+        choices: {443: 68, 80: 12, 22: 6, 3389: 4, 8443: 4, 53: 3, 445: 3}
+
+      protocol:
+        type: enum
+        generator: weighted
+        choices: {tcp: 92, udp: 8}
+
+      direction:
+        type: enum
+        generator: weighted
+        choices: {outbound: 88, inbound: 12}
+
+      bytes_sent:
+        type: integer
+        semantic: "Bytes the endpoint sent. Heavily skewed - most flows are small."
+        generator: distribution
+        distribution: lognormal
+        mean: 9.2
+        stddev: 1.6
+        min: 64
+        max: 40000000
+
+      bytes_received:
+        type: integer
+        generator: distribution
+        distribution: lognormal
+        mean: 10.1
+        stddev: 1.5
+        min: 64
+        max: 80000000
+
+      blocked:
+        type: boolean
+        generator: boolean
+        probability: 0.03
+
+      scenario:
+        type: string
+        nullable: true
+        generator: scenario
+        report: name
+
+  # ------------------------------------------------------------------ #
+  endpoint_event:
+    count: 40000
+    description: >
+      Process telemetry from the endpoint agent. `malware_infection` is
+      expressed here - execution, then persistence, then defence evasion -
+      which is why that scenario could not be enabled before.
+
+    simulation:
+      subject: device
+      distribution: skewed
+      skew: 1.6
+      minimum: 2
+
+    fields:
+      event_id:
+        type: uuid
+
+      timestamp:
+        type: datetime
+        generator: event_time
+
+      device:
+        generator: subject
+        expose: true
+
+      process_name:
+        type: string
+        generator: weighted
+        choices:
+          chrome.exe: 22
+          teams.exe: 14
+          explorer.exe: 12
+          svchost.exe: 11
+          powershell.exe: 9
+          outlook.exe: 9
+          code.exe: 7
+          cmd.exe: 6
+          python.exe: 5
+          rundll32.exe: 3
+          wmic.exe: 2
+
+      parent_process:
+        type: string
+        generator: weighted
+        choices:
+          explorer.exe: 41
+          services.exe: 24
+          svchost.exe: 17
+          cmd.exe: 9
+          winlogon.exe: 9
+
+      command_line:
+        type: string
+        semantic: "The command line, truncated the way an agent truncates it"
+        generator: template
+        template: "{process_name} --profile {device.hostname}"
+
+      integrity_level:
+        type: enum
+        generator: weighted
+        choices: {medium: 74, high: 21, system: 4, low: 1}
+
+      signed:
+        type: boolean
+        generator: boolean
+        probability: 0.93
+
+      action:
+        type: enum
+        generator: weighted
+        choices: {process_created: 79, process_terminated: 17, blocked: 3, quarantined: 1}
+
+      scenario:
+        type: string
+        nullable: true
+        generator: scenario
+        report: name
+
+      phase:
+        type: string
+        nullable: true
+        generator: scenario
+        report: phase
+
+  # ------------------------------------------------------------------ #
+  analyst:
+    count: 24
+    description: Somebody who works the queue.
+    primary_key: analyst_id
+
+    fields:
+      analyst_id:
+        type: string
+        generator: sequence
+        format: "AN-{000}"
+        unique: true
+
+      name:
+        type: string
+        generator: faker
+        provider: name
+
+      email:
+        type: email
+        generator: faker
+        provider: company_email
+
+      tier:
+        type: enum
+        generator: weighted
+        choices: {tier_1: 12, tier_2: 8, tier_3: 4}
+
+      shift:
+        type: enum
+        generator: weighted
+        choices: {days: 10, evenings: 8, nights: 6}
+
+      specialisation:
+        type: enum
+        generator: weighted
+        choices: {endpoint: 8, identity: 6, network: 5, cloud: 5}
+
+  # ------------------------------------------------------------------ #
+  alert:
+    count: 3500
+    description: What a detection rule raised, before anyone decided anything.
+    primary_key: alert_id
+
+    fields:
+      alert_id:
+        type: string
+        generator: sequence
+        format: "ALT-{000000}"
+        unique: true
+
+      finding:
+        generator: reference
+        entity: security_finding
+        distribution: skewed
+        skew: 1.4
+
+      rule_name:
+        type: string
+        generator: template
+        template: "{finding.rule_name}"
+
+      severity:
+        type: enum
+        generator: template
+        template: "{finding.severity}"
+
+      raised_at:
+        type: datetime
+        generator: datetime
+        start: "2026-01-01T00:00:00"
+        end: "2026-04-01T00:00:00"
+
+      source:
+        type: enum
+        generator: weighted
+        choices: {edr: 41, siem: 33, email_gateway: 14, cloud_posture: 12}
+
+      status:
+        type: enum
+        generator: weighted
+        choices: {new: 21, triaged: 28, escalated: 12, closed_benign: 31, closed_actioned: 8}
+
+      assigned_to:
+        generator: reference
+        entity: analyst
+        nullable: true
+        null_probability: 0.18
+
+  # ------------------------------------------------------------------ #
+  incident:
+    count: 300
+    description: An alert somebody decided was real, and what happened next.
+    primary_key: incident_id
+
+    fields:
+      incident_id:
+        type: string
+        generator: sequence
+        format: "INC-{00000}"
+        unique: true
+
+      alert:
+        generator: reference
+        entity: alert
+
+      opened_at:
+        type: datetime
+        generator: datetime
+        start: "2026-01-01T00:00:00"
+        end: "2026-04-01T00:00:00"
+
+      title:
+        type: string
+        generator: template
+        template: "{alert.rule_name} on {alert.source}"
+
+      category:
+        type: enum
+        generator: weighted
+        choices:
+          credential_compromise: 26
+          malware: 21
+          phishing: 19
+          data_loss: 12
+          policy_violation: 12
+          denial_of_service: 6
+          insider_threat: 4
+
+      severity:
+        type: enum
+        generator: weighted
+        choices: {low: 34, medium: 41, high: 19, critical: 6}
+
+      lead_analyst:
+        generator: reference
+        entity: analyst
+
+      status:
+        type: enum
+        generator: weighted
+        choices: {open: 14, contained: 17, eradicated: 12, closed: 57}
+
+      time_to_contain_minutes:
+        type: integer
+        semantic: "Minutes from opening to containment"
+        generator: distribution
+        distribution: lognormal
+        mean: 4.4
+        stddev: 1.1
+        min: 4
+        max: 20000
+
+      sla_breached:
+        type: boolean
+        generator: boolean
+        probability: 0.17
+
+  # ------------------------------------------------------------------ #
+  ticket:
+    count: 800
+    description: The work an incident generated, in the queue people actually use.
+    primary_key: ticket_id
+
+    fields:
+      ticket_id:
+        type: string
+        generator: sequence
+        format: "SOC-{000000}"
+        unique: true
+
+      incident:
+        generator: reference
+        entity: incident
+        distribution: skewed
+        skew: 1.2
+
+      opened_at:
+        type: datetime
+        generator: template
+        template: "{incident.opened_at}"
+
+      queue:
+        type: enum
+        generator: weighted
+        choices: {soc_triage: 44, endpoint_ops: 21, identity_ops: 18, network_ops: 17}
+
+      priority:
+        type: enum
+        generator: weighted
+        choices: {p1: 6, p2: 18, p3: 44, p4: 32}
+
+      assignee:
+        generator: reference
+        entity: analyst
+
+      state:
+        type: enum
+        generator: weighted
+        choices: {open: 16, in_progress: 19, waiting_on_user: 11, resolved: 44, cancelled: 10}
+
+      resolution:
+        type: string
+        nullable: true
+        null_probability: 0.31
+        generator: weighted
+        choices:
+          Contained and credentials reset: 24
+          False positive - approved administrative activity: 27
+          Endpoint reimaged: 14
+          Rule tuned, no action required: 19
+          Escalated to incident response retainer: 9
+          Duplicate of an existing incident: 7
+
 # Section 17's scenarios, executed rather than declared.
 #
 # A scenario selects *subjects* - identities, not records - deterministically
@@ -497,26 +973,75 @@ scenarios:
         result: {success: 82, failure_mfa_denied: 18}
         risk_score: 64
 
-  # Declared, and off. These need entities this template does not yet ship -
-  # process telemetry, network egress volumes - and a scenario that cannot
-  # express itself in the fields available would be a scenario in name only.
+  # The three that used to be declared and off. They needed entities this
+  # template did not ship - process telemetry and egress volumes - because a
+  # scenario that cannot express itself in the fields available is a scenario
+  # in name only. Those entities exist now, and so do these.
   malware_infection:
-    description: Payload execution followed by persistence and defence evasion.
-    applies_to: [security_finding]
-    affects_fraction: 0.004
-    enabled: false
+    description: Payload execution, then persistence, then defence evasion.
+    applies_to: [endpoint_event]
+    affects_fraction: 0.006
+    enabled: true
+    parameters:
+      subject: device
+      window: {at: 0.55, duration: 0.08}
+      rate_multiplier: 3.0
+      phases:
+        - name: execution
+          effects:
+            process_name: {powershell.exe: 62, wscript.exe: 24, rundll32.exe: 14}
+            parent_process: outlook.exe
+            signed: false
+            integrity_level: medium
+        - name: persistence
+          effects:
+            process_name: {schtasks.exe: 58, reg.exe: 42}
+            parent_process: cmd.exe
+            integrity_level: high
+            action: process_created
+        - name: defence_evasion
+          effects:
+            process_name: {sc.exe: 47, powershell.exe: 33, wmic.exe: 20}
+            signed: false
+            integrity_level: system
+            action: {process_created: 64, blocked: 36}
 
+  # Only on the sign-ins, deliberately. A scenario selects *subjects*, and this
+  # one's subject is an identity; endpoint telemetry is keyed by device, so
+  # applying it there would mark a different set of subjects and call them the
+  # same incident. Movement between endpoints is visible here as an identity
+  # authenticating to hosts it has no business on.
   lateral_movement:
     description: Authenticated movement between endpoints after initial access.
-    applies_to: [authentication, security_finding]
-    affects_fraction: 0.001
-    enabled: false
+    applies_to: [authentication]
+    affects_fraction: 0.002
+    enabled: true
+    parameters:
+      subject: user
+      window: {at: 0.71, duration: 0.04}
+      rate_multiplier: 2.5
+      effects:
+        result: success
+        auth_method: password_only
+        risk_score: 86
+        application: {Admin Console: 55, Internal Wiki: 25, GitHub Enterprise: 20}
 
   insider_exfiltration:
     description: Sustained abnormal data egress by a legitimate identity.
-    applies_to: [security_finding]
-    affects_fraction: 0.0005
-    enabled: false
+    applies_to: [network_connection]
+    affects_fraction: 0.003
+    enabled: true
+    parameters:
+      subject: device
+      window: {at: 0.83, duration: 0.09}
+      rate_multiplier: 2.2
+      effects:
+        direction: outbound
+        # Two orders of magnitude above the ordinary flow, which is what makes
+        # it a finding rather than a busy afternoon.
+        bytes_sent: {900000000: 40, 420000000: 35, 180000000: 25}
+        destination_port: {443: 82, 22: 18}
+        blocked: false
 
 outputs:
   siem:

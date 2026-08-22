@@ -23,6 +23,7 @@ import {
   renderCell,
 } from "../src/components/ui";
 import { FieldsPane } from "../src/pages/StudioPage";
+import { ChaosPanel } from "../src/studio/ChaosPanel";
 import { FieldEditor } from "../src/studio/FieldEditor";
 import { PreviewTable } from "../src/studio/PreviewTable";
 import {
@@ -461,5 +462,67 @@ describe("editing structured generator options (section 49)", () => {
         value: [1, 2],
       },
     ]);
+  });
+});
+
+describe("the chaos panel (section 78)", () => {
+  const props = { editable: true, pending: false };
+
+  it("shows every control the section names", () => {
+    renderWithProviders(<ChaosPanel {...props} chaos={{}} onPatch={vi.fn()} />);
+    for (const label of [
+      "Outliers",
+      "Missing data",
+      "Duplicates",
+      "Malformed text",
+      "Unexpected Unicode",
+      "Temporal anomalies",
+      "Referential anomalies",
+    ]) {
+      expect(screen.getByLabelText(`${label} rate`)).toBeInTheDocument();
+    }
+  });
+
+  it("writes a preset as one targeted edit", async () => {
+    const onPatch = vi.fn();
+    renderWithProviders(<ChaosPanel {...props} chaos={{}} onPatch={onPatch} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "messy" }));
+
+    expect(onPatch).toHaveBeenCalledWith([
+      { op: "set_chaos", key: "preset", value: "messy" },
+    ]);
+  });
+
+  it("clears the preset when the chosen one is chosen again", async () => {
+    const onPatch = vi.fn();
+    renderWithProviders(
+      <ChaosPanel {...props} chaos={{ preset: "messy" }} onPatch={onPatch} />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "messy" }));
+
+    expect(onPatch).toHaveBeenCalledWith([{ op: "set_chaos", key: "preset", value: null }]);
+  });
+
+  it("says what the rates add up to, in the words a person would use", () => {
+    renderWithProviders(
+      <ChaosPanel {...props} chaos={{ outliers: 0.02, duplicates: 0.01 }} onPatch={vi.fn()} />,
+    );
+    expect(screen.getByText(/3.0% of records will carry something deliberate/)).toBeInTheDocument();
+  });
+
+  it("says so plainly when nothing is damaged", () => {
+    renderWithProviders(<ChaosPanel {...props} chaos={{}} onPatch={vi.fn()} />);
+    expect(screen.getByText(/every record will be exactly what the schema describes/)).toBeInTheDocument();
+  });
+
+  it("does not offer to edit a project with no file to write to", () => {
+    renderWithProviders(
+      <ChaosPanel {...props} editable={false} chaos={{}} onPatch={vi.fn()} />,
+    );
+    expect(screen.getByText(/no file to write to/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "messy" })).toBeDisabled();
+    expect(screen.getByLabelText("Outliers rate")).toBeDisabled();
   });
 });

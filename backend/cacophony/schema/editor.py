@@ -50,6 +50,7 @@ OPERATIONS = (
     "add_provider",
     "set_provider",
     "remove_provider",
+    "set_chaos",
 )
 
 
@@ -333,6 +334,31 @@ def _providers(document: Any, *, create: bool = False) -> Any:
     return providers
 
 
+def _set_chaos(document: Any, operation: EditOperation) -> None:
+    """Set one key of the top-level ``chaos:`` block (sections 24, 78).
+
+    Its own operation rather than a general "set any top-level key", because
+    the Studio's panel is the only thing that writes it and a general setter is
+    a way to write anything anywhere. ``None`` clears the key, and clearing the
+    last one removes the block - a `chaos:` with nothing under it says less
+    than no block at all.
+    """
+    if not operation.key:
+        raise SchemaError("set_chaos needs a 'key'")
+
+    chaos = document.get("chaos")
+    if chaos is None:
+        if operation.value is None:
+            return
+        chaos = document.setdefault("chaos", CommentedMap())
+    if not isinstance(chaos, dict):
+        raise SchemaError("'chaos' is not a mapping")
+
+    _assign(chaos, operation.key, operation.value)
+    if not chaos:
+        del document["chaos"]
+
+
 def _known_adapter(name: Any) -> str:
     """Refuse an adapter this build cannot talk to, naming the ones it can.
 
@@ -471,6 +497,7 @@ _HANDLERS = {
     "remove_field": _remove_field,
     "rename_field": _rename_field,
     "move_field": _move_field,
+    "set_chaos": _set_chaos,
     "add_provider": _add_provider,
     "set_provider": _set_provider,
     "remove_provider": _remove_provider,
@@ -490,6 +517,7 @@ def describe_operations() -> list[dict[str, Any]]:
         {"op": "remove_field", "needs": ["entity", "name"]},
         {"op": "rename_field", "needs": ["entity", "field", "name"]},
         {"op": "move_field", "needs": ["entity", "name", "index"]},
+        {"op": "set_chaos", "needs": ["key"], "optional": ["value"]},
         {"op": "add_provider", "needs": ["name"], "optional": ["value"]},
         {"op": "set_provider", "needs": ["name", "key"], "optional": ["value"]},
         {"op": "remove_provider", "needs": ["name"]},

@@ -358,6 +358,39 @@ def test_operation_from_dict_rejects_nonsense() -> None:
         EditOperation.from_dict({"op": "nope"})
 
 
+class TestChaosBlock:
+    """What the Chaos Panel writes (sections 24, 78)."""
+
+    def test_setting_a_rate_creates_the_block(self) -> None:
+        result = apply_patch(DOCUMENTED, [{"op": "set_chaos", "key": "outliers", "value": 0.05}])
+        assert parsed(result.source)["chaos"] == {"outliers": 0.05}
+
+    def test_a_preset_and_a_rate_live_together(self) -> None:
+        result = apply_patch(
+            DOCUMENTED,
+            [
+                {"op": "set_chaos", "key": "preset", "value": "messy"},
+                {"op": "set_chaos", "key": "duplicates", "value": 0.02},
+            ],
+        )
+        assert parsed(result.source)["chaos"] == {"preset": "messy", "duplicates": 0.02}
+
+    def test_clearing_the_last_key_removes_the_block(self) -> None:
+        """`chaos:` with nothing under it says less than no block at all."""
+        with_chaos = apply_patch(
+            DOCUMENTED, [{"op": "set_chaos", "key": "outliers", "value": 0.05}]
+        ).source
+        cleared = apply_patch(with_chaos, [{"op": "set_chaos", "key": "outliers", "value": None}])
+        assert "chaos" not in parsed(cleared.source)
+
+    def test_an_impossible_rate_is_refused(self) -> None:
+        with pytest.raises(SchemaError):
+            apply_patch(DOCUMENTED, [{"op": "set_chaos", "key": "outliers", "value": 5.0}])
+
+    def test_the_operation_is_documented(self) -> None:
+        assert any(entry["op"] == "set_chaos" for entry in describe_operations())
+
+
 class TestProviders:
     """Configuring a backend from the Studio (sections 43, 63, 85).
 

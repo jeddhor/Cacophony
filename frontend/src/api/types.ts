@@ -551,7 +551,8 @@ export interface SchemaOperation {
     | "move_field"
     | "add_provider"
     | "set_provider"
-    | "remove_provider";
+    | "remove_provider"
+    | "set_chaos";
   entity?: string;
   field?: string;
   key?: string;

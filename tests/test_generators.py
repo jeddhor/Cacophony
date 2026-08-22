@@ -7,13 +7,22 @@ import datetime as dt
 import ipaddress
 import re
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from cacophony.core.errors import GenerationError, GeneratorConfigError, GeneratorNotFoundError
+from cacophony.core.errors import (
+    CacophonyError,
+    GenerationError,
+    GeneratorConfigError,
+    GeneratorNotFoundError,
+)
 from cacophony.core.types import DataType
+from cacophony.generation.engine import GenerationEngine
 from cacophony.generation.registry import REGISTRY
+from cacophony.schema.compiler import compile_project
+from cacophony.schema.loader import load_project_data
 from cacophony.schema.models import ConstraintSpec, FieldSpec
 from helpers import make_context
 
@@ -558,6 +567,146 @@ class TestTransformAndComposite:
     def test_composite_without_steps_is_rejected(self) -> None:
         with pytest.raises(GeneratorConfigError, match="steps"):
             build("composite", {"steps": []})
+
+
+class TestLookupSources:
+    """Section 8's four sources, three of which arrived late.
+
+    The point of each is the same - a column of real-looking values that came
+    from somewhere real - and the point of `from_entity` is that it costs
+    nothing: it resolves a position rather than holding a table.
+    """
+
+    def _values(self, tmp_path: Path, **options: Any) -> list[Any]:
+        project = load_project_data(
+            {
+                "project": {"name": "Lookups", "seed": 3},
+                "entities": {
+                    "thing": {
+                        "count": 6,
+                        "fields": {"value": {"type": "string", "generator": "lookup", **options}},
+                    }
+                },
+            }
+        )
+        engine = GenerationEngine(compile_project(project))
+        return [record.values["value"] for record in engine.preview("thing", 6)]
+
+    def test_a_parquet_column(self, tmp_path: Path) -> None:
+        pyarrow = pytest.importorskip("pyarrow")
+        import pyarrow.parquet as pq
+
+        path = tmp_path / "teams.parquet"
+        pq.write_table(pyarrow.table({"team": ["Platform", "Security", "Data"]}), path)
+
+        values = self._values(tmp_path, path=str(path), column="team")
+        assert set(values) <= {"Platform", "Security", "Data"}
+
+    def test_a_parquet_file_with_no_such_column_says_which_it_has(self, tmp_path: Path) -> None:
+        pyarrow = pytest.importorskip("pyarrow")
+        import pyarrow.parquet as pq
+
+        path = tmp_path / "teams.parquet"
+        pq.write_table(pyarrow.table({"team": ["Platform"]}), path)
+        with pytest.raises(CacophonyError, match="team"):
+            self._values(tmp_path, path=str(path), column="squad")
+
+    def test_a_sql_query(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        path = tmp_path / "cities.db"
+        connection = sqlite3.connect(path)
+        connection.execute("create table cities (name text, country text)")
+        connection.executemany(
+            "insert into cities values (?, ?)",
+            [("Austin", "US"), ("Berlin", "DE"), ("Kyoto", "JP")],
+        )
+        connection.commit()
+        connection.close()
+
+        values = self._values(tmp_path, path=str(path), query="select name from cities")
+        assert set(values) <= {"Austin", "Berlin", "Kyoto"}
+
+    def test_a_database_lookup_cannot_write(self, tmp_path: Path) -> None:
+        """Opened read-only: a lookup table is a source, not a destination."""
+        import sqlite3
+
+        path = tmp_path / "cities.db"
+        connection = sqlite3.connect(path)
+        connection.execute("create table cities (name text)")
+        connection.execute("insert into cities values ('Austin')")
+        connection.commit()
+        connection.close()
+
+        with pytest.raises(CacophonyError):
+            self._values(tmp_path, path=str(path), query="delete from cities")
+
+    def test_sampling_another_entity(self) -> None:
+        """The source that reads no file at all (sections 8, 15)."""
+        project = load_project_data(
+            {
+                "project": {"name": "Cross", "seed": 9},
+                "entities": {
+                    "employee": {
+                        "count": 40,
+                        "primary_key": "employee_id",
+                        "fields": {
+                            "employee_id": {"type": "string", "generator": "sequence"},
+                            "department": {
+                                "type": "enum",
+                                "generator": "weighted",
+                                "choices": {"Engineering": 1, "Sales": 1},
+                            },
+                        },
+                    },
+                    "ticket": {
+                        "count": 20,
+                        "fields": {
+                            "id": {"type": "string", "generator": "sequence"},
+                            "raised_by_department": {
+                                "type": "string",
+                                "generator": "lookup",
+                                "from_entity": "employee.department",
+                            },
+                        },
+                    },
+                },
+            }
+        )
+        compiled = compile_project(project)
+        # The planner has to know, or it will order the sampler first.
+        assert "employee" in compiled.entities["ticket"].depends_on
+
+        engine = GenerationEngine(compiled)
+        values = {record.values["raised_by_department"] for record in engine.preview("ticket", 20)}
+        assert values <= {"Engineering", "Sales"}
+        assert values, "nothing was sampled"
+
+    def test_from_entity_needs_an_entity_and_a_column(self) -> None:
+        with pytest.raises(CacophonyError, match="from_entity"):
+            compile_project(
+                load_project_data(
+                    {
+                        "project": {"name": "Cross", "seed": 9},
+                        "entities": {
+                            "employee": {
+                                "count": 2,
+                                "fields": {"id": {"type": "string", "generator": "sequence"}},
+                            },
+                            "ticket": {
+                                "count": 2,
+                                "fields": {
+                                    "who": {
+                                        "type": "string",
+                                        "generator": "lookup",
+                                        "from_entity": "employee",
+                                    }
+                                },
+                            },
+                        },
+                    }
+                )
+            )
 
 
 class TestPendingGenerators:

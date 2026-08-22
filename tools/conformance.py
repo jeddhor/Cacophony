@@ -260,6 +260,10 @@ CLAIM_FILES = {
         "<!-- claim:{key} -->",
         "<!-- /claim -->",
     ),
+    ROOT / "docs" / "manual" / "src" / "04-generators.html": (
+        "<!-- claim:{key} -->",
+        "<!-- /claim -->",
+    ),
 }
 
 

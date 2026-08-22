@@ -428,6 +428,13 @@ def _compile_field(
     if isinstance(referenced, str):
         related.add(referenced)
 
+    # ``lookup: {from_entity: employee.department}`` names one too, in the
+    # form `entity.column` - and the planner has to know, or it will order the
+    # sampling entity before the one it samples from.
+    sampled = options.get("from_entity") or options.get("sample_from")
+    if isinstance(sampled, str) and "." in sampled:
+        related.add(sampled.split(".", 1)[0])
+
     return CompiledField(
         name=field_spec.name,
         spec=field_spec,
