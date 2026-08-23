@@ -368,6 +368,14 @@ anyone.</p>
 that should follow a project-wide shape rather than a flat window, use
 <code>event_time</code> and a <code>timeline:</code>.</p>
 
+<p><code>timezone_offset</code> shifts the wall clock by a number of hours and
+knows nothing about zones or daylight saving. It predates real timezone
+support and remains for a flat window that simply happens elsewhere; for events
+whose subjects live in different places, give the timeline a
+<code>timezone:</code> block instead <span class="sec">section&nbsp;25</span>.
+Asking for both on the same field is refused, because they are two answers to
+one question.</p>
+
 <h2 id="gen-ip"><code>ip</code></h2>
 <div class="signature">generator: ip &nbsp;·&nbsp; aliases: ip_address, ipv4</div>
 <dl class="options">

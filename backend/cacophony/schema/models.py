@@ -363,6 +363,59 @@ class SimulationSpec(_Base):
         return bool(self.subject)
 
 
+class TimezoneSpec(_Base):
+    """Which clock a subject's events are shaped in (design document section 25).
+
+    Section 25 wants office logins "affected by employee timezone", and the
+    honest reading of that is that everyone works nine to five *where they
+    are*: the shape is local, so Tokyo's morning peak happens nine hours before
+    London's rather than at the same instant.
+
+    Opting in is what this block is. Without it every datetime in a project is
+    naive, exactly as before - the same bytes, the same SQL types, the same
+    comparisons. With it, every timeline-derived datetime in the project is
+    aware. It is deliberately all-or-nothing per project: an aware timestamp
+    and a naive one cannot be compared without raising, so letting one entity
+    opt in would manufacture a failure that cannot happen today.
+    """
+
+    #: One zone for the whole project: ``timezone: Europe/London``.
+    zone: str | None = None
+    #: A field on the *subject* entity holding an IANA zone name.
+    field: str | None = None
+    #: A pool to draw from when there is no field, weighted like any other
+    #: choice. Assigned per subject from the project seed, so a subject keeps
+    #: their zone across runs and across resumes.
+    zones: dict[str, float] = Field(default_factory=dict)
+    #: When a subject has neither. UTC, because a run that quietly invented a
+    #: zone would be worse than one that says so.
+    default: str = "UTC"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_a_bare_name(cls, data: Any) -> Any:
+        """``timezone: Europe/London`` is the short form of ``{zone: …}``."""
+        if isinstance(data, str):
+            return {"zone": data}
+        return data
+
+    @model_validator(mode="after")
+    def _needs_a_source(self) -> TimezoneSpec:
+        if not self.zone and not self.field and not self.zones:
+            raise ValueError(
+                "a 'timezone' block needs one of: 'zone' for a single zone, 'field' to "
+                "read one from the subject, or 'zones' to draw from a pool"
+            )
+        return self
+
+    def is_enabled(self) -> bool:
+        return bool(self.zone or self.field or self.zones)
+
+    def is_per_subject(self) -> bool:
+        """Whether subjects can differ, which decides what a stated offset means."""
+        return bool(self.field or self.zones)
+
+
 class TimelineSpec(_Base):
     """The period a project's events happen in (section 25)."""
 
@@ -378,9 +431,15 @@ class TimelineSpec(_Base):
     spikes: list[dict[str, Any]] = Field(default_factory=list)
     #: Activity at the end of the period relative to the start.
     growth: float = Field(default=1.0, gt=0.0)
+    #: Section 25's per-subject clocks. Absent means naive, as before.
+    timezone: TimezoneSpec | None = None
 
     def is_enabled(self) -> bool:
         return bool(self.start or self.end)
+
+    def is_zoned(self) -> bool:
+        """Whether this project's timeline produces timezone-aware datetimes."""
+        return self.timezone is not None and self.timezone.is_enabled()
 
 
 class AssertionSpec(_Base):

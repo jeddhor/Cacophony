@@ -109,10 +109,30 @@ class EventTimeGenerator(OptionsMixin, SyncGenerator):
             jitter = context.rng().random() * self.jitter if self.jitter else 0.0
             moment = timeline.ordered(placement.ordinal, placement.total, jitter=jitter)
 
+        zoning = getattr(timeline, "zoning", None)
         offset = self.offset_hours
         if self.offset_field:
             offset += float(context.value(self.offset_field, 0.0) or 0.0)
-        if offset:
+
+        if zoning is not None and zoning.is_enabled:
+            if offset:
+                raise GenerationError(
+                    f"{context.location}: this field shifts the clock by {offset} hours "
+                    "and the project declares 'timeline.timezone'. Those are two answers "
+                    "to the same question - an hour offset is the approximation real "
+                    "zones replace. Drop 'offset'."
+                )
+            from ...simulation.timeline import localise
+
+            moment = localise(
+                moment,
+                zoning.zone_for(
+                    frame.placement.subject,
+                    resolver=getattr(context, "resolver", None),
+                    subject_entity=frame.subject_entity,
+                ),
+            )
+        elif offset:
             moment += _dt.timedelta(hours=offset)
 
         field_type = self.field.type if self.field else DataType.DATETIME

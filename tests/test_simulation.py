@@ -144,9 +144,180 @@ class TestTimeline:
 
     def test_parse_moment_accepts_what_a_schema_writes(self) -> None:
         assert parse_moment("2026-03-04").date() == dt.date(2026, 3, 4)
-        assert parse_moment("2026-03-04T10:30:00Z").hour == 10
+        assert parse_moment("2026-03-04T10:30:00").hour == 10
         with pytest.raises(SchemaError, match="ISO-8601"):
             parse_moment("the fourth of March")
+
+    def test_an_offset_is_refused_rather_than_discarded(self) -> None:
+        """It used to be stripped in silence, which is how a schema comes to
+        mean something other than what it says (section 25)."""
+        with pytest.raises(SchemaError, match=r"timeline\.timezone"):
+            parse_moment("2026-03-04T10:30:00Z", what="the start")
+        with pytest.raises(SchemaError, match=r"timeline\.timezone"):
+            parse_moment("2026-03-04T10:30:00+02:00", what="the start")
+
+    def test_one_fixed_zone_honours_an_offset(self) -> None:
+        """With a single clock, a stated instant is unambiguous - so convert it."""
+        moment = parse_moment("2026-06-04T10:30:00+00:00", zone="Europe/London")
+        assert moment.hour == 11  # BST
+        assert moment.tzinfo is None, "the timeline works in local wall time"
+
+    def test_per_subject_zones_refuse_an_offset(self) -> None:
+        from cacophony.simulation.timeline import _PER_SUBJECT
+
+        with pytest.raises(SchemaError, match="own timezone"):
+            parse_moment("2026-03-04T10:30:00Z", zone=_PER_SUBJECT)
+
+
+class TestTimezones:
+    """Section 25's per-subject clocks, and the opt-in that guards them.
+
+    The feature's whole design is that a project which does not ask for it is
+    untouched - same bytes, same types, same comparisons - so half of these
+    check that nothing happened.
+    """
+
+    ZONED = {
+        "project": {"name": "Zoned", "seed": 12},
+        "timeline": {
+            "start": "2026-03-01",
+            "end": "2026-04-30",
+            "shape": "business_hours",
+            "timezone": {"field": "timezone"},
+        },
+        "entities": {
+            "employee": {
+                "count": 3,
+                "primary_key": "employee_id",
+                "fields": {
+                    "employee_id": {"type": "string", "generator": "sequence"},
+                    "timezone": {
+                        "type": "string",
+                        "generator": "lookup",
+                        "mode": "cycle",
+                        "values": ["Europe/London", "Asia/Tokyo", "America/New_York"],
+                    },
+                },
+            },
+            "login": {
+                "count": 30,
+                "simulation": {"subject": "employee", "distribution": "uniform"},
+                "fields": {
+                    "at": {"type": "datetime", "generator": "event_time"},
+                    "who": {"generator": "subject", "expose": True},
+                    "zone": {
+                        "type": "string",
+                        "generator": "template",
+                        "template": "{employee.timezone}",
+                    },
+                },
+            },
+        },
+    }
+
+    def _rows(self, schema: dict[str, Any]) -> list[dict[str, Any]]:
+        from cacophony.schema.loader import load_project_data
+
+        compiled = compile_project(load_project_data(schema))
+        engine = GenerationEngine(compiled)
+        return [record.values for record in engine.preview("login", 30)]
+
+    def test_without_the_block_nothing_is_aware(self) -> None:
+        """The opt-in, stated as a test: no `timezone:`, no change."""
+        import copy
+
+        schema = copy.deepcopy(self.ZONED)
+        del schema["timeline"]["timezone"]
+        assert all(row["at"].tzinfo is None for row in self._rows(schema))
+
+    def test_with_the_block_every_moment_carries_its_offset(self) -> None:
+        assert all(row["at"].tzinfo is not None for row in self._rows(self.ZONED))
+
+    def test_each_subject_keeps_their_own_clock(self) -> None:
+        """A London login and a Tokyo login at the same local hour are nine
+        hours apart, which is the whole of what section 25 asks for."""
+        rows = self._rows(self.ZONED)
+        offsets = {
+            row["zone"]: row["at"].utcoffset() for row in rows if row["at"].tzinfo is not None
+        }
+        assert offsets["Asia/Tokyo"] == dt.timedelta(hours=9)
+        assert offsets["America/New_York"] in (
+            dt.timedelta(hours=-4),
+            dt.timedelta(hours=-5),
+        )
+
+    def test_everyone_works_local_office_hours(self) -> None:
+        """The shape is local: the peak is 9-to-5 wherever the subject is."""
+        rows = self._rows(self.ZONED)
+        for zone in ("Asia/Tokyo", "Europe/London"):
+            hours = [row["at"].hour for row in rows if row["zone"] == zone]
+            assert hours, zone
+            # Business hours with a little spill, in the subject's own clock.
+            assert sum(7 <= hour <= 19 for hour in hours) / len(hours) > 0.7, zone
+
+    def test_the_offset_changes_when_the_clocks_do(self) -> None:
+        """March and April are not the same offset in London, and a dataset
+        that said they were would be wrong twice a year."""
+        rows = [
+            row
+            for row in self._rows(self.ZONED)
+            if row["zone"] == "Europe/London" and row["at"].tzinfo is not None
+        ]
+        offsets = {row["at"].utcoffset() for row in rows}
+        assert offsets == {dt.timedelta(0), dt.timedelta(hours=1)}, offsets
+
+    def test_a_fixed_zone_applies_to_everyone(self) -> None:
+        import copy
+
+        schema = copy.deepcopy(self.ZONED)
+        schema["timeline"]["timezone"] = "Asia/Tokyo"
+        assert {row["at"].utcoffset() for row in self._rows(schema)} == {dt.timedelta(hours=9)}
+
+    def test_a_pool_assigns_a_zone_and_keeps_it(self) -> None:
+        import copy
+
+        schema = copy.deepcopy(self.ZONED)
+        schema["timeline"]["timezone"] = {"zones": {"Asia/Tokyo": 1, "Europe/London": 1}}
+        first = {row["who"]: row["at"].utcoffset() for row in self._rows(schema)}
+        again = {row["who"]: row["at"].utcoffset() for row in self._rows(schema)}
+        assert len(set(first.values())) > 1, "a pool of two should produce two clocks"
+        assert first == again, "a subject's zone must not move between runs"
+
+    def test_an_unknown_zone_is_refused_before_the_run(self) -> None:
+        import copy
+
+        from cacophony.core.errors import CacophonyError
+
+        schema = copy.deepcopy(self.ZONED)
+        schema["timeline"]["timezone"] = "Mars/Olympus_Mons"
+        with pytest.raises(CacophonyError, match="timezone"):
+            self._rows(schema)
+
+    def test_an_hour_offset_and_real_zones_cannot_both_be_asked_for(self) -> None:
+        import copy
+
+        from cacophony.core.errors import GenerationError
+
+        schema = copy.deepcopy(self.ZONED)
+        schema["entities"]["login"]["fields"]["at"]["offset"] = 5
+        with pytest.raises(GenerationError, match="two answers"):
+            self._rows(schema)
+
+    def test_a_time_that_does_not_exist_is_moved_past_the_gap(self) -> None:
+        """02:30 does not happen in London on the last Sunday in March."""
+        from cacophony.simulation.timeline import localise
+
+        moved = localise(dt.datetime(2026, 3, 29, 1, 30), "Europe/London")
+        assert moved.utcoffset() == dt.timedelta(hours=1)
+        assert moved.hour == 2, "the event should land after the gap, not inside it"
+
+    def test_a_time_that_happens_twice_picks_the_first_every_time(self) -> None:
+        from cacophony.simulation.timeline import localise
+
+        ambiguous = dt.datetime(2026, 10, 25, 1, 30)
+        first = localise(ambiguous, "Europe/London")
+        assert first.utcoffset() == dt.timedelta(hours=1)
+        assert localise(ambiguous, "Europe/London") == first
 
 
 # --------------------------------------------------------------------------- #

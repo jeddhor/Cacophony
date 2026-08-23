@@ -77,11 +77,14 @@ sections:
       shipped to read back what this program just wrote.
   - {section: 24, state: implemented}
   - section: 25
-    state: partial
+    state: implemented
     note: >
-      Business hours, weekday and holiday shaping, and seasonality. Per-subject
-      timezones are not: a timeline is shaped in one clock, and parsing a
-      timestamp discards its offset rather than carrying it.
+      Business hours, weekday and holiday shaping, seasonality, and per-subject
+      timezones: the shape is local, so everyone works nine to five where they
+      are. Opt-in through `timeline.timezone` and all-or-nothing per project,
+      because an aware datetime and a naive one cannot be compared. A stated
+      offset is honoured under one fixed zone and refused otherwise, rather
+      than discarded in silence.
   - {section: 26, state: implemented}
   - {section: 27, state: implemented}
   - {section: 28, state: implemented}

@@ -1314,10 +1314,22 @@ def _build_timeline(compiled: CompiledProject) -> Any:
     if spec is None or not spec.is_enabled():
         return None
 
-    from ..simulation.timeline import SHAPES, ShapeOverrides, Timeline, parse_moment
+    from ..simulation.timeline import (
+        _PER_SUBJECT,
+        SHAPES,
+        ShapeOverrides,
+        Timeline,
+        Zoning,
+        parse_moment,
+    )
 
-    start = parse_moment(spec.start, what="the timeline's start")
-    end = parse_moment(spec.end, what="the timeline's end") if spec.end else None
+    zoning = Zoning.from_spec(spec.timezone, seed=compiled.seed)
+    # What a stated offset in a bound may mean, which depends on whether the
+    # subjects share a clock.
+    bound_zone = None if zoning is None else (_PER_SUBJECT if zoning.per_subject else zoning.zone)
+
+    start = parse_moment(spec.start, what="the timeline's start", zone=bound_zone)
+    end = parse_moment(spec.end, what="the timeline's end", zone=bound_zone) if spec.end else None
     if end is None:
         import datetime as _dt
 
@@ -1335,7 +1347,7 @@ def _build_timeline(compiled: CompiledProject) -> Any:
         spikes=list(spec.spikes),
         growth=spec.growth,
     ).apply(base)
-    return Timeline(start, end, shape)
+    return Timeline(start, end, shape, zoning=zoning)
 
 
 def _build_scenarios(compiled: CompiledProject, timeline: Any) -> Any:

@@ -141,8 +141,75 @@ histories accumulate. <code>timeline:</code> handles the first,
     <tr><td class="mono">months</td><td>Seasonal multipliers, by name or number.</td></tr>
     <tr><td class="mono">spikes</td><td>Windows with a multiplier: a campaign, an outage, a sale.</td></tr>
     <tr><td class="mono">growth</td><td>End-to-start activity ratio, applied smoothly across the window.</td></tr>
+    <tr><td class="mono">timezone</td><td>Which clock each subject reads. Absent means none, and every datetime stays naive.</td></tr>
   </tbody>
 </table>
+
+<h2>Per-subject timezones</h2>
+
+<p>Section&nbsp;25 asks for office logins "affected by employee timezone", and
+the honest reading is that everybody works nine to five <em>where they are</em>.
+The shape is local, so Tokyo's morning peak happens nine hours before London's
+&mdash; at the same local hour and a different instant:</p>
+
+<pre><code class="language-yaml">timeline:
+  start: "2026-03-01"
+  end: "2026-04-30"
+  shape: business_hours
+  timezone:
+    field: timezone                 # a column on the *subject* entity
+    zones: {Europe/London: 3, America/New_York: 4, Asia/Tokyo: 2}
+    default: UTC</code></pre>
+
+<p>Three ways to say it, consulted in that order: <code>zone</code> for one
+clock across the whole project (<code>timezone: Europe/London</code> is the
+short form), <code>field</code> to read an IANA name from the subject's own
+record, and <code>zones</code> to assign one from a weighted pool. A pool
+assignment is derived from the project seed and the subject's index, so a
+subject keeps their zone across runs, resumes and machines like every other
+value here <span class="sec">section&nbsp;75</span>.</p>
+
+<div class="callout">
+  <span class="callout-title">It is opt-in, and deliberately all-or-nothing</span>
+  <p>Without the block, every datetime in a project is naive and nothing
+  changes: the same bytes, the same SQL types, the same comparisons. With it,
+  every timeline-derived datetime in the project is aware.</p>
+  <p>There is no per-entity switch, and that is a decision rather than an
+  omission. An aware datetime and a naive one cannot be compared in Python
+  without raising, so letting one entity opt in while another did not would
+  manufacture a failure that cannot happen today &mdash; in an expression, in a
+  constraint, in an assertion joining the two.</p>
+</div>
+
+<h3>What happens twice a year</h3>
+
+<p>A local time in the spring-forward gap does not exist: there is no 01:30 in
+London on the last Sunday in March. Python will not stop you constructing one
+&mdash; it hands back an instant whose local time is something else &mdash; so
+an event that lands in the gap is moved forward past it, which is where the
+activity actually went.</p>
+
+<p>A local time in the autumn overlap exists twice. The first is taken, every
+time, because a dataset that chose differently on a re-run would not be
+reproducible.</p>
+
+<h3>What the formats do with an offset</h3>
+
+<table class="compact">
+  <thead><tr><th>Format</th><th>Holds</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">jsonl, json, csv</td><td>ISO-8601 with the offset: <code>2026-04-10T09:41:27+01:00</code>.</td></tr>
+    <tr><td class="mono">sqlite</td><td>The same string. SQLite has no timestamp type, which for once is convenient.</td></tr>
+    <tr><td class="mono">sql</td><td><code>TIMESTAMP WITH TIME ZONE</code> rather than <code>TIMESTAMP</code>, or the offset would be dropped on load.</td></tr>
+    <tr><td class="mono">parquet</td><td>An instant, with <em>one</em> zone annotation for the whole column. The instants are right; the per-record zone is not something the format can carry, so keep it in a column if you need it.</td></tr>
+  </tbody>
+</table>
+
+<p>A stated UTC offset in <code>start:</code> or <code>end:</code> used to be
+discarded in silence. Now it is honoured when the project has one fixed zone,
+and refused when it has none or when subjects differ &mdash; in the second case
+because the bounds are a local wall clock that each subject reads in their own
+zone, and an instant cannot be several local times at once.</p>
 
 <h2>How events land, and why they are already sorted</h2>
 

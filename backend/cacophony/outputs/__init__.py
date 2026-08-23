@@ -145,6 +145,7 @@ def create_writer(fmt: str, path: str | Path, **options: Any) -> OutputWriter:
         entity_spec = options.pop("entity", None)
         options.pop("entities", None)
         options.pop("chaos", None)
+        options.pop("zoned", None)
         return PartitionedWriter(
             path,
             fmt=fmt.lower(),
@@ -160,6 +161,7 @@ def create_writer(fmt: str, path: str | Path, **options: Any) -> OutputWriter:
         options.pop("entity", None)
         options.pop("entities", None)
         options.pop("chaos", None)
+        options.pop("zoned", None)
     return writer_class(path, **options)
 
 

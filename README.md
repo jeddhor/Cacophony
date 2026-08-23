@@ -17,8 +17,8 @@ built and how to run it.
 
 All fourteen delivery phases are done. What that does *not* mean is that every
 line of the design document is built: of its 112 sections,
-<!-- claim:sections_implemented -->96<!-- /claim --> are built,
-<!-- claim:sections_partial -->15<!-- /claim --> are partly built and
+<!-- claim:sections_implemented -->97<!-- /claim --> are built,
+<!-- claim:sections_partial -->14<!-- /claim --> are partly built and
 <!-- claim:sections_deferred -->1<!-- /claim --> is deferred, with
 <!-- claim:refusals -->6<!-- /claim --> sub-items considered and refused.
 [docs/CONFORMANCE.md](docs/CONFORMANCE.md) says which, section by section, and
@@ -167,7 +167,7 @@ plans and estimates, and `on_unavailable: placeholder` runs the whole pipeline
 with obviously-marked stand-ins.
 
 **The manual.** [docs/Cacophony-Manual.pdf](docs/Cacophony-Manual.pdf) is the
-complete reference: <!-- claim:pages -->192<!-- /claim --> pages, every command,
+complete reference: <!-- claim:pages -->194<!-- /claim --> pages, every command,
 every generator option, every schema key, and the reasoning behind the parts
 where the reasoning is the interesting bit. It is built from [docs/manual/](docs/manual/) with one command:
 
@@ -177,8 +177,8 @@ python docs/manual/build.py
 ```
 
 **What is and is not built.** [docs/CONFORMANCE.md](docs/CONFORMANCE.md) is the
-design document section by section — <!-- claim:sections_implemented -->96<!-- /claim -->
-built, <!-- claim:sections_partial -->15<!-- /claim --> partial,
+design document section by section — <!-- claim:sections_implemented -->97<!-- /claim -->
+built, <!-- claim:sections_partial -->14<!-- /claim --> partial,
 <!-- claim:sections_deferred -->1<!-- /claim --> deferred, and
 <!-- claim:refusals -->6<!-- /claim --> sub-items deliberately refused with the
 reasoning recorded. It is generated from data and checked by CI, because the

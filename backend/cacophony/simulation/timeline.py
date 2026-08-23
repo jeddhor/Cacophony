@@ -48,6 +48,8 @@ __all__ = [
     "SHAPES",
     "Timeline",
     "TimelineShape",
+    "Zoning",
+    "localise",
     "parse_moment",
 ]
 
@@ -170,21 +172,203 @@ SHAPES: dict[str, TimelineShape] = {
 }
 
 
-def parse_moment(value: Any, *, what: str = "moment") -> _dt.datetime:
-    """Read a date or datetime from a schema, or say why it could not."""
-    if isinstance(value, _dt.datetime):
-        return value.replace(tzinfo=None) if value.tzinfo else value
-    if isinstance(value, _dt.date):
-        return _dt.datetime.combine(value, _dt.time.min)
+def parse_moment(value: Any, *, what: str = "moment", zone: str | None = None) -> _dt.datetime:
+    """Read a date or datetime from a schema, or say why it could not.
 
-    text = str(value).strip()
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
+    A stated offset used to be discarded in silence, which is the worst of the
+    three things that could happen to it. Now:
+
+    * with no ``timezone:`` block, an offset is refused and the message says
+      which block turns them on - being quietly misread is worse than being
+      stopped;
+    * with one fixed zone, an offset is honoured and converted into it;
+    * with per-subject zones, an offset is refused, because the bounds are a
+      local wall clock that each subject reads in their own zone and an
+      instant cannot be two local times at once.
+
+    The returned moment is always *naive*: it is a wall-clock reading that
+    :func:`localise` later interprets in somebody's zone.
+    """
+    if isinstance(value, _dt.datetime):
+        parsed = value
+    elif isinstance(value, _dt.date):
+        return _dt.datetime.combine(value, _dt.time.min)
+    else:
+        text = str(value).strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = _dt.datetime.fromisoformat(text)
+        except ValueError as exc:
+            raise SchemaError(
+                f"{what} must be an ISO-8601 date or datetime, got {value!r}"
+            ) from exc
+
+    if parsed.tzinfo is None:
+        return parsed
+
+    if zone is None:
+        raise SchemaError(
+            f"{what} states a UTC offset ({value!r}), and this project has no "
+            "'timeline.timezone'. Add one to work in real zones, or write the "
+            "moment without an offset - it used to be discarded silently, which "
+            "is how a schema comes to mean something other than it says."
+        )
+    if zone == _PER_SUBJECT:
+        raise SchemaError(
+            f"{what} states a UTC offset ({value!r}), but this project gives each "
+            "subject their own timezone. The timeline's bounds are a local wall "
+            "clock that every subject reads in their own zone, so an offset here "
+            "would have to mean several instants at once."
+        )
+    return parsed.astimezone(_zone_info(zone)).replace(tzinfo=None)
+
+
+#: Passed as ``zone`` to say "the project has zones, but not one of them".
+_PER_SUBJECT = "\x00per-subject"
+
+
+def _zone_info(name: str) -> _dt.tzinfo:
+    """The zone by name, or an error that says what to install.
+
+    Linux and macOS ship a zone database; Windows does not, and `zoneinfo`
+    reports that as "no such zone" - which sends somebody looking for a typo
+    in a name that is perfectly correct.
+    """
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
     try:
-        parsed = _dt.datetime.fromisoformat(text)
-    except ValueError as exc:
-        raise SchemaError(f"{what} must be an ISO-8601 date or datetime, got {value!r}") from exc
-    return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError as exc:
+        raise SchemaError(
+            f"no timezone called '{name}'. If the name is right, this machine has no "
+            "zone database: pip install tzdata"
+        ) from exc
+    except (ValueError, OSError) as exc:
+        raise SchemaError(f"'{name}' is not a usable timezone name: {exc}") from exc
+
+
+def localise(moment: _dt.datetime, zone: str) -> _dt.datetime:
+    """Read a naive wall-clock moment as a time in ``zone``.
+
+    Two things happen twice a year that a naive clock never has to think about.
+
+    A local time in the spring-forward gap *does not exist*: 02:30 is not a
+    moment in London on the last Sunday in March. Python does not raise for one
+    - it quietly hands back an instant whose local time is something else - so
+    this detects the round-trip failure and moves the event forward past the
+    gap, which is where the activity actually went.
+
+    A local time in the autumn overlap exists twice. ``fold=0`` picks the
+    first, deterministically, which is the only property that matters here: a
+    dataset that picked differently on a re-run would not be reproducible.
+    """
+    if moment.tzinfo is not None:
+        return moment
+
+    info = _zone_info(zone)
+    aware = moment.replace(tzinfo=info, fold=0)
+    # Round-trip through UTC: if the wall clock comes back different, the time
+    # we asked for was in a gap.
+    if aware.astimezone(_dt.UTC).astimezone(info).replace(tzinfo=None) != moment:
+        for minutes in (60, 120, 30):
+            shifted = moment + _dt.timedelta(minutes=minutes)
+            candidate = shifted.replace(tzinfo=info, fold=0)
+            if candidate.astimezone(_dt.UTC).astimezone(info).replace(tzinfo=None) == shifted:
+                return candidate
+    return aware
+
+
+@dataclass(slots=True)
+class Zoning:
+    """Which zone each subject lives in (design document section 25).
+
+    Three ways to say it, in the order they are consulted: one zone for the
+    whole project, a field on the subject holding a zone name, or a weighted
+    pool the subject is assigned from. The pool assignment is derived from the
+    project seed and the subject's index, so a subject keeps their zone across
+    runs, across resumes and across machines - the same property every other
+    value in Cacophony has (section 75).
+    """
+
+    zone: str | None = None
+    field: str | None = None
+    zones: tuple[tuple[str, float], ...] = ()
+    default: str = "UTC"
+    seed: int = 0
+
+    @property
+    def is_enabled(self) -> bool:
+        return bool(self.zone or self.field or self.zones)
+
+    @property
+    def per_subject(self) -> bool:
+        return bool(self.field or self.zones)
+
+    def zone_for(
+        self,
+        subject: int,
+        *,
+        resolver: Any = None,
+        subject_entity: str | None = None,
+    ) -> str:
+        """The zone this subject's events happen in."""
+        if self.zone:
+            return self.zone
+
+        if self.field and resolver is not None and subject_entity:
+            try:
+                named = resolver.key_at(subject_entity, subject, self.field)
+            except Exception:
+                named = None
+            if named:
+                return str(named)
+
+        if self.zones:
+            return self._from_pool(subject)
+        return self.default
+
+    def _from_pool(self, subject: int) -> str:
+        """A weighted draw that depends on the subject and nothing else."""
+        from ..core.seeds import mix_seed
+
+        total = sum(weight for _name, weight in self.zones if weight > 0)
+        if total <= 0:
+            return self.default
+
+        # 2**32 buckets is far finer than any plausible set of weights, and
+        # keeps the arithmetic in integers.
+        position = (mix_seed(self.seed, _ZONE_SALT, subject) % 2**32) / 2**32 * total
+        running = 0.0
+        for name, weight in self.zones:
+            if weight <= 0:
+                continue
+            running += weight
+            if position < running:
+                return name
+        return self.zones[-1][0]
+
+    @classmethod
+    def from_spec(cls, spec: Any, *, seed: int = 0) -> Zoning | None:
+        """Build one from a project's ``timeline.timezone`` block."""
+        if spec is None or not getattr(spec, "is_enabled", lambda: False)():
+            return None
+        zoning = cls(
+            zone=spec.zone,
+            field=spec.field,
+            zones=tuple(sorted(spec.zones.items())),
+            default=spec.default,
+            seed=seed,
+        )
+        # Checked once, here, rather than per record: a misspelled zone should
+        # stop the run at compile time, not four million records in.
+        for name in filter(None, [zoning.zone, zoning.default, *(n for n, _ in zoning.zones)]):
+            _zone_info(name)
+        return zoning
+
+
+#: Distinguishes a zone assignment from every other derivation (section 75).
+_ZONE_SALT = 0x5A4F4E45
 
 
 class Timeline:
@@ -205,6 +389,8 @@ class Timeline:
         start: _dt.datetime,
         end: _dt.datetime,
         shape: TimelineShape | str | None = None,
+        *,
+        zoning: Zoning | None = None,
     ) -> None:
         if end <= start:
             raise SchemaError(
@@ -214,6 +400,13 @@ class Timeline:
         self.start = start
         self.end = end
         self.shape = _resolve_shape(shape)
+        #: Which clock each subject reads (section 25). ``None`` means the one
+        #: this program has always used: a wall clock with no zone at all.
+        #: The timeline itself stays naive either way - the bounds and the
+        #: shape are local wall time, and a zone is applied to the *result*,
+        #: which is what makes "everyone works nine to five" true in Tokyo and
+        #: in London at the same time and at different instants.
+        self.zoning = zoning
 
         total_hours = int((end - start).total_seconds() // 3600) or 1
         #: Hourly resolution unless the period is long enough that daily will

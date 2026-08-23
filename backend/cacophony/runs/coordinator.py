@@ -878,6 +878,9 @@ class Conductor:
             # so the DDL must describe the data rather than the intent (section
             # 24). Without this the first nulled field aborts the insert.
             chaos=self._engine().inject_chaos,
+            # Section 25: a zoned project's datetimes carry an offset, and a
+            # column typed `TIMESTAMP` would drop it on the way in.
+            zoned=self.compiled.spec.timeline.is_zoned(),
         )
         return writer, writer.path
 

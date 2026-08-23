@@ -67,7 +67,7 @@ _SQL_TYPES: dict[DataType, str] = {
 }
 
 
-def sql_type_for(spec: FieldSpec, *, dialect: str = "sqlite") -> str:
+def sql_type_for(spec: FieldSpec, *, dialect: str = "sqlite", zoned: bool = False) -> str:
     """The column type for a field.
 
     The field's declared type is the whole answer. It is trustworthy because
@@ -81,6 +81,12 @@ def sql_type_for(spec: FieldSpec, *, dialect: str = "sqlite") -> str:
     if dialect != "sqlite" and spec.type.is_textual:
         limit = spec.constraints.max_length
         return f"VARCHAR({limit})" if limit else "TEXT"
+    if zoned and dialect != "sqlite" and spec.type is DataType.DATETIME:
+        # A project with `timeline.timezone` produces instants, and a column
+        # typed `TIMESTAMP` would drop the offset the moment somebody loaded
+        # the script (section 25). SQLite has no such type and stores the ISO
+        # string, offset included, so it needs nothing here.
+        return "TIMESTAMP WITH TIME ZONE"
     return table.get(spec.type, default)
 
 
@@ -131,7 +137,10 @@ class _SchemaAware:
         primary = entity.spec.resolved_primary_key()
         for name in entity.spec.field_names():
             spec = entity.spec.fields[name]
-            parts = [_quote(name), sql_type_for(spec, dialect=dialect)]
+            parts = [
+                _quote(name),
+                sql_type_for(spec, dialect=dialect, zoned=bool(getattr(self, "zoned", False))),
+            ]
             if damaged:
                 definitions.append(" ".join(parts))
                 continue
@@ -228,6 +237,7 @@ class SqliteWriter(FileWriter, _SchemaAware):
         entities: dict[str, Any] | None = None,
         table: str | None = None,
         chaos: bool = False,
+        zoned: bool = False,
         **options: Any,
     ) -> None:
         super().__init__(path, **options)
@@ -236,6 +246,9 @@ class SqliteWriter(FileWriter, _SchemaAware):
         #: Whether this run injects deliberate damage. Relaxes the constraints
         #: the damage is designed to violate; see ``_column_definitions``.
         self.chaos = chaos
+        #: The project's datetimes carry an offset (section 25), so the column
+        #: type has to be able to hold one.
+        self.zoned = zoned
         self.table = table or (entity.name if entity is not None else self.path.stem)
         self._connection: sqlite3.Connection | None = None
         self._insert = ""
@@ -393,12 +406,16 @@ class SqlScriptWriter(FileWriter, _SchemaAware):
         dialect: str = "ansi",
         rows_per_statement: int = 500,
         chaos: bool = False,
+        zoned: bool = False,
         **options: Any,
     ) -> None:
         super().__init__(path, **options)
         self.entity = entity
         self.entities = entities or {}
         self.chaos = chaos
+        #: The project's datetimes carry an offset (section 25), so the column
+        #: type has to be able to hold one.
+        self.zoned = zoned
         self.table = table or (entity.name if entity is not None else self.path.stem)
         self.dialect = dialect
         self.rows_per_statement = max(1, rows_per_statement)
